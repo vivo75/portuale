@@ -2420,3 +2420,104 @@ fn slot_operator_rebuild_scan_ignores_a_same_version_reinstall_without_deep() {
     assert!(scan.refused.is_empty(), "{:?}", scan.refused);
     let _ = fs::remove_dir_all(&base);
 }
+
+/// VDB + repo for a two-provider stale pin: installed `prov` and `prov2`,
+/// and an installed `user-1.0` consumer recording a stale `:=` on each,
+/// with a tree ebuild for the consumer naming only `prov2`.
+fn stale_pin_two_base() -> (TempDir, Vec<RepoConfig>) {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-slotop-stale-two");
+    for (name, slot, rdepend) in [
+        ("prov-5.42", "0/5.42", ""),
+        ("prov2-1.0", "0/1", ""),
+        ("user-1.0", "0", "dev-libs/prov:0/5.41= dev-libs/prov2:0/0="),
+    ] {
+        let d = base.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    let repo = base.join("repo");
+    let dir = repo.join("dev-libs/user");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = "EAPI=8\nDESCRIPTION=\"stale pin two\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"dev-libs/prov2:=\"\n";
+    std::fs::write(dir.join("user-1.0.ebuild"), body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=stale pin two\nEAPI=8\n".to_string();
+    writeln!(
+        entry,
+        "KEYWORDS=amd64\nRDEPEND=dev-libs/prov2:=\nSLOT=0\n_md5_={md5}"
+    )
+    .unwrap();
+    let cachedir = repo.join("metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join("user-1.0"), entry).unwrap();
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    (base, repos)
+}
+
+/// A two-provider consumer is scheduled when any stale pin survives: the
+/// first pin names a provider the tree dropped (nothing to repair), the
+/// second names one the tree keeps and the run moves.
+#[test]
+fn slot_operator_rebuild_scan_considers_every_stale_provider() {
+    let (base, repos) = stale_pin_two_base();
+    let upgrade = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "prov2", "2.0")
+    };
+    let user = ("dev-libs".to_string(), "user".to_string());
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        empty: false,
+        usepkg: false,
+        effective: None,
+        root: &base,
+        entries: std::slice::from_ref(&upgrade),
+        reachable: &HashSet::from([("dev-libs".to_string(), "prov2".to_string())]),
+        scope: None,
+        walked_installed: &HashSet::new(),
+        already: &empty,
+        undone: &empty,
+        with_bdeps: true,
+        update: true,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        excluded: &[],
+        config: &test_config(),
+        gate: crate::test_gate(&repos),
+    });
+    assert_eq!(scan.scheduled, BTreeSet::from([user]));
+    assert_eq!(
+        scan.abi_rebuilds,
+        vec![(
+            "dev-libs/prov2-2.0".to_string(),
+            "dev-libs/user-1.0".to_string()
+        )]
+    );
+    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+    let _ = fs::remove_dir_all(&base);
+}

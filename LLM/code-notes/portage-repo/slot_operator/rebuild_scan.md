@@ -55,6 +55,9 @@ plan is right; only a redundant "causing rebuilds" block). If wanted, gate the
 pair on `GraphResult::slot_operator_replaced`.
 
 
+## fn stale_pin_for_consumer (multi-provider)
+- Follow-up: the arm collects *every* stale pin of the consumer and gates each independently (replacement accepts/parent/naming/probe per provider); one surviving pin schedules the consumer, and each surviving pin earns its own display pair. Previously it stopped at the first pin found, which could miss a repairable binding behind an unrepairable one.
+
 ## fn stale_pin_for_consumer
 - #741/#744 S2: the stale-pin third arm. A kept consumer whose recorded `:slot/sub-slot=` no longer matches the final provider version is scheduled even with no provider entry in the pass (the already-stale shape: the final version is the run's move from `new_slot`/`new_slot_fresh`, else the installed VDB instance in the bound slot). Unlike the new-slot arm it contributes a display pair (see below).
 - Scope: under `--update` every installed consumer the run does not merge, except one the pass already walked outside any scope (its own entry governs, so a walked consumer the pass keeps as-is stays out -- the `massm`/`massn`/`masso` bound-slot-mismatch test pins this: `masso` is walked and unscoped, so the third arm must not schedule it). Without `--update` only one outside the walk whose provider moves (the #744 shape; the move itself is checked per atom, since an unchanged provider still leaves a stale final). Under `--emptytree` the arm stays out entirely: Portage files no slot-operator rebuild there (`depgraph.py:7917-7925`; `assemble_result` drops the pairs by the same rule), so a filed entry could never gain a parent. New `empty` flags on `SlotOperatorRebuildScanArgs` / `SlotOperatorRebuildEntriesArgs` (from `ctx.empty` / `req.empty`) carry the mode.

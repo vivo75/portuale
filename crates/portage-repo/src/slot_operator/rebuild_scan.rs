@@ -439,12 +439,14 @@ struct StalePinConsumerArgs<'a> {
 /// without any provider entry. Without `--update` only a consumer outside the
 /// walk whose provider moves fires (the #744 shape).
 ///
-/// Gates: a visible replacement for the consumer whose own atoms accept the
-/// final version (the new-slot arm's replacement gates), the §2.3 hold-back
-/// check on the recorded atoms, and no earlier scheduling. A consumer with no
-/// visible tree candidate, or one the replacement gates skip, stays out
-/// silently; a recorded versioned pin that forbids the final version is
-/// refused by name.
+/// Gates: a visible replacement for the consumer; the §2.3 hold-back
+/// check on the recorded atoms (refused by name); then per stale provider --
+/// the consumer's own atoms accept that provider's final version, some
+/// replacement parent names and accepts it, the tree still names it, and no
+/// veto parent refuses it. The consumer is scheduled when any pin survives;
+/// each surviving pin earns its own display pair. A consumer with no visible
+/// tree candidate, or one every gate skips, stays out silently; a recorded
+/// versioned pin that forbids the final version is refused by name.
 fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
     let StalePinConsumerArgs {
         root,
@@ -506,10 +508,11 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
         let text = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
         keyed.push(selected_parent_atoms(&text, root, entries, &use_flags));
     }
-    // The first stale pin: a recorded `=`-operated atom whose slot the final
+    // Every stale pin: a recorded `=`-operated atom whose slot the final
     // version keeps with another sub-slot. A moved slot stays with the
-    // new-slot arm.
-    let mut edge: Option<((String, String), String, String, String)> = None;
+    // new-slot arm. Every stale provider is collected: a two-provider
+    // consumer is scheduled when any of its pins survives the gates below.
+    let mut edges: Vec<((String, String), String, String, String)> = Vec::new();
     for toks in &keyed {
         for tok in toks {
             let Some(atom) = parse_dep_atom(tok, "rebuild_scan_stale") else {
@@ -549,46 +552,20 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
                 "{}/{}-{final_version}:{final_slot}/{final_sub}",
                 atom.category, atom.package
             );
-            edge = Some((provider_cp, cand, final_version, final_slot));
-            break;
-        }
-        if edge.is_some() {
-            break;
+            if !edges.iter().any(|(cp, _, _, _)| cp == &provider_cp) {
+                edges.push((provider_cp, cand, final_version, final_slot));
+            }
         }
     }
-    let Some((provider_cp, cand, final_version, final_slot)) = edge else {
+    if edges.is_empty() {
         return;
-    };
+    }
     // A visible replacement for the consumer.
     if gate
         .repo_candidates(&pkg.category, &pkg.package)
         .ok()
         .is_none_or(|cands| cands.is_empty())
     {
-        return;
-    }
-    // The replacement's own atoms accept the final version, and some
-    // replacement parent names the provider and accepts it.
-    if !replacement_accepts(ReplacementAcceptsArgs {
-        root,
-        config,
-        pkg,
-        dep_keys: &stale_keys,
-        provider_cp: &provider_cp,
-        cand: &cand,
-        gate,
-        entries,
-    }) {
-        return;
-    }
-    if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
-        config,
-        consumer: (&pkg.category, &pkg.package, &pkg.slot),
-        dep_keys: &stale_keys,
-        provider: (&provider_cp.0, &provider_cp.1),
-        candidate: &cand,
-        gate,
-    }) {
         return;
     }
     // No rebuild may hold a package back: every recorded non-`:=` atom
@@ -634,22 +611,62 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
             }
         }
     }
-    if probe_refused(probe_parents, scheduled, &provider_cp, &cand, cp) {
-        return;
+    // Per stale provider: the replacement's own atoms accept the final
+    // version, some replacement parent names the provider and accepts it,
+    // and the consumer's tree still names the provider (a rebuild
+    // re-records the live dependencies, so a tree that dropped the dep has
+    // nothing stale to repair). The consumer is scheduled when any pin
+    // survives; each surviving pin earns its display pair below.
+    let mut surviving: Vec<(&(String, String), &str, &str, &str)> = Vec::new();
+    for (provider_cp, cand, final_version, final_slot) in &edges {
+        if !replacement_accepts(ReplacementAcceptsArgs {
+            root,
+            config,
+            pkg,
+            dep_keys: &stale_keys,
+            provider_cp,
+            cand,
+            gate,
+            entries,
+        }) {
+            continue;
+        }
+        if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
+            config,
+            consumer: (&pkg.category, &pkg.package, &pkg.slot),
+            dep_keys: &stale_keys,
+            provider: (&provider_cp.0, &provider_cp.1),
+            candidate: cand,
+            gate,
+        }) {
+            continue;
+        }
+        // A rebuild re-records the consumer's live dependencies, so a tree
+        // that no longer names the provider has nothing stale to repair:
+        // the consumer stays out (its recorded pin dies with the dependency
+        // itself, and Portage's probe never fires for it either).
+        if !replacement_names_provider(ReplacementNamesProviderArgs {
+            gate,
+            config,
+            root,
+            entries,
+            consumer: (&pkg.category, &pkg.package, &pkg.slot),
+            dep_keys: &stale_keys,
+            provider_cp,
+        }) {
+            continue;
+        }
+        if probe_refused(probe_parents, scheduled, provider_cp, cand, cp) {
+            continue;
+        }
+        surviving.push((
+            provider_cp,
+            cand.as_str(),
+            final_version.as_str(),
+            final_slot.as_str(),
+        ));
     }
-    // A rebuild re-records the consumer's live dependencies, so a tree that
-    // no longer names the provider has nothing stale to repair: the consumer
-    // stays out (its recorded pin dies with the dependency itself, and
-    // Portage's probe never fires for it either).
-    if !replacement_names_provider(ReplacementNamesProviderArgs {
-        gate,
-        config,
-        root,
-        entries,
-        consumer: (&pkg.category, &pkg.package, &pkg.slot),
-        dep_keys: &stale_keys,
-        provider_cp: &provider_cp,
-    }) {
+    if surviving.is_empty() {
         return;
     }
     // The display pair names the provider whose move caused the rebuild,
@@ -660,31 +677,31 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
     // unsatisfied-oneshot oracle pins the bare row). The consumer side names
     // the version the plan installs for it (the entry's, when the settling
     // pass already filed it -- version selection may upgrade a forced
-    // reinstall past the installed version), else the installed one. The
-    // pair is emitted even when the consumer is already scheduled (only the
-    // settling pass's pair survives to the plan, since the fold path files
-    // the schedule but drops the pair).
-    let installed_version = installed_by_cp.get(&provider_cp).and_then(|insts| {
-        insts
-            .iter()
-            .find(|(_, s)| s == &final_slot)
-            .map(|(v, _)| v.clone())
-    });
-    if installed_version.as_deref() != Some(final_version.as_str()) {
-        let display = format!("{}/{}-{final_version}", provider_cp.0, provider_cp.1);
-        let consumer_cpv = entries
-            .iter()
-            .find(|e| {
-                e.category == cp.0
-                    && e.package == cp.1
-                    && e.slot.as_deref() == Some(pkg.slot.as_str())
-            })
-            .and_then(|e| merge_bound_version(&e.outcome))
-            .map_or_else(
-                || pkg.cpv(),
-                |version| format!("{}/{}-{version}", cp.0, cp.1),
-            );
-        abi_rebuilds.push((display, consumer_cpv));
+    // reinstall past the installed version), else the installed one. Pairs
+    // are re-emitted on every pass even for an already-scheduled consumer
+    // (only the settling pass's pairs survive to the plan, since the fold
+    // path files the schedule but drops the pair).
+    let consumer_cpv = entries
+        .iter()
+        .find(|e| {
+            e.category == cp.0 && e.package == cp.1 && e.slot.as_deref() == Some(pkg.slot.as_str())
+        })
+        .and_then(|e| merge_bound_version(&e.outcome))
+        .map_or_else(
+            || pkg.cpv(),
+            |version| format!("{}/{}-{version}", cp.0, cp.1),
+        );
+    for (provider_cp, _cand, final_version, final_slot) in &surviving {
+        let installed_version = installed_by_cp.get(*provider_cp).and_then(|insts| {
+            insts
+                .iter()
+                .find(|(_, s)| s == final_slot)
+                .map(|(v, _)| v.clone())
+        });
+        if installed_version.as_deref() != Some(*final_version) {
+            let display = format!("{}/{}-{final_version}", provider_cp.0, provider_cp.1);
+            abi_rebuilds.push((display, consumer_cpv.clone()));
+        }
     }
     scheduled.insert(cp.clone());
 }

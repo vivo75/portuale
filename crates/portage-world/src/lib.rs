@@ -1452,4 +1452,36 @@ mod tests {
             }]
         );
     }
+
+    /// The fast plan agrees with the resolver: a rebuild re-records the
+    /// chosen ebuild's live dependencies, so when the tree no longer names
+    /// the stale provider there is nothing left to repair -- the consumer
+    /// stays out silently, neither rebuilt nor refused.
+    #[test]
+    fn a_consumer_whose_tree_dropped_the_dependency_is_left_alone() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
+        add_ebuild(tree.path(), "dev-libs/w741solo-1", "0", "");
+        let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741solo-1", "0")];
+        let world = testkit::analyse_fixture_with(&["dev-libs/w741solo"], &installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            std::fs::write(
+                o.root
+                    .join("var/db/pkg/dev-libs/w741solo-1")
+                    .join("RDEPEND"),
+                "dev-libs/w741prov:0/1=",
+            )
+            .expect("recorded RDEPEND");
+        });
+        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
+        assert!(world.refused.is_empty(), "{:?}", world.refused);
+    }
 }

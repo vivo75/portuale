@@ -150,6 +150,10 @@ checker reads it unchanged:
 {"entries":[ENTRY,...],"kept":[KEPT,...],"stale-bindings":[STALE,...],"request":["@world"],"aborted":null}
 ```
 
+`stale-bindings` is present only when a stale binding goes unrepaired; a
+plan with none to name omits the key, so the document is byte-identical
+to one from before the field existed.
+
 Each `ENTRY` has `category`, `package`, `version`, `slot`, `sub_slot`,
 `outcome` (`new`, `upgrade`, `downgrade` or `reinstall`), `merge_order` (the
 row position, from 0), `source` (always `ebuild`), `from_version` (upgrades and

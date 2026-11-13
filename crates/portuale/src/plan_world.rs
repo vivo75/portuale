@@ -168,11 +168,19 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
             )
         })
         .collect();
+    // The checker reads `entries` and `kept`; `stale-bindings` rides along
+    // only when a binding is actually unrepaired, so output without one is
+    // byte-identical to a plan that never knew the field.
+    let stale = if stale.is_empty() {
+        String::new()
+    } else {
+        format!("\"stale-bindings\":[{}],", stale.join(","))
+    };
     format!(
-        "{{\"entries\":[{}],\"kept\":[{}],\"stale-bindings\":[{}],\"request\":[\"@world\"],\"aborted\":null}}",
+        "{{\"entries\":[{}],\"kept\":[{}],{}\"request\":[\"@world\"],\"aborted\":null}}",
         entries.join(","),
         kept.join(","),
-        stale.join(",")
+        stale
     )
 }
 

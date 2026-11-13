@@ -166,6 +166,58 @@ fn provider_cpv(
     final_provider(world, db, root, (&a.category, &a.package, slot)).map(|(_, cpv)| cpv)
 }
 
+/// Whether the chosen ebuild's tree metadata still names any of the stale
+/// providers, evaluated against its effective USE: a rebuild re-records the
+/// live dependencies, so a tree that dropped them has nothing stale left to
+/// repair. Unreadable metadata counts as naming (the pin stands).
+fn tree_names_provider(args: TreeNamesProviderArgs<'_>) -> bool {
+    let TreeNamesProviderArgs {
+        chosen,
+        category,
+        package,
+        providers,
+        memos,
+        config,
+    } = args;
+    let pf = format!("{package}-{}", chosen.version);
+    let Ok(meta) = portage_repo::repo_aux_metadata(&chosen.repo_location, category, &pf) else {
+        return true;
+    };
+    let use_flags: HashSet<String> = portage_repo::effective_use_flags(EffectiveUseFlagsArgs {
+        config,
+        iuse: &chosen.iuse,
+        keywords: &chosen.keywords,
+        candidate_str: &chosen.match_str(category, package),
+        build_id: None,
+        category,
+        package,
+    })
+    .iter()
+    .cloned()
+    .collect();
+    DEP_KEYS.iter().any(|dep| {
+        let text = meta.get(*dep).map(String::as_str).unwrap_or_default();
+        reduced_recorded_atoms(text, &use_flags, memos, config)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|tok| portage_repo::parse_dep_atom(tok, "rebuild_naming"))
+            .any(|a| {
+                a.blocker == portage_dep::Blocker::None
+                    && providers.contains(&(a.category, a.package))
+            })
+    })
+}
+
+/// Arguments of [`tree_names_provider`].
+struct TreeNamesProviderArgs<'a> {
+    chosen: &'a portage_repo::Candidate,
+    category: &'a str,
+    package: &'a str,
+    providers: &'a [(String, String)],
+    memos: &'a Memos<'a>,
+    config: &'a Config,
+}
+
 /// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
 /// dependency no longer matches the provider version the plan leaves behind:
 /// the chosen one when the plan changes the provider's slot, else the
@@ -273,20 +325,19 @@ pub(crate) fn slot_operator(
             continue;
         }
         // The final provider version a rebuild would use must exist.
-        if world
+        let Some(chosen) = world
             .slots
             .iter()
             .find(|s| s.node() == node)
             .and_then(|s| s.chosen())
-            .is_none()
-        {
+        else {
             refused.push(RefusedBinding {
                 consumer: format!("{}/{}", installed.category, installed.package),
                 atom: stale[0].to_string(),
                 provider: None,
             });
             continue;
-        }
+        };
         // No rebuild may hold a package back: every recorded non-`:=` atom
         // naming a slot the plan changes must match the chosen version there.
         let mut held_back: Option<RefusedBinding> = None;
@@ -328,7 +379,27 @@ pub(crate) fn slot_operator(
         match held_back {
             Some(refusal) => refused.push(refusal),
             None => {
-                rebuild.insert(node);
+                // A rebuild re-records the chosen ebuild's live dependencies:
+                // when its tree no longer names any stale provider, there is
+                // nothing stale left to repair, so the consumer stays out
+                // silently (the resolver's third arm applies the same gate).
+                let stale_cps: Vec<(String, String)> = stale
+                    .iter()
+                    .filter_map(|tok| {
+                        portage_repo::parse_dep_atom(tok, "rebuild_naming")
+                            .map(|a| (a.category, a.package))
+                    })
+                    .collect();
+                if tree_names_provider(TreeNamesProviderArgs {
+                    chosen,
+                    category: &installed.category,
+                    package: &installed.package,
+                    providers: &stale_cps,
+                    memos,
+                    config,
+                }) {
+                    rebuild.insert(node);
+                }
             }
         }
     }
