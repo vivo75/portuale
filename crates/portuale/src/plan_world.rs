@@ -468,6 +468,48 @@ mod tests {
         assert!(at("w693tool-1:0") < at("w693cons-1:0"), "{out}");
     }
 
+    /// Two ebuilds of `w739multi`, slots `1` and `2`, with slot `1` installed.
+    fn dual_slot_tree(root: &Path) {
+        add_ebuild(root, "dev-libs/w739multi-1", "1", &[]);
+        add_ebuild(root, "dev-libs/w739multi-2", "2", &[]);
+        add_installed(root, "dev-libs/w739multi-1", "1", &[]);
+    }
+
+    /// Charter property 3: a bare world atom names the newest slot even when
+    /// an older slot is installed; the installed slot is no row.
+    #[test]
+    fn a_bare_atom_with_an_installed_older_slot_lists_the_newest_slot_as_new() {
+        let (rc, out) = run_on_copy(
+            &["--plan-world"],
+            &["dev-libs/w739multi"],
+            &[],
+            "",
+            dual_slot_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        assert!(
+            out.contains("[ebuild  N     ] dev-libs/w739multi-2:2"),
+            "{out}"
+        );
+        assert!(!out.contains("w739multi-1"), "{out}");
+    }
+
+    /// Charter property 3: with `emptytree` the same atom lists exactly the
+    /// newest slot, not both installed slots.
+    #[test]
+    fn emptytree_lists_one_slot_of_a_bare_atom() {
+        let (rc, out) = run_on_copy(
+            &["--plan-world=emptytree"],
+            &["dev-libs/w739multi"],
+            &[],
+            "",
+            dual_slot_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w739multi")).collect();
+        assert_eq!(rows, ["[ebuild  N     ] dev-libs/w739multi-2:2"], "{out}");
+    }
+
     /// Two kept packages declaring `IUSE="w693flag"`, neither with the flag
     /// configured: one installed with it on, one with a flag its ebuild no
     /// longer declares.

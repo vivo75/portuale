@@ -106,6 +106,9 @@ pub(crate) struct Memos<'a> {
     installed: HashSet<String>,
     /// `cat/pkg` -> installed slots (sub-slot cut off).
     installed_slots: HashMap<String, HashSet<String>>,
+    /// Plan modes name the best slot of a slotless atom even when an older
+    /// slot is installed; the check counts installed slots as meeting it.
+    newest_slot: bool,
     /// `(cat/pkg, slot)` -> installed version, to tell a rebuild from a keep.
     installed_versions: HashMap<(String, String), String>,
     /// `cat/pkg:slot` of installed packages a plan builds again: they follow
@@ -127,6 +130,7 @@ impl<'a> Memos<'a> {
         root: &Path,
         with_bdeps: bool,
         rebuilds: BTreeSet<String>,
+        newest_slot: bool,
     ) -> Self {
         let installed = portage_repo::all_installed_packages(root)
             .iter()
@@ -151,6 +155,7 @@ impl<'a> Memos<'a> {
             installed_slots,
             installed_versions,
             rebuilds,
+            newest_slot,
             with_bdeps,
             visible: Memo::new(),
             use_sets: Memo::new(),
@@ -408,6 +413,8 @@ pub struct Options {
     pub with_bdeps: bool,
     /// Work out which kept packages a plan must build again
     /// ([`World::rebuilds`]); a check of `@world` alone does not need them.
+    /// It also narrows a slotless atom to its best slot (a plan); a check
+    /// keeps the installed slots instead.
     pub rebuilds: bool,
     /// With `rebuilds`: an installed package whose recorded `USE`, cut to the `IUSE` of the
     /// version kept, differs from the configured one is built again.
@@ -541,7 +548,13 @@ fn walk(
     (repos, config): (&[RepoConfig], &Config),
     rebuilds: &BTreeSet<String>,
 ) -> Result<World, String> {
-    let memo = Memos::new(repos, &opts.root, opts.with_bdeps, rebuilds.clone());
+    let memo = Memos::new(
+        repos,
+        &opts.root,
+        opts.with_bdeps,
+        rebuilds.clone(),
+        opts.rebuilds,
+    );
     let seeds = world_atoms(opts, repos, config)?;
 
     // atom -> who asked for it.
@@ -749,9 +762,12 @@ fn process_atom(atom_str: &str, repos: &[RepoConfig], config: &Config, memo: &Me
     let unmatched = best.is_empty();
     if atom.slot.is_none() {
         let cp = format!("{}/{}", atom.category, atom.package);
-        narrow_slotless(&mut best, memo.installed_slots.get(&cp), |a, b| {
-            rank(a.0, a.1, b.0, b.1)
-        });
+        narrow_slotless(
+            &mut best,
+            memo.installed_slots.get(&cp),
+            memo.newest_slot,
+            |a, b| rank(a.0, a.1, b.0, b.1),
+        );
     }
     AtomResult {
         per_slot: best
@@ -770,24 +786,29 @@ fn process_atom(atom_str: &str, repos: &[RepoConfig], config: &Config, memo: &Me
     }
 }
 
-/// An atom without a slot is one requirement, not one per slot: it is met
-/// by the visible slots already installed, else by the best slot alone.
+/// An atom without a slot is one requirement, not one per slot. A check is
+/// met by the visible slots already installed, else by the best slot alone;
+/// a plan names the best slot alone, so the newest version wins.
 fn narrow_slotless<T>(
     best: &mut BTreeMap<&str, (T, bool)>,
     installed: Option<&HashSet<String>>,
+    newest_slot: bool,
     cmp: impl Fn(&(T, bool), &(T, bool)) -> Ordering,
 ) {
     if best.len() < 2 {
         return;
     }
-    let keep: Vec<&str> = best
-        .iter()
-        .filter(|(slot, (_, visible))| {
-            *visible
-                && installed.is_some_and(|h| h.contains(slot.split('/').next().unwrap_or(slot)))
-        })
-        .map(|(slot, _)| *slot)
-        .collect();
+    let keep: Vec<&str> = if newest_slot {
+        Vec::new()
+    } else {
+        best.iter()
+            .filter(|(slot, (_, visible))| {
+                *visible
+                    && installed.is_some_and(|h| h.contains(slot.split('/').next().unwrap_or(slot)))
+            })
+            .map(|(slot, _)| *slot)
+            .collect()
+    };
     if keep.is_empty() {
         let top = best
             .iter()
@@ -931,11 +952,15 @@ mod tests {
     use super::*;
 
     /// Slots as `(slot, version, visible)`; version is the rank.
-    fn narrow(slots: &[(&'static str, u32, bool)], installed: &[&str]) -> Vec<&'static str> {
+    fn narrow(
+        slots: &[(&'static str, u32, bool)],
+        installed: &[&str],
+        newest_slot: bool,
+    ) -> Vec<&'static str> {
         let mut best: BTreeMap<&str, (u32, bool)> =
             slots.iter().map(|&(s, v, vis)| (s, (v, vis))).collect();
         let have: HashSet<String> = installed.iter().map(|s| s.to_string()).collect();
-        narrow_slotless(&mut best, Some(&have), |a, b| {
+        narrow_slotless(&mut best, Some(&have), newest_slot, |a, b| {
             a.1.cmp(&b.1).then(a.0.cmp(&b.0))
         });
         best.into_keys().collect()
@@ -945,8 +970,19 @@ mod tests {
     fn installed_slot_meets_the_atom() {
         // 1.90 is installed; the newer 1.99 is not needed for a slotless atom.
         assert_eq!(
-            narrow(&[("1.90", 90, true), ("1.99", 99, true)], &["1.90"]),
+            narrow(&[("1.90", 90, true), ("1.99", 99, true)], &["1.90"], false),
             ["1.90"]
+        );
+    }
+
+    /// Charter property 3: a plan names the newest slot even when an older
+    /// one is installed; the installed slot is listed only when another atom
+    /// reaches it.
+    #[test]
+    fn plan_mode_takes_the_best_slot_only_even_when_an_older_one_is_installed() {
+        assert_eq!(
+            narrow(&[("1.90", 90, true), ("1.99", 99, true)], &["1.90"], true),
+            ["1.99"]
         );
     }
 
@@ -955,7 +991,8 @@ mod tests {
         assert_eq!(
             narrow(
                 &[("1", 1, true), ("2", 2, true), ("3", 3, true)],
-                &["1", "3"]
+                &["1", "3"],
+                false,
             ),
             ["1", "3"]
         );
@@ -964,7 +1001,7 @@ mod tests {
     #[test]
     fn nothing_installed_takes_the_best_slot_only() {
         assert_eq!(
-            narrow(&[("1.90", 90, true), ("1.99", 99, true)], &[]),
+            narrow(&[("1.90", 90, true), ("1.99", 99, true)], &[], false),
             ["1.99"]
         );
     }
@@ -974,13 +1011,18 @@ mod tests {
         // The experiment's `rank` puts visible first; so does the cmp here.
         let mut best: BTreeMap<&str, (u32, bool)> =
             [("a", (5, false)), ("b", (1, true))].into_iter().collect();
-        narrow_slotless(&mut best, None, |x, y| x.1.cmp(&y.1).then(x.0.cmp(&y.0)));
+        narrow_slotless(&mut best, None, false, |x, y| {
+            x.1.cmp(&y.1).then(x.0.cmp(&y.0))
+        });
         assert_eq!(best.into_keys().collect::<Vec<_>>(), ["b"]);
     }
 
     #[test]
     fn an_installed_but_masked_slot_does_not_count() {
-        assert_eq!(narrow(&[("1", 1, false), ("2", 2, true)], &["1"]), ["2"]);
+        assert_eq!(
+            narrow(&[("1", 1, false), ("2", 2, true)], &["1"], false),
+            ["2"]
+        );
     }
 
     #[test]
@@ -1031,7 +1073,7 @@ mod tests {
 
     #[test]
     fn a_single_slot_is_left_alone() {
-        assert_eq!(narrow(&[("0", 1, false)], &[]), ["0"]);
+        assert_eq!(narrow(&[("0", 1, false)], &[], false), ["0"]);
     }
 
     /// The slots `parent` (`cat/pkg:0`) depends on, as the first pass followed them.

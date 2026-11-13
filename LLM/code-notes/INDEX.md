@@ -294,6 +294,10 @@
 ## portage-versions
 - [crates/portage-versions/src/lib.rs](portage-versions/lib.md) — Port of Portage's `lib/portage/versions.py` version comparison (`ververify`, `vercmp`).
 
+## portage-world
+- [crates/portage-world/src/lib.rs](portage-world/lib.md) — First-pass walk of `@world`: per-slot best ebuilds, dependency atoms, and
+- [crates/portage-world/src/order.rs](portage-world/order.md) — `--sort depend` order of the plan rows: each slot after the slots it needs.
+
 ## portuale
 - [crates/portuale/src/binpkg/digest.rs](portuale/binpkg/digest.md) — Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure renames.
 - [crates/portuale/src/binpkg/extract.rs](portuale/binpkg/extract.md) — Extracting a binary package's image and metadata at merge time.
