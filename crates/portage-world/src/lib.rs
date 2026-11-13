@@ -269,13 +269,13 @@ impl<'a> Memos<'a> {
     fn branch_preference(&self, branch: &[String], config: &Config) -> AltPreference {
         let atoms: Vec<portage_dep::Atom> = branch
             .iter()
-            .filter_map(|t| portage_repo::parse_dep_atom(t, "experiment-pre-sort-atoms"))
+            .filter_map(|t| portage_repo::parse_dep_atom(t, "portage-world"))
             .filter(|a| a.blocker == Blocker::None)
             .collect();
         let all_available = branch
             .iter()
             .filter(|t| {
-                portage_repo::parse_dep_atom(t, "experiment-pre-sort-atoms")
+                portage_repo::parse_dep_atom(t, "portage-world")
                     .is_some_and(|a| a.blocker == Blocker::None)
             })
             .all(|t| self.atom_available(t, config));
@@ -337,7 +337,7 @@ impl<'a> Memos<'a> {
                 continue;
             };
             for tok in flat {
-                if let Some(a) = portage_repo::parse_dep_atom(&tok, "experiment-pre-sort-atoms")
+                if let Some(a) = portage_repo::parse_dep_atom(&tok, "portage-world")
                     && a.blocker == Blocker::None
                 {
                     // `[flag?]`, `[flag=]` ... become plain `[flag]`/`[-flag]`

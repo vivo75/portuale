@@ -690,15 +690,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "experiment-pre-sort-atoms"
-version = "300.83.0"
-dependencies = [
- "portage-repo",
- "portage-world",
- "tempfile",
-]
-
-[[package]]
 name = "experiment-tree-diagram"
 version = "300.83.0"
 dependencies = [

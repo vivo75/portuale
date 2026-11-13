@@ -472,7 +472,7 @@ when a claim turns out false.
 - **Observed 2026-11-08 (Portage 3.0.83)**: on this host `load_default_config(...).getSets()["changed-deps"].getAtoms()` is empty, while five installed packages (`dev-lang/perl-5.44.0`, `net-fs/samba-4.25.0`, `media-libs/opencv-4.14.0`, `dev-python/setuptools-rust-1.13.0`, `sci-geosciences/routino-3.4.3`) have run-time dependency strings that differ from their ebuilds'; `emerge --changed-deps` (`depgraph.py`, `_changed_deps`) does find changed dependencies and is not affected.
 - **Why it looks wrong**: the set's description promises the packages whose vdb `*DEPEND` entries are outdated; it can never name one. First seen: 3.0.83 (only this version was checked).
 - **Status**: suspect, not reported upstream.
-- **Portuale**: not copied. The experiment `experiment-pre-sort-atoms` builds the set the class means to build, through `portage_repo::installed_deps_changed` (the `--changed-deps` comparison, run-time keys only); it therefore differs from Portage's output by design (backlog #684).
+- **Portuale**: not copied. The experiment `experiment-pre-sort-atoms` (retired 2026-11-12, backlog #684; the function stayed in `portage-repo`) built the set the class means to build, through `portage_repo::installed_deps_changed` (the `--changed-deps` comparison, run-time keys only); it therefore differed from Portage's output by design.
 
 ## Q30. `-puD @world` exits 1 when a held-back-able update needs a USE change for an installed consumer
 

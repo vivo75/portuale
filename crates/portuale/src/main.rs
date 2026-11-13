@@ -210,30 +210,6 @@ fn exit_quietly_on_broken_pipe() {
     }));
 }
 
-/// `portuale __aux-metadata REPO CATEGORY PF`: prints the `KEY=value` lines of
-/// one ebuild's metadata (depcachedir entry, else a `depend` phase run, which
-/// also fills the depcachedir). Exit 1 with the reason on stderr otherwise.
-fn aux_metadata_entry(args: &[String]) -> ExitCode {
-    let [repo, category, pf] = args else {
-        eprintln!("usage: portuale __aux-metadata REPO CATEGORY PF");
-        return ExitCode::from(2);
-    };
-    match ebuild_phases::depend_phase_metadata(std::path::Path::new(repo), category, pf) {
-        Ok(md) => {
-            let mut keys: Vec<_> = md.iter().collect();
-            keys.sort();
-            for (k, v) in keys {
-                println!("{k}={v}");
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::from(1)
-        }
-    }
-}
-
 fn main() -> ExitCode {
     exit_quietly_on_broken_pipe();
     // The helper entry runs first, from `args_os()` (raw filenames may not
@@ -246,11 +222,6 @@ fn main() -> ExitCode {
     // mid-run never surfaces as `<path> (deleted)`.
     self_exe::self_exe();
     let argv: Vec<String> = std::env::args().collect();
-    // Hidden entry for programs that cannot run ebuild phases themselves
-    // (`experiment-pre-sort-atoms`): print one ebuild's metadata.
-    if argv.get(1).is_some_and(|s| s == "__aux-metadata") {
-        return aux_metadata_entry(&argv[2..]);
-    }
     let invoked_as = basename(&argv[0]);
 
     // The binary that owns ebuild-phase execution registers the

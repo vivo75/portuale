@@ -115,15 +115,13 @@ impl<'a> SetResolver<'a> {
             Lookup::Nothing => return,
             Lookup::Missing => {
                 eprintln!(
-                    "experiment-pre-sort-atoms: set '{name}' not found (sets.conf or {}/etc/portage/sets)",
+                    "portage-world: set '{name}' not found (sets.conf or {}/etc/portage/sets)",
                     self.config_root.display()
                 );
                 return;
             }
             Lookup::Unsupported(class) => {
-                eprintln!(
-                    "experiment-pre-sort-atoms: set '{name}' (class {class}) is not supported, skipped"
-                );
+                eprintln!("portage-world: set '{name}' (class {class}) is not supported, skipped");
                 return;
             }
         };
@@ -380,7 +378,7 @@ fn variable_depend_hit(v: &VariableSet, cp: &str, text: &str, use_text: &str) ->
         return false;
     };
     for tok in flat {
-        let Some(a) = portage_repo::parse_dep_atom(&tok, "experiment-pre-sort-atoms") else {
+        let Some(a) = portage_repo::parse_dep_atom(&tok, "portage-world") else {
             continue;
         };
         let dep_cp = format!("{}/{}", a.category, a.package);
