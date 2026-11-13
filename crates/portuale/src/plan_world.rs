@@ -2,8 +2,10 @@
 //! `emerge -uDNp @world` (or, with `emptytree`, `emerge -pe @world`) would
 //! install, worked out by `portage-world` instead of the resolver. One
 //! row per slot whose best visible version is not the installed one, and an `R`
-//! row for a kept package whose `:slot/sub-slot=` dependency the plan breaks
-//! (with `plan-world-newuse`, also one whose USE changed). It sees no blockers
+//! row for a kept package whose recorded `:slot/sub-slot=` dependency the plan
+//! breaks or that is already stale (with `plan-world-newuse`, also one whose
+//! USE changed). A stale binding the plan cannot repair is named on stderr
+//! instead of gaining a row. It sees no blockers
 //! and no `REQUIRED_USE`, so it can list less or more than the resolver; `--sort resolver` shows the
 //! resolver's own order for the same rows. `--sort depend` puts a package
 //! after what it needs before it is merged or usable; a `PDEPEND` orders
@@ -12,7 +14,7 @@
 use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
 use portage_world::{Change, Order, SlotSet, World};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
@@ -77,6 +79,9 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         rows.len()
     );
     eprintln!("{}", not_checked(mode, opts.newuse));
+    if !world.refused.is_empty() {
+        eprintln!("{}", refused_line(&world));
+    }
     ExitCode::SUCCESS
 }
 
@@ -136,17 +141,10 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
         .enumerate()
         .filter_map(|(order, slot)| entry_json(world, slot, order))
         .collect();
-    let replaced: HashSet<(String, String)> = rows
+    let kept: Vec<String> = world
+        .kept_installed(root)
         .iter()
-        .map(|s| (s.cp.clone(), s.slot.clone()))
-        .collect();
-    let kept: Vec<String> = portage_repo::all_installed_packages(root)
-        .iter()
-        .filter(|p| {
-            let slot = p.slot.split('/').next().unwrap_or_default();
-            !replaced.contains(&(format!("{}/{}", p.category, p.package), slot.to_string()))
-        })
-        .map(|p| {
+        .map(|(_, p)| {
             format!(
                 "{{\"category\":{},\"package\":{},\"version\":{},\"slot\":{}}}",
                 q(&p.category),
@@ -156,10 +154,25 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
             )
         })
         .collect();
+    let stale: Vec<String> = world
+        .refused
+        .iter()
+        .map(|r| {
+            let provider = r.provider.as_deref().map_or("null".to_string(), q);
+            format!(
+                "{{\"consumer\":{},\"atom\":{},\"provider\":{},\"reason\":{}}}",
+                q(&r.consumer),
+                q(&r.atom),
+                provider,
+                q(&refusal_reason(r))
+            )
+        })
+        .collect();
     format!(
-        "{{\"entries\":[{}],\"kept\":[{}],\"request\":[\"@world\"],\"aborted\":null}}",
+        "{{\"entries\":[{}],\"kept\":[{}],\"stale-bindings\":[{}],\"request\":[\"@world\"],\"aborted\":null}}",
         entries.join(","),
-        kept.join(",")
+        kept.join(","),
+        stale.join(",")
     )
 }
 
@@ -201,6 +214,34 @@ fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
         fields.extend(crate::pretend::json::dep_input_fields(&input));
     }
     Some(format!("{{{}}}", fields.join(",")))
+}
+
+/// Why one stale slot-operator binding stays unrepaired: the recorded atom
+/// names a provider version the plan leaves behind, or the consumer has no
+/// visible tree candidate.
+fn refusal_reason(refusal: &portage_world::RefusedBinding) -> String {
+    match &refusal.provider {
+        Some(provider) => format!("not satisfied by {provider}"),
+        None => "no visible ebuild".to_string(),
+    }
+}
+
+/// The property-5 line for the stale bindings the plan does not repair, each
+/// named once with its atom and reason. Empty means byte-identical output.
+fn refused_line(world: &World) -> String {
+    let parts: Vec<String> = world
+        .refused
+        .iter()
+        .map(|r| match &r.provider {
+            Some(provider) => format!("{} ({} not satisfied by {provider})", r.consumer, r.atom),
+            None => format!("{} ({}, no visible ebuild)", r.consumer, r.atom),
+        })
+        .collect();
+    format!(
+        "plan-world: {} stale slot-operator binding(s) not rebuilt: {}",
+        parts.len(),
+        parts.join(", ")
+    )
 }
 
 /// `[ebuild  N     ] cat/pkg-ver:slot`, with the installed version of an
@@ -466,6 +507,44 @@ mod tests {
         );
         assert!(at("w693prov-2:0 [1]") < at("w693cons-1:0"), "{out}");
         assert!(at("w693tool-1:0") < at("w693cons-1:0"), "{out}");
+    }
+
+    /// Charter property 5: a stale binding the plan cannot repair is named
+    /// once on stderr, with the atom and the reason; `--json` carries the
+    /// same row so the checker sees it.
+    #[test]
+    fn a_stale_binding_the_plan_cannot_repair_is_named() {
+        fn stale_tree(root: &Path) {
+            add_ebuild(root, "dev-libs/w741prov-2", "0/2", &[]);
+            add_ebuild(
+                root,
+                "dev-libs/w741user-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w741prov")],
+            );
+            add_installed(root, "dev-libs/w741prov-1", "0/1", &[]);
+            add_installed(
+                root,
+                "dev-libs/w741user-1",
+                "0",
+                &[("RDEPEND", "=dev-libs/w741prov-1* dev-libs/w741prov:0/1=")],
+            );
+        }
+        let world = ["dev-libs/w741user"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world"], &world, &[], "", stale_tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert!(!out.contains("w741user-1"), "{out}");
+        assert!(
+            err.contains("plan-world: 1 stale slot-operator binding(s) not rebuilt: dev-libs/w741user (=dev-libs/w741prov-1* not satisfied by dev-libs/w741prov-2)"),
+            "{err}"
+        );
+        let (rc, out) = run_on_copy(&["--plan-world", "--json"], &world, &[], "", stale_tree);
+        assert_eq!(rc, 0, "{out}");
+        assert!(
+            out.contains("\"stale-bindings\":[{\"consumer\":\"dev-libs/w741user\",\"atom\":\"=dev-libs/w741prov-1*\",\"provider\":\"dev-libs/w741prov-2\""),
+            "{out}"
+        );
     }
 
     /// Two ebuilds of `w739multi`, slots `1` and `2`, with slot `1` installed.

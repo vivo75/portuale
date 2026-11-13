@@ -64,6 +64,8 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     let entries = [fresh, consumer];
     // With `--update` the bridge synthesises the consumer rebuild.
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        usepkg: false,
+        empty: false,
         root: &dir,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -86,6 +88,8 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     ));
     // Without `--update` the arm stays off.
     let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        usepkg: false,
+        empty: false,
         root: &dir,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -192,6 +196,8 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        usepkg: false,
+        empty: false,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
@@ -239,6 +245,8 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        usepkg: false,
+        empty: false,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
@@ -497,7 +505,12 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         false,
     );
     assert_eq!(latched, replace);
-    let (rescheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+    let SlotOpRebuildScan {
+        scheduled: rescheduled,
+        ..
+    } = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        usepkg: false,
+        empty: false,
         effective: None,
         root: &dir,
         entries: &[provider, entry],

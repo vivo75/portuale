@@ -39,26 +39,29 @@ pub(crate) fn step_unsatisfied_dead_end(
         // Raw request atoms behind `top_level_cps` (explicit slot/version atoms pin nothing).
         let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
         let scan_scope = ctx.scan_reachable(&pass.entries);
-        let (scheduled, abi_rebuilds, masked_binaries) =
-            slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
-                effective: Some(ctx.effective_deps()),
-                root: ctx.root,
-                entries: &pass.entries,
-                reachable: &ctx.slot_op_reachable,
-                scope: Some(&scan_scope),
-                walked_installed: &installed_walked_cps(&pass.installed_walked),
-                already: &grown.slot_operator_replace_installed,
-                undone: &grown.slot_operator_undone,
-                with_bdeps: ctx.with_bdeps,
-                update: ctx.update,
-                top_level_cps: &ctx.top_level_cps,
-                top_level_atoms: &top_atoms,
-                excluded: ctx.excluded,
-                config,
-                gate: ctx.gate(),
-            });
+        let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: Some(ctx.effective_deps()),
+            root: ctx.root,
+            entries: &pass.entries,
+            reachable: &ctx.slot_op_reachable,
+            scope: Some(&scan_scope),
+            walked_installed: &installed_walked_cps(&pass.installed_walked),
+            already: &grown.slot_operator_replace_installed,
+            undone: &grown.slot_operator_undone,
+            with_bdeps: ctx.with_bdeps,
+            update: ctx.update,
+            top_level_cps: &ctx.top_level_cps,
+            top_level_atoms: &top_atoms,
+            excluded: ctx.excluded,
+            config,
+            gate: ctx.gate(),
+            empty: ctx.empty,
+            usepkg: ctx.usepkg,
+        });
         // The update probe's forcing half, for a child the walk left installed.
-        let mut scheduled = scheduled;
+        let mut scheduled = scan.scheduled;
+        let abi_rebuilds = scan.abi_rebuilds;
+        let masked_binaries = scan.masked;
         let force_reachable = ctx.force_scan_reachable();
         let (force_consumers, forced) =
             slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {

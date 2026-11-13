@@ -86,6 +86,7 @@ pub(crate) mod testkit {
 }
 
 pub use order::Order;
+pub use rebuild::RefusedBinding;
 pub use reorder::{Change, SlotSet};
 
 use memo::Memo;
@@ -271,7 +272,7 @@ impl<'a> Memos<'a> {
     /// packages are all installed beats one that is merely available, and
     /// one with an atom no visible ebuild satisfies is never chosen.
     // Portage: dep_check.py, dep_zapdeps
-    fn branch_preference(&self, branch: &[String], config: &Config) -> AltPreference {
+    pub(crate) fn branch_preference(&self, branch: &[String], config: &Config) -> AltPreference {
         let atoms: Vec<portage_dep::Atom> = branch
             .iter()
             .filter_map(|t| portage_repo::parse_dep_atom(t, "portage-world"))
@@ -468,6 +469,9 @@ pub struct World {
     /// again (`cat/pkg:slot`): a recorded `:slot/sub-slot=` dependency no longer
     /// matches the provider the plan chooses, or (with `newuse`) the USE changed.
     pub rebuilds: BTreeSet<String>,
+    /// The stale slot-operator bindings the plan does not repair
+    /// ([`RefusedBinding`]): kept consumers the scan refused, each named once.
+    pub refused: Vec<RefusedBinding>,
     /// `cat/pkg:slot` -> the enabled USE flags of the version a plan would
     /// install there, for each reached slot with a change.
     pub planned_use: BTreeMap<String, BTreeSet<String>>,
@@ -526,19 +530,32 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         if !opts.rebuilds {
             return Ok(world);
         }
-        let mut more = if opts.emptytree {
-            rebuild::every_kept(&world)
+        let mut stale = if opts.emptytree {
+            rebuild::StaleBindings {
+                rebuild: rebuild::every_kept(&world, &opts.root),
+                refused: Vec::new(),
+            }
         } else {
-            rebuild::slot_operator(&world, &opts.root)
+            let memos = Memos::new(
+                &repos,
+                &opts.root,
+                opts.with_bdeps,
+                rebuilds.clone(),
+                opts.rebuilds,
+            );
+            rebuild::slot_operator(&world, &opts.root, &memos, &config)
         };
         if opts.newuse {
-            more.extend(rebuild::changed_use(&world, &opts.root, &config));
+            stale
+                .rebuild
+                .extend(rebuild::changed_use(&world, &opts.root, &config));
         }
-        if more.is_subset(&rebuilds) {
+        if stale.rebuild.is_subset(&rebuilds) {
             world.rebuilds = rebuilds;
+            world.refused = stale.refused;
             return Ok(world);
         }
-        rebuilds.extend(more);
+        rebuilds.extend(stale.rebuild);
     }
 }
 
@@ -660,6 +677,7 @@ fn walk(
         edge_kinds,
         reached,
         rebuilds: BTreeSet::new(),
+        refused: Vec::new(),
         planned_use,
         unreadable,
     })
@@ -1255,8 +1273,10 @@ mod tests {
     }
 
     /// PMS `dependencies.tex`, `sec:slot-dep`: a consumer is rebuilt when the
-    /// plan moves the sub-slot its `:=` dependency recorded; a `:*` consumer,
-    /// and a stale binding to a provider the plan leaves alone, are not.
+    /// plan moves the sub-slot its `:=` dependency recorded, and when the
+    /// recorded sub-slot already differs from the installed provider's (an
+    /// earlier move the plan leaves alone, backlog #741); a `:*` consumer,
+    /// and one whose other recorded pins forbid the plan, are not.
     #[test]
     fn a_sub_slot_change_rebuilds_the_slot_operator_consumers_only() {
         let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
@@ -1316,7 +1336,120 @@ mod tests {
         });
         assert_eq!(
             world.rebuilds.iter().collect::<Vec<_>>(),
-            ["dev-libs/w693cons:0"]
+            ["dev-libs/w693cons:0", "dev-libs/w693stale:0"]
+        );
+    }
+
+    /// PMS `dependencies.tex`, `sec:slot-dep`: a kept consumer whose recorded
+    /// `:=` binding names a sub-slot the installed provider no longer has is
+    /// rebuilt even though the plan leaves the provider alone (backlog #741).
+    #[test]
+    fn a_kept_package_with_a_stale_binding_is_rebuilt() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w741user-1",
+            "0",
+            "dev-libs/w741prov:=",
+        );
+        let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741user-1", "0")];
+        let world = testkit::analyse_fixture_with(&["dev-libs/w741user"], &installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            std::fs::write(
+                o.root
+                    .join("var/db/pkg/dev-libs/w741user-1")
+                    .join("RDEPEND"),
+                "dev-libs/w741prov:0/1=",
+            )
+            .expect("recorded RDEPEND");
+        });
+        assert_eq!(
+            world.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w741user:0"]
+        );
+        assert!(world.refused.is_empty(), "{:?}", world.refused);
+    }
+
+    /// Charter property 1 with the owner's guard: a stale consumer whose
+    /// recorded versioned dep forbids the plan's chosen provider version is
+    /// refused, not scheduled, so the rebuild cannot hold the provider back.
+    #[test]
+    fn a_rebuild_that_would_hold_back_a_changed_provider_is_refused() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(tree.path(), "dev-libs/w741core-2", "0/2", "");
+        add_ebuild(tree.path(), "dev-libs/w741user-1", "0", "dev-libs/w741core");
+        let installed = [("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")];
+        let world = testkit::analyse_fixture_with(&["dev-libs/w741user"], &installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            std::fs::write(
+                o.root
+                    .join("var/db/pkg/dev-libs/w741user-1")
+                    .join("RDEPEND"),
+                "=dev-libs/w741core-1* dev-libs/w741core:0/9=",
+            )
+            .expect("recorded RDEPEND");
+        });
+        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
+        assert_eq!(
+            world.refused,
+            [crate::rebuild::RefusedBinding {
+                consumer: "dev-libs/w741user".to_string(),
+                atom: "=dev-libs/w741core-1*".to_string(),
+                provider: Some("dev-libs/w741core-2".to_string()),
+            }]
+        );
+    }
+
+    /// A stale consumer with no visible ebuild cannot be rebuilt: it is
+    /// refused, with the provider the binding names when it is installed.
+    #[test]
+    fn a_consumer_with_no_visible_ebuild_is_not_rebuilt() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
+        let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741gone-1", "0")];
+        let world = testkit::analyse_fixture_with(&["dev-libs/w741gone"], &installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            std::fs::write(
+                o.root
+                    .join("var/db/pkg/dev-libs/w741gone-1")
+                    .join("RDEPEND"),
+                "dev-libs/w741prov:0/1=",
+            )
+            .expect("recorded RDEPEND");
+        });
+        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
+        assert_eq!(
+            world.refused,
+            [crate::rebuild::RefusedBinding {
+                consumer: "dev-libs/w741gone".to_string(),
+                atom: "dev-libs/w741prov:0/1=".to_string(),
+                provider: None,
+            }]
         );
     }
 }

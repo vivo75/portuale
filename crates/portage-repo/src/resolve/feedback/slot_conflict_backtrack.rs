@@ -78,7 +78,7 @@ pub(crate) fn fold_rebuild_scan(
     }
     let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
     let scan_scope = ctx.scan_reachable(&pass.entries);
-    let (mut scheduled, _abi, _masked) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+    let mut scheduled = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         effective: Some(ctx.effective_deps()),
         root: ctx.root,
         entries: &pass.entries,
@@ -94,7 +94,10 @@ pub(crate) fn fold_rebuild_scan(
         excluded: ctx.excluded,
         config,
         gate: ctx.gate(),
-    });
+        empty: ctx.empty,
+        usepkg: ctx.usepkg,
+    })
+    .scheduled;
     let force_reachable = ctx.force_scan_reachable();
     let (force_consumers, forced) =
         slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {

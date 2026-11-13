@@ -61,8 +61,10 @@ pub(crate) fn assemble_result(
                 excluded: ctx.excluded,
                 config,
                 gate: ctx.gate(),
+                empty: ctx.empty,
+                usepkg: ctx.usepkg,
             })
-            .1
+            .abi_rebuilds
         }
     };
     // Continuity pairs for conflict-fired rebuilds (the firing pass

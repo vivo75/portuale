@@ -1614,6 +1614,8 @@ fn bridge_slot_operator_rebuilds(
             top_level_atoms: &top_level_atoms,
             config: &req.config,
             gate: lazy.gate(),
+            empty: req.empty,
+            usepkg: req.usepkg,
         })
     }
 }

@@ -205,6 +205,10 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) top_level_atoms: &'a HashSet<String>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
+    /// `--emptytree`: Portage files no slot-operator rebuild there
+    /// (`depgraph.py:7917-7925`), so the stale-pin arm stays out.
+    pub(crate) empty: bool,
+    pub(crate) usepkg: bool,
 }
 
 /// Legacy path for the `--solver=pubgrub` / `--solver=resolvo` bridges only:
@@ -226,6 +230,8 @@ pub(crate) fn slot_operator_rebuild_entries(
         top_level_atoms,
         config,
         gate,
+        empty,
+        usepkg,
     } = args;
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -234,7 +240,7 @@ pub(crate) fn slot_operator_rebuild_entries(
     loop {
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
-        let (next, pairs, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
             effective: None,
             root,
             entries: &combined,
@@ -250,12 +256,14 @@ pub(crate) fn slot_operator_rebuild_entries(
             excluded,
             config,
             gate,
+            empty,
+            usepkg,
         });
-        abi_rebuilds = pairs;
-        if next == scheduled {
+        abi_rebuilds = scan.abi_rebuilds;
+        if scan.scheduled == scheduled {
             break;
         }
-        scheduled = next;
+        scheduled = scan.scheduled;
         out = installed
             .iter()
             .filter(|pkg| scheduled.contains(&(pkg.category.clone(), pkg.package.clone())))
