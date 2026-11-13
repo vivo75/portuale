@@ -80,7 +80,7 @@ answers: which slots would a plan install for `@world`, and in what order?
 
 | Mode | Rows | Full plan |
 |---|---|---|
-| `update` (default) | a slot whose best visible version is not the installed one (`N`, `U`, `D`), and an `R` row for a kept package whose recorded `:slot/sub-slot=` dependency the plan breaks | `mrg -puDN @world` |
+| `update` (default) | a slot whose best visible version is not the installed one (`N`, `U`, `D`), and an `R` row for a kept package whose recorded `:slot/sub-slot=` dependency the plan breaks or one that is already stale | `mrg -puDN @world` |
 | `emptytree` | every slot `@world` reaches, `R` for an installed version that is kept; build dependencies are followed for all of them | `mrg -pe @world` |
 
 Any other mode is a usage error (exit 2) that names the two.
@@ -102,6 +102,16 @@ and could not be had.
 
 Text output goes to stdout and is rows only. Two lines go to stderr: the
 count and the order, then what was not checked and the command that checks it.
+A third line names each stale slot-operator binding the plan does not repair,
+once, with the atom and the reason -- a kept consumer whose recorded
+`:slot/sub-slot=` no longer matches the final provider version (the chosen
+one when the plan changes the provider's slot, else the installed one) but
+whose rebuild would hold a changed provider back (a recorded versioned pin
+forbids the chosen version), or which has no visible ebuild to rebuild to:
+
+```
+plan-world: 1 stale slot-operator binding(s) not rebuilt: dev-libs/w741user (=dev-libs/w741prov-1* not satisfied by dev-libs/w741prov-2)
+```
 
 ```
 $ mrg --plan-world --sort depend
@@ -137,7 +147,7 @@ If some ebuild could not be read, the first line ends with `, N not read`.
 checker reads it unchanged:
 
 ```
-{"entries":[ENTRY,...],"kept":[KEPT,...],"request":["@world"],"aborted":null}
+{"entries":[ENTRY,...],"kept":[KEPT,...],"stale-bindings":[STALE,...],"request":["@world"],"aborted":null}
 ```
 
 Each `ENTRY` has `category`, `package`, `version`, `slot`, `sub_slot`,
@@ -147,7 +157,10 @@ downgrades only), `dependencies` (the dependency variables of the chosen
 version), `required_use`, `iuse` and `use` (the USE the plan would build
 with). A kept installed package that is also a row is a `reinstall` entry and
 is not repeated in `kept`. `KEPT` has `category`, `package`, `version` and
-`slot` of every other installed package. One entry, from the plan above:
+`slot` of every other installed package. Each `STALE` has `consumer`
+(`cat/pkg`), `atom` (the recorded atom that forbids the repair, or the stale
+`:=` atom itself when the consumer has no visible candidate), `provider` (the
+`cat/pkg-ver` the plan leaves behind, or `null`) and `reason`. One entry, from the plan above:
 
 ```
 {"category":"dev-libs","package":"withdeps","version":"1.0","slot":"0","sub_slot":"0","outcome":"new","merge_order":3,"source":"ebuild","dependencies":{"RDEPEND":"dev-libs/newpkg dev-libs/upgradepkg"},"required_use":"","iuse":[],"use":[]}

@@ -1,0 +1,2 @@
+NO MATCH app-misc/mime-types[nginx]  <- www-servers/nginx-1.31.7-r1
+check-world: 4535 atoms, 2297 package slots, 1 unsatisfiable
