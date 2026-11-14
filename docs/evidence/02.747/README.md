@@ -12,7 +12,13 @@ Full report:
 `../pmtest/differential-test-bed/logs/l0-20261114T093531Z/l0-report.txt`
 (scope log `/tmp/opencode/p747/l0-before.log`; the scope ended after the
 probes, so the script's own compare step was run manually on the finished
-probe dir — same `resolve-compare.py` invocation, rc=0).
+probe dir, rc=0):
+
+```
+python3 ../pmtest/differential-test-bed/compare/resolve-compare.py \
+  ../pmtest/differential-test-bed/logs/l0-20261114T093531Z \
+  ../pmtest/differential-test-bed/compare/known-divergences.yaml
+```
 
 - `probes: 120, clean: 91, parity_rate: 0.758, UNEXPLAINED: 0`
 - `## allowlist entries that matched nothing (candidates for removal)` lists:
