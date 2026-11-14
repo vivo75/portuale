@@ -59,14 +59,15 @@
   `RDEPEND`: propagating it would leave the #746-shaped graph with no
   cuttable edge and force a spurious second build, contradicting the
   `a_cycle_with_a_cuttable_runtime_edge_needs_no_second_build` shape.
-- A `virtual/*` target does not confer build-time status: a virtual slot is
-  an alias, never a build input, so an `RDEPEND` out of it (e.g.
-  `virtual/libcrypt -> sys-libs/libcrypt`) stays cuttable. Letting it count
-  made every provider edge of the bed's perl/libcrypt region uncuttable and
-  dragged the whole perl rebuild cluster past the `perl-5.44` upgrade the
-  rebuilds are for (10 new `build-order` findings on a 176-row bed plan).
-  Residual risk, filed as #749: a kept virtual whose installed provider is
-  broken would be ordered early instead of waiting for its rebuild.
+- A `virtual/*` target does not confer build-time status. That exclusion is
+  a heuristic that keeps the perl/libcrypt rebuild cluster ordered, not PMS
+  soundness: `BDEPEND virtual/foo` makes the provider a build input in fact
+  (PMS 8.1 usability), so a kept virtual's provider edge stays cuttable even
+  when the installed provider is broken. Without the exclusion, every
+  provider edge of the bed's perl/libcrypt region was uncuttable and dragged
+  the whole perl rebuild cluster past the `perl-5.44` upgrade the rebuilds
+  are for (10 new `build-order` findings on a 176-row bed plan). The known
+  hole (and the real fix) is filed as #751.
 - Three outcomes per cycle (`CycleCut`): cut the first cuttable runtime edge;
   cut the closing back edge itself when only it is cuttable, and keep
   scanning (stopping there left every later cycle to the walk below, whose

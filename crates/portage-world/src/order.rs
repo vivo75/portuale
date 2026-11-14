@@ -251,14 +251,15 @@ fn is_runtime_edge(kinds: &BTreeMap<(String, String), u8>, edge: &(String, Strin
 }
 
 /// The nodes the plan builds with: the targets of a `DEPEND`, `BDEPEND` or
-/// `IDEPEND` edge, except `virtual/*` ones. PMS 8.1 makes such a package
-/// usable, so its `RDEPEND` closure constrains the order too. A virtual slot
-/// is an alias, never a build input: letting it confer build-time status
-/// would make every virtual's provider edge uncuttable and drag whole
-/// rebuild clusters past the rebuilds they are for (backlog #746: perl
-/// moves after the modules rebuilt against it). One pass: build-time use
-/// must not propagate through `RDEPEND`, or every cycle edge would count as
-/// build-time in fact and no cycle could be cut.
+/// `IDEPEND` edge, except `virtual/*` targets. PMS 8.1 makes such a package
+/// usable, so its `RDEPEND` closure constrains the order too. Excluding
+/// virtuals is a heuristic that keeps the perl/libcrypt rebuild cluster
+/// ordered, not PMS soundness: `BDEPEND virtual/foo` makes the provider a
+/// build input in fact, so a kept virtual's provider edge stays cuttable
+/// even when the installed provider is broken. The known hole (and the real
+/// fix) is filed as #751. One pass: build-time use must not propagate
+/// through `RDEPEND`, or every cycle edge would count as build-time in fact
+/// and no cycle could be cut.
 pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSet<String> {
     kinds
         .iter()

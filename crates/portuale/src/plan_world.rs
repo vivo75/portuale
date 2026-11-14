@@ -445,7 +445,10 @@ mod tests {
     }
 
     /// Charter property 1: `--json` is the same plan as the text, row for
-    /// row, in the `emerge --json` shape the health checker reads.
+    /// row, in the `emerge --json` shape the health checker reads. An
+    /// acyclic plan builds every slot once: no second `built_twice` entry
+    /// and no repeated `merge_order` (charter 2a never fires here, so the
+    /// document is byte-identical with or without the 2a rule).
     #[test]
     fn json_rows_equal_text_rows_in_order() {
         let (rc, out) = mrg_on_fixtures(&["--plan-world", "--json", "--sort", "depend"], &[]);
@@ -455,6 +458,10 @@ mod tests {
             .find(|l| l.starts_with("{\"entries\":"))
             .expect(&out);
         let entries = line.split("],\"kept\":").next().unwrap();
+        assert!(
+            !entries.contains("\"built_twice\""),
+            "no second build on the acyclic fixtures:\n{out}"
+        );
         let json: Vec<String> = entries
             .split("{\"category\":")
             .skip(1)
