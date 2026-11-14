@@ -36,3 +36,40 @@ the slot sets the reorder pass ranks.
   property 3 supports listing them; the plan output contract already discloses
   that the fast plan can list more than the resolver. The owner confirmed the
   rule (plan 06.739 Q1).
+
+## fn branch_preference (#740, residue of plan 02.692)
+- Portage's terms (`dep_check.py`, `dep_zapdeps` choice bins): a branch whose
+  `cat/pkg`s are all installed (`Installed`) beats one that is merely
+  available (`Available`); a branch with an atom no visible ebuild satisfies
+  is `Unsatisfiable` and never chosen. Check mode keeps exactly this order.
+- Plan-mode extension, portuale's own (charter property 3, not Portage): a
+  branch every non-blocker atom of which the best visible candidate of its
+  slot matches outranks a merely installed one. No slot named: the atom must
+  match the package's best visible; a slot named: the best visible in that
+  main slot, never a parallel slot (`w740prov:1` is best-visible with
+  `w740prov-2:2` present). Order, best last: `Unsatisfiable` < `Available` <
+  `Installed` < `BestVisibleAvailable` < `BestVisibleInstalled` (derived `Ord`;
+  the two new variants are declared after `Installed`). The installed bit is
+  the tie-break (selenium `|| ( firefox firefox-bin )`: both best-visible,
+  `firefox-bin` installed, wins); an installed arm that is not best-visible
+  (host `openssl:0/3`, slot 0's best is 4.1.0 sub-slot `0/4`) loses to a
+  best-visible uninstalled one (`openssl-compat:3`).
+- Gated on `Memos::newest_slot` (set from `Options::rebuilds`, the same flag
+  as `narrow_slotless`); memoised per branch string (`Memo<AltPreference>`)
+  because the rank scans every atom's candidates. Determinism: `rank` plus the
+  listed branch order, `tie_break` unchanged.
+- The arm alone is not the whole mechanism: taking arm 2 adds the requester
+  `dev-libs/openssl:0/3`, and only then does the reorder pass (`chosen()` is
+  the first visible version satisfying every requester) keep 3.6.5 although
+  kept `app-admin/sudo`'s `openssl:=` best is 4.1.0. S0 capture
+  (`docs/evidence/02.740/requesters.stderr`): arm `[openssl-compat:3]` ->
+  `Available`, arm `[openssl:0/3]` -> `Installed`; `dev-libs/openssl:0`
+  `chosen=3.6.5` with `openssl:0/3` requested by exactly the four
+  `openssl-compat` consumers and `openssl:=` by sudo et al.
+- Pinning tests: `a_plan_prefers_the_branch_that_admits_the_best_version`,
+  `the_same_branch_choice_in_check_mode_keeps_the_installed_one`,
+  `a_best_visible_tie_prefers_the_installed_branch`,
+  `a_stale_installed_arm_loses_to_a_best_visible_uninstalled_one`,
+  `a_parallel_slot_arm_is_judged_against_its_own_slot`; end to end
+  `portuale::plan_world::the_fast_plan_takes_the_newest_arm_of_a_disjunctive_dependency`
+  and pmtest `test_740_the_plan_takes_the_newest_arm`.

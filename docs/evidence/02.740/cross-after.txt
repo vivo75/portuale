@@ -1,0 +1,9 @@
+[judge] world-invalid-but-planned  app-misc/mime-types[nginx] (asked by www-servers/nginx-1.31.7-r1): world-no-match, yet the resolver holds app-misc/mime-types-2.1.54 (already_installed) (its USE dependencies are not judged here)
+[judge] world-invalid-but-planned  app-misc/mime-types[nginx] (asked by www-servers/nginx-1.31.7-r1): world-no-match, yet the fast plan holds app-misc/mime-types-2.1.54 (kept) (its USE dependencies are not judged here)
+[note] fast-only  dev-lang/rust-bin:1.99.0  fast=1.99.0 (new); the resolver keeps dev-lang/rust-bin-1.98.1 installed
+[note] fast-only  dev-vcs/pkgcruft-git:0  fast=0.0.5-r2 (reinstall); the resolver keeps dev-vcs/pkgcruft-git-0.0.5-r2 installed
+[note] fast-only  media-libs/gexiv2:0.16  fast=0.16.2-r1 (new); the resolver keeps media-libs/gexiv2-0.14.7-r2 installed
+[note] resolver-only  dev-util/cargo-c:0  resolver=0.10.26 (upgrade)
+[note] resolver-only-reinstall  26 reinstall(s) only the resolver lists (the fast plan rebuilds only for a slot operator)
+[note] fast-stale-binding-unrepaired  dev-util/cargo-c (dev-libs/openssl:0/3=: no visible ebuild)
+world cross-check: 3 fast-only, 1 fast-stale-binding-unrepaired, 1 resolver-only, 1 resolver-only-reinstall, 2 world-invalid-but-planned

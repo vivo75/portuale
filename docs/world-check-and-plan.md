@@ -85,6 +85,16 @@ answers: which slots would a plan install for `@world`, and in what order?
 
 Any other mode is a usage error (exit 2) that names the two.
 
+Choosing a `||` branch in plan mode: a branch ranks by whether every atom
+it names is matched by the best visible candidate of its slot — the
+package's best visible version when the atom names no slot, the best
+visible version in that main slot when it does (a `:1` arm is judged
+against slot 1's best, never a parallel slot 2). A branch that qualifies
+outranks one that is merely installed, so the plan takes the arm that
+admits the newest version; when both qualify the installed one wins, and
+the check keeps the installed-first choice. A changed USE still needs
+`plan-world-newuse` to become a rebuild row.
+
 It does not check blockers, `REQUIRED_USE` or slot conflicts, so it can list
 more or fewer rows than the resolver. A slot with no visible version has no
 row. A downgrade is shown as `D` and is not refused.

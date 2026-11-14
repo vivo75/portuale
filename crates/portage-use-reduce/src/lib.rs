@@ -817,6 +817,13 @@ fn next_alternative<'a>(
 /// The enum is ordered by bin ordinal (higher discriminant = more
 /// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`].
 /// Deriving `Ord` gives selection exactly the bin-order in either pass.
+///
+/// `BestVisibleAvailable` and `BestVisibleInstalled` are portuale's own, not
+/// Portage's: in plan mode a branch every atom of which the best visible
+/// candidate of its slot matches outranks a merely installed one, so the plan
+/// takes the arm that admits the newest version (charter property 3). The
+/// installed bit stays the tie-break, so two best-visible arms still prefer
+/// the installed one and nothing churns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum AltPreference {
     /// No atom in this alternative resolves at all (portuale's guard only).
@@ -847,9 +854,16 @@ pub enum AltPreference {
     /// Bin 1: resolvable, but at least one `cat/pkg` is not installed.
     /// Selectable.
     Available,
-    /// Bin 0: every `cat/pkg` installed or in the graph. The top bin.
+    /// Bin 0: every `cat/pkg` installed or in the graph. The top Portage bin.
     /// Selectable.
     Installed,
+    /// Plan mode only (never reported for the resolver): every non-blocker
+    /// atom is matched by the best visible candidate of its slot, but some
+    /// `cat/pkg` is not installed. Outranks `Installed`. Selectable.
+    BestVisibleAvailable,
+    /// Plan mode only: like `BestVisibleAvailable`, with every `cat/pkg`
+    /// installed or in the graph. The top rank. Selectable.
+    BestVisibleInstalled,
 }
 
 impl AltPreference {
@@ -858,7 +872,9 @@ impl AltPreference {
     pub fn is_selectable(self) -> bool {
         matches!(
             self,
-            AltPreference::Installed
+            AltPreference::BestVisibleInstalled
+                | AltPreference::BestVisibleAvailable
+                | AltPreference::Installed
                 | AltPreference::Available
                 | AltPreference::UnsatUseInGraph
                 | AltPreference::UnsatUseInstalled
@@ -1441,6 +1457,33 @@ mod tests {
         )
         .unwrap();
         assert!(result.is_empty());
+    }
+
+    /// Charter property 3 (plan 02.740): a best-visible first branch beats an
+    /// installed-only second one in the first pass, so the rank is selectable.
+    #[test]
+    fn a_selectable_best_visible_alternative_beats_an_installed_one() {
+        // Branch 1 is best-visible but uninstalled; branch 2 merely
+        // installed. The best-visible rank is selectable, so the first
+        // pass already picks branch 1.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/a"] {
+                    AltPreference::BestVisibleAvailable
+                } else {
+                    AltPreference::Installed
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a"]);
     }
 
     #[test]

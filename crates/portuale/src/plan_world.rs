@@ -555,6 +555,51 @@ mod tests {
         );
     }
 
+    /// Charter property 3 (plan 02.740): the fast plan takes the `||` arm
+    /// whose atoms the best visible candidates match, so the compat package
+    /// is new and the provider upgrades instead of staying pinned.
+    #[test]
+    fn the_fast_plan_takes_the_newest_arm_of_a_disjunctive_dependency() {
+        fn newest_arm_tree(root: &Path) {
+            add_ebuild(root, "dev-libs/w740prov-3", "0/3", &[]);
+            add_ebuild(root, "dev-libs/w740prov-4", "0/4", &[]);
+            add_ebuild(root, "dev-libs/w740compat-3", "3", &[]);
+            add_ebuild(
+                root,
+                "dev-libs/w740user-1",
+                "0",
+                &[(
+                    "RDEPEND",
+                    "|| ( dev-libs/w740compat:3 dev-libs/w740prov:0/3 )",
+                )],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w740sudo-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w740prov:=")],
+            );
+            add_installed(root, "dev-libs/w740prov-3", "0/3", &[]);
+            add_installed(root, "dev-libs/w740sudo-1", "0", &[]);
+        }
+        let (rc, out) = run_on_copy(
+            &["--plan-world"],
+            &["dev-libs/w740user", "dev-libs/w740sudo"],
+            &[],
+            "",
+            newest_arm_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        assert!(
+            out.contains("[ebuild  N     ] dev-libs/w740compat-3:3"),
+            "{out}"
+        );
+        assert!(
+            out.contains("[ebuild     U  ] dev-libs/w740prov-4:0 [3]"),
+            "{out}"
+        );
+    }
+
     /// Two ebuilds of `w739multi`, slots `1` and `2`, with slot `1` installed.
     fn dual_slot_tree(root: &Path) {
         add_ebuild(root, "dev-libs/w739multi-1", "1", &[]);

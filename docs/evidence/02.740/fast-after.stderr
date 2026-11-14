@@ -1,0 +1,3 @@
+plan-world: 349 to install, order alpha
+not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan
+plan-world: 1 stale slot-operator binding(s) not rebuilt: dev-util/cargo-c (dev-libs/openssl:0/3=, no visible ebuild)

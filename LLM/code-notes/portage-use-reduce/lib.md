@@ -110,6 +110,11 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 ## tests: disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one
 - Portage `preferred_installed` (bin 0) beats `preferred_non_installed` (bin 1): the `virtual/wine` -> `wine-staging` case.
 
+## tests: a_selectable_best_visible_alternative_beats_an_installed_one
+- Backlog #740: a `BestVisibleAvailable` first branch beats an `Installed`
+  second one in the first pass, so the new rank is selectable (`is_selectable`
+  must name both new variants or the change is a no-op).
+
 ## tests: disjunctive_defers_a_tie_to_tie_break_and_keeps_first_when_it_says_zero
 - Both rank `Available` (a genuine tie); `tie_break` decides, not "first satisfiable".
 

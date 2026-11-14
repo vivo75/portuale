@@ -1,0 +1,2 @@
+plan-world: 269 to install, order alpha
+not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan

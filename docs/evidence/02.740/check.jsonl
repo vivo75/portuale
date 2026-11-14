@@ -1,0 +1,2 @@
+{"property":"world-no-match","package":"www-servers/nginx-1.31.7-r1","atom":"app-misc/mime-types[nginx]","reason":"no ebuild matches; asked by www-servers/nginx-1.31.7-r1","pre_existing":false}
+{"atoms":4535,"slots":2297,"unsatisfiable":1,"not_read":0}

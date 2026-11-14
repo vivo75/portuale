@@ -108,7 +108,10 @@ pub(crate) struct Memos<'a> {
     /// `cat/pkg` -> installed slots (sub-slot cut off).
     installed_slots: HashMap<String, HashSet<String>>,
     /// Plan modes name the best slot of a slotless atom even when an older
-    /// slot is installed; the check counts installed slots as meeting it.
+    /// slot is installed; the check counts installed slots as meeting it. The
+    /// same flag gates the plan-only `||` preference: a branch every atom of
+    /// which the best visible candidate of its slot matches outranks a merely
+    /// installed one.
     newest_slot: bool,
     /// `(cat/pkg, slot)` -> installed version, to tell a rebuild from a keep.
     installed_versions: HashMap<(String, String), String>,
@@ -121,6 +124,9 @@ pub(crate) struct Memos<'a> {
     visible: Memo<bool>,
     use_sets: Memo<Arc<HashSet<String>>>,
     atom_available: Memo<bool>,
+    /// `||` branch -> how good it is, memoised: the plan-mode rank scans
+    /// every atom's candidates, like [`Memos::atom_available`] does.
+    branch_preference: Memo<AltPreference>,
     /// Dependency atom -> the `*DEPEND` variables naming it (bits of [`DEP_KEYS`]).
     deps: Memo<Arc<DepAtoms>>,
 }
@@ -161,6 +167,7 @@ impl<'a> Memos<'a> {
             visible: Memo::new(),
             use_sets: Memo::new(),
             atom_available: Memo::new(),
+            branch_preference: Memo::new(),
             deps: Memo::new(),
         }
     }
@@ -270,30 +277,66 @@ impl<'a> Memos<'a> {
 
     /// How good one `||` branch is, in Portage's terms: a branch whose
     /// packages are all installed beats one that is merely available, and
-    /// one with an atom no visible ebuild satisfies is never chosen.
+    /// one with an atom no visible ebuild satisfies is never chosen. In plan
+    /// mode a branch every non-blocker atom of which the best visible
+    /// candidate of its slot matches outranks a merely installed one, so the
+    /// plan takes the arm that admits the newest version.
     // Portage: dep_check.py, dep_zapdeps
     pub(crate) fn branch_preference(&self, branch: &[String], config: &Config) -> AltPreference {
-        let atoms: Vec<portage_dep::Atom> = branch
-            .iter()
-            .filter_map(|t| portage_repo::parse_dep_atom(t, "portage-world"))
-            .filter(|a| a.blocker == Blocker::None)
-            .collect();
-        let all_available = branch
-            .iter()
-            .filter(|t| {
-                portage_repo::parse_dep_atom(t, "portage-world")
-                    .is_some_and(|a| a.blocker == Blocker::None)
+        self.branch_preference
+            .get_or_compute(branch.join("\n"), || {
+                self.branch_preference_uncached(branch, config)
             })
-            .all(|t| self.atom_available(t, config));
-        if !all_available {
-            AltPreference::Unsatisfiable
-        } else if atoms.iter().all(|a| {
+    }
+
+    /// [`branch_preference`](Self::branch_preference) without the memo.
+    fn branch_preference_uncached(&self, branch: &[String], config: &Config) -> AltPreference {
+        let kept: Vec<(&String, portage_dep::Atom)> = branch
+            .iter()
+            .filter_map(|t| {
+                let atom = portage_repo::parse_dep_atom(t, "portage-world")?;
+                (atom.blocker == Blocker::None).then_some((t, atom))
+            })
+            .collect();
+        if !kept.iter().all(|(t, _)| self.atom_available(t, config)) {
+            return AltPreference::Unsatisfiable;
+        }
+        let installed = kept.iter().all(|(_, a)| {
             self.installed
                 .contains(&format!("{}/{}", a.category, a.package))
-        }) {
-            AltPreference::Installed
-        } else {
-            AltPreference::Available
+        });
+        if !self.newest_slot {
+            return if installed {
+                AltPreference::Installed
+            } else {
+                AltPreference::Available
+            };
+        }
+        let best_visible = kept.iter().all(|(t, a)| {
+            let Ok(all) = portage_repo::list_candidates(self.repos, &a.category, &a.package) else {
+                return false;
+            };
+            let mut best: Option<&Candidate> = None;
+            for c in all.iter() {
+                // No slot named: the package's best visible; a slot named:
+                // the best visible in that main slot (never a parallel one).
+                if a.slot.as_deref().is_some_and(|s| s != c.slot) {
+                    continue;
+                }
+                if !self.visible(c, &a.category, &a.package, config) {
+                    continue;
+                }
+                if best.is_none_or(|b| rank(c, true, b, true) == Ordering::Greater) {
+                    best = Some(c);
+                }
+            }
+            best.is_some_and(|c| self.atom_matches(t, c, (&a.category, &a.package), config))
+        });
+        match (best_visible, installed) {
+            (true, true) => AltPreference::BestVisibleInstalled,
+            (true, false) => AltPreference::BestVisibleAvailable,
+            (false, true) => AltPreference::Installed,
+            (false, false) => AltPreference::Available,
         }
     }
 
@@ -1483,5 +1526,209 @@ mod tests {
         });
         assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
         assert!(world.refused.is_empty(), "{:?}", world.refused);
+    }
+
+    /// The openssl shape of plan 02.740: `w740user` reaches
+    /// `|| ( dev-libs/w740compat:3 dev-libs/w740prov:0/3 )` and the kept
+    /// `w740sudo` (like the host's profile `@system` sudo) reaches
+    /// `dev-libs/w740prov:=`; `w740prov-3` (`0/3`) is installed while
+    /// `w740prov-4` (`0/4`) and `w740compat-3` are visible.
+    fn newest_arm_tree(root: &Path) {
+        add_ebuild(
+            root,
+            "dev-libs/w740user-1",
+            "0",
+            "|| ( dev-libs/w740compat:3 dev-libs/w740prov:0/3 )",
+        );
+        add_ebuild(root, "dev-libs/w740sudo-1", "0", "dev-libs/w740prov:=");
+        add_ebuild(root, "dev-libs/w740prov-3", "0/3", "");
+        add_ebuild(root, "dev-libs/w740prov-4", "0/4", "");
+        add_ebuild(root, "dev-libs/w740compat-3", "3", "");
+    }
+
+    /// The analysis of [`newest_arm_tree`] in plan (`true`) or check
+    /// (`false`) mode.
+    fn newest_arm_world(rebuilds: bool) -> World {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        newest_arm_tree(tree.path());
+        let installed = [("dev-libs/w740prov-3", "0/3"), ("dev-libs/w740sudo-1", "0")];
+        testkit::analyse_fixture_with(
+            &["dev-libs/w740user", "dev-libs/w740sudo"],
+            &installed,
+            |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.rebuilds = rebuilds;
+            },
+        )
+    }
+
+    /// The chosen version of `cp:slot`, when the world reaches it.
+    fn chosen_version(world: &World, cp: &str, slot: &str) -> Option<String> {
+        world
+            .slots
+            .iter()
+            .find(|s| s.cp == cp && s.slot == slot)
+            .and_then(|s| s.chosen())
+            .map(|c| c.version.clone())
+    }
+
+    /// What a plan would do to `cp:slot`: new, upgraded, or nothing.
+    fn slot_change(world: &World, cp: &str, slot: &str) -> Option<Change> {
+        world
+            .slots
+            .iter()
+            .find(|s| s.cp == cp && s.slot == slot)
+            .and_then(|s| s.change())
+    }
+
+    /// Charter property 3 (plan 02.740): in plan mode the `||` branch every
+    /// atom of which the best visible candidate of its slot matches wins over
+    /// the installed-matching branch, so the plan takes the compat arm and
+    /// upgrades the provider instead of pinning the installed sub-slot.
+    #[test]
+    fn a_plan_prefers_the_branch_that_admits_the_best_version() {
+        let world = newest_arm_world(true);
+        assert_eq!(
+            slot_change(&world, "dev-libs/w740compat", "3"),
+            Some(Change::New)
+        );
+        assert_eq!(
+            chosen_version(&world, "dev-libs/w740prov", "0"),
+            Some("4".to_string())
+        );
+        assert_eq!(
+            slot_change(&world, "dev-libs/w740prov", "0"),
+            Some(Change::Upgrade)
+        );
+    }
+
+    /// Plan 02.740: a check keeps today's `||` order (the installed arm
+    /// wins), so it still sees the installed sub-slot and no compat package.
+    #[test]
+    fn the_same_branch_choice_in_check_mode_keeps_the_installed_one() {
+        let world = newest_arm_world(false);
+        assert_eq!(
+            chosen_version(&world, "dev-libs/w740prov", "0"),
+            Some("3".to_string())
+        );
+        assert_eq!(chosen_version(&world, "dev-libs/w740compat", "3"), None);
+    }
+
+    /// Plan 02.740 (the selenium `|| ( firefox firefox-bin )` shape, with
+    /// `firefox-bin` installed): two best-visible arms tie on the new rank,
+    /// so the installed one wins and no extra package is pulled in.
+    #[test]
+    fn a_best_visible_tie_prefers_the_installed_branch() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w740tie-1",
+            "0",
+            "|| ( dev-libs/w740a dev-libs/w740b )",
+        );
+        add_ebuild(tree.path(), "dev-libs/w740a-1", "0", "");
+        add_ebuild(tree.path(), "dev-libs/w740b-1", "0", "");
+        let world = testkit::analyse_fixture_with(
+            &["dev-libs/w740tie"],
+            &[("dev-libs/w740b-1", "0")],
+            |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.rebuilds = true;
+            },
+        );
+        assert_eq!(
+            chosen_version(&world, "dev-libs/w740b", "0"),
+            Some("1".to_string())
+        );
+        assert_eq!(chosen_version(&world, "dev-libs/w740a", "0"), None);
+    }
+
+    /// Plan 02.740 (the openssl direction, pinned apart from the tie): an
+    /// installed arm its slot's best visible version cannot satisfy loses to
+    /// a best-visible uninstalled one, because keeping it would pin an older
+    /// version (charter property 3).
+    #[test]
+    fn a_stale_installed_arm_loses_to_a_best_visible_uninstalled_one() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w740stale-1",
+            "0",
+            "|| ( dev-libs/w740alt dev-libs/w740old:0/1 )",
+        );
+        add_ebuild(tree.path(), "dev-libs/w740alt-1", "0", "");
+        add_ebuild(tree.path(), "dev-libs/w740old-1", "0/1", "");
+        add_ebuild(tree.path(), "dev-libs/w740old-2", "0/2", "");
+        let world = testkit::analyse_fixture_with(
+            &["dev-libs/w740stale"],
+            &[("dev-libs/w740old-1", "0/1")],
+            |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.rebuilds = true;
+            },
+        );
+        assert_eq!(
+            slot_change(&world, "dev-libs/w740alt", "0"),
+            Some(Change::New)
+        );
+        // The losing arm requests nothing: the installed package stays alone.
+        assert_eq!(chosen_version(&world, "dev-libs/w740old", "0"), None);
+    }
+
+    /// Plan 02.740: a slot-restricted arm is judged against its own slot's
+    /// best, never the package's newest slot, so `w740prov:1` stays
+    /// best-visible with `w740prov-2:2` present.
+    #[test]
+    fn a_parallel_slot_arm_is_judged_against_its_own_slot() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w740multi-1",
+            "0",
+            "|| ( dev-libs/w740prov:1 dev-libs/w740alt )",
+        );
+        add_ebuild(tree.path(), "dev-libs/w740prov-1", "1", "");
+        add_ebuild(tree.path(), "dev-libs/w740prov-2", "2", "");
+        add_ebuild(tree.path(), "dev-libs/w740alt-1", "0", "");
+        let world = testkit::analyse_fixture_with(&["dev-libs/w740multi"], &[], |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+        });
+        assert_eq!(
+            chosen_version(&world, "dev-libs/w740prov", "1"),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            slot_change(&world, "dev-libs/w740prov", "1"),
+            Some(Change::New)
+        );
     }
 }
