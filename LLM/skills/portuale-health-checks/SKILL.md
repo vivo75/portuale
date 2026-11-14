@@ -15,7 +15,7 @@ from `docs/charter.md` for the properties themselves.
 | Property | Checked by | Not covered |
 |---|---|---|
 | 1. Dependencies hold (runtime and post-merge atoms matched, no blocker, `REQUIRED_USE` holds, one package per slot) | `health_checker.py` `check_final_state`, on `emerge -pv --json` (a plan) and, with `--installed ROOT`, on the VDB a real merge left. Also `output_invariants.py` (every owner is an entry or installed, every entry reachable, no duplicate slot without a reported conflict) and the dependency-drop guard (see `portuale-resolver`) | |
-| 2. Order is legal (build dependencies merged earlier and usable, PMS 8.1) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: an unserializable cycle is only *noted* (`cycle-noted`); building a package twice is not modelled |
+| 2. Order is legal (build dependencies merged earlier and usable, PMS 8.1) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: a cycle with no cuttable runtime edge rebuilds its consumer (a second row with `built_twice`, excused by `cycle-noted`) |
 | 3. Newest visible version that every constraint allows | `health_checker.py` `check_best_versions` (needs the VDB and `-v --json`). Candidates are the repositories' ebuilds and the binary packages of the local index (`PKGDIR/Packages`), as far as the plan's `options` (`usepkg`, `usepkgonly`) let the run use them; a binary whose USE differs from the configured one is not a candidate | a remote binhost (`--getbinpkg`) is not read (a note); entries absent from the metadata cache or the index (`checker-limitation`) |
 | 4. Removal keeps the libraries remaining programs link | `health_checker.py` `check_removal_plan` on `-C`, `--depclean`, `--prune` with `--pretend --json`; `--installed ROOT` checks that every installed ELF still finds its libraries after a real merge (a preserved library is a file on disk); Rust tests `ebuild_merge/tests/plib_*.rs` for the preserve-libs mechanics | a real unmerge on a real tree is compared with Portage (the L32 cells), not gated |
 | 5. Messages name the cause and an action | **no program** | everything; only pinned text exists, and it fixes known messages, not the rule |
@@ -99,7 +99,9 @@ go.
    builds or the L32 life-cycle cells.
 3. `health_checker.py` runs on the L0 plans and a few fixtures, not over every
    contract case.
-4. Property 2a (building a package twice to break a cycle) is not modelled.
+4. Property 2a (building a package twice to break a cycle) is modelled in
+   `check_order`/`check_final_state` but has no bed or merge-path proof that
+   a real double build heals the installation.
 5. Property 3 reads only the local binary index, not a remote binhost (#690).
 
 ## History

@@ -422,6 +422,7 @@
 - [crates/portuale/src/mrg.rs](portuale/mrg.md) — `mrg`: a portuale-only clap front end over portuale's own emerge codepath.
 - [crates/portuale/src/mtimedb.rs](portuale/mtimedb.md) — `/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, the `info` dir-mtime memo, and the `updates` per-file mtime record.
 - [crates/portuale/src/needed_elf.rs](portuale/needed_elf.md) — `NEEDED.ELF.2` parsing and linkage-map computation for preserve-libs decisions.
+- [crates/portuale/src/plan_world.rs](portuale/plan_world.md) — `mrg --plan-world[=update|emptytree] [--sort alpha|depend|resolver]`: what
 - [crates/portuale/src/portage_lock.rs](portuale/portage_lock.md) — Advisory file lock in the shape of Portage's `lockfile` primitive.
 - [crates/portuale/src/portageq.rs](portuale/portageq.md) — Native `has_version` / `best_version` over the installed-package database.
 - [crates/portuale/src/preserved_libs.rs](portuale/preserved_libs.md) — Advisory "run `emerge @preserved-rebuild`" notice printed after a vdb-changing run.

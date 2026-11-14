@@ -8,13 +8,15 @@
 //! instead of gaining a row. It sees no blockers
 //! and no `REQUIRED_USE`, so it can list less or more than the resolver; `--sort resolver` shows the
 //! resolver's own order for the same rows. `--sort depend` puts a package
-//! after what it needs before it is merged or usable; a `PDEPEND` orders
-//! nothing (PMS).
+//! after what it needs before it is merged or usable: a runtime edge out of
+//! a package the plan builds with still orders (PMS 8.1, backlog #746), and
+//! a cycle with no such edge is broken by building its consumer twice
+//! (charter 2a, backlog #745); a `PDEPEND` orders nothing (PMS).
 
 use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
-use portage_world::{Change, Order, SlotSet, World};
-use std::collections::HashMap;
+use portage_world::{Change, Order, Pass, Row, SlotSet, World};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
@@ -66,17 +68,39 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
     if matches.get_flag("json") {
         println!("{}", plan_json(&world, &rows, &root));
     } else {
-        for slot in &rows {
-            println!("{}", row(&world, slot));
+        for entry in &rows {
+            println!("{}", row(&world, entry.slot));
+        }
+    }
+    let mut slots: BTreeSet<String> = BTreeSet::new();
+    let mut rebuilt: BTreeSet<String> = BTreeSet::new();
+    for entry in &rows {
+        let node = entry.slot.node();
+        slots.insert(node.clone());
+        if entry.pass == Pass::Rebuild {
+            rebuilt.insert(node);
         }
     }
     let unread = match world.unreadable.len() {
         0 => String::new(),
         n => format!(", {n} not read"),
     };
+    let twice = if rebuilt.is_empty() {
+        String::new()
+    } else {
+        let slots = if rebuilt.len() == 1 {
+            "1 slot".to_string()
+        } else {
+            format!("{} slots", rebuilt.len())
+        };
+        format!(
+            ", {slots} built twice: {}",
+            rebuilt.into_iter().collect::<Vec<_>>().join(", ")
+        )
+    };
     eprintln!(
-        "plan-world: {} to install, order {sort}{unread}",
-        rows.len()
+        "plan-world: {} to install, order {sort}{unread}{twice}",
+        slots.len()
     );
     eprintln!("{}", not_checked(mode, opts.newuse));
     if !world.refused.is_empty() {
@@ -135,11 +159,11 @@ fn not_checked(mode: Mode, newuse: bool) -> String {
 /// health checker reads: the rows as `entries` in order, and every
 /// installed package they do not replace as `kept` (the checker reads their
 /// dependencies from the VDB).
-fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
+fn plan_json(world: &World, rows: &[Row], root: &Path) -> String {
     let entries: Vec<String> = rows
         .iter()
         .enumerate()
-        .filter_map(|(order, slot)| entry_json(world, slot, order))
+        .filter_map(|(order, row)| entry_json(world, row.slot, order, row.pass))
         .collect();
     let kept: Vec<String> = world
         .kept_installed(root)
@@ -185,8 +209,10 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
 }
 
 /// One `entries` object of [`plan_json`]; `None` for a slot with no chosen
-/// version (it has no row either).
-fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
+/// version (it has no row either). A [`Pass::Rebuild`] entry carries
+/// `built_twice` and no `from_version`: it builds the same version again to
+/// break a cycle (charter 2a), it does not replace an installed one.
+fn entry_json(world: &World, slot: &SlotSet, order: usize, pass: Pass) -> Option<String> {
     let chosen = slot.chosen()?;
     let (category, package) = slot.cp.split_once('/')?;
     let (outcome, from) = match (world.change(slot)?, slot.installed.as_deref()) {
@@ -205,7 +231,9 @@ fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
         format!("\"merge_order\":{order}"),
         "\"source\":\"ebuild\"".to_string(),
     ];
-    if let Some(from) = from {
+    if pass == Pass::Rebuild {
+        fields.push("\"built_twice\":2".to_string());
+    } else if let Some(from) = from {
         fields.push(format!("\"from_version\":{}", q(from)));
     }
     let pf = format!("{package}-{}", chosen.version);
@@ -355,7 +383,8 @@ fn parse_plan_rows(text: &str) -> HashMap<String, usize> {
 mod tests {
     use super::parse_plan_rows;
     use crate::check_world::tests::{
-        add_ebuild, add_installed, mrg_on_fixtures, run_on_copy, run_on_copy_with_stderr,
+        add_ebuild, add_installed, mrg_on_fixtures, run_on_copy, run_on_copy_keeping_tree,
+        run_on_copy_with_stderr,
     };
     use std::path::Path;
 
@@ -515,6 +544,206 @@ mod tests {
         );
         assert!(at("w693prov-2:0 [1]") < at("w693cons-1:0"), "{out}");
         assert!(at("w693tool-1:0") < at("w693cons-1:0"), "{out}");
+    }
+
+    /// The `health_checker.py` of the sibling pmtest checkout, through the
+    /// `fixtures` symlink: the plan `--json` below is judged with the copy's
+    /// own VDB, the way the L0 bed judges the host plan.
+    fn health_checker() -> std::path::PathBuf {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        fixtures
+            .canonicalize()
+            .expect("the fixtures symlink resolves")
+            .join("../pytests-contract-suite/health_checker.py")
+    }
+
+    /// No `build-order` failure in the checker's verdict on the `--json` plan
+    /// `out`, read with the VDB at `vdb`: no finding the plan introduces
+    /// (a finding already true of the installed tree is `pre-existing` and
+    /// not the plan's fault, as in pmtest `test_plan_world.py`).
+    fn assert_no_build_order(checker_out: &str, vdb: &Path, plan: &Path) {
+        let result = std::process::Command::new("python3")
+            .arg(checker_out)
+            .arg("--vdb")
+            .arg(vdb)
+            .arg(plan)
+            .output()
+            .expect("python3 runs the checker");
+        let report = String::from_utf8_lossy(&result.stdout);
+        let check = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(
+                "import json,sys\n\
+                 record=json.loads(sys.argv[1])\n\
+                 bad=[f for f in record['findings'] if f['failure'] and not f['pre_existing']]\n\
+                 order=[f for f in bad if f['property']=='build-order']\n\
+                 print(f\"{len(bad)} introduced failures, {len(order)} build-order\")\n\
+                 [print(f['property'], f['package'], f['reason'][:200]) for f in bad]\n\
+                 sys.exit(1 if bad else 0)\n",
+            )
+            .arg(report.as_ref())
+            .output()
+            .expect("python3 filters the verdict");
+        assert!(
+            check.status.success(),
+            "checker failures for {}:\n{}",
+            plan.display(),
+            String::from_utf8_lossy(&check.stdout)
+        );
+    }
+
+    /// The #746 shape: `w746auto` builds with the kept `w746help`, whose
+    /// `RDEPEND` needs the rebuilt `w746loc`; `w746get` and the new `w746icu`
+    /// close the cycle back to `w746auto`. The installed `w746loc` records a
+    /// stale `:=` on `w746prov` (installed `0/2`, recorded `0/1=`), so the
+    /// plan rebuilds it without moving the provider (backlog #741).
+    fn kept_middle_tree(root: &Path) {
+        add_ebuild(
+            root,
+            "dev-libs/w746auto-1",
+            "0",
+            &[("BDEPEND", "dev-libs/w746help")],
+        );
+        add_ebuild(
+            root,
+            "dev-libs/w746help-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746loc")],
+        );
+        add_ebuild(
+            root,
+            "dev-libs/w746loc-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746get dev-libs/w746prov")],
+        );
+        add_ebuild(
+            root,
+            "dev-libs/w746get-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746icu")],
+        );
+        add_ebuild(
+            root,
+            "dev-libs/w746icu-1",
+            "0",
+            &[("BDEPEND", "dev-libs/w746auto")],
+        );
+        add_ebuild(root, "dev-libs/w746prov-2", "0/2", &[]);
+        add_installed(
+            root,
+            "dev-libs/w746help-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746loc")],
+        );
+        add_installed(
+            root,
+            "dev-libs/w746loc-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746get dev-libs/w746prov:0/1=")],
+        );
+        add_installed(
+            root,
+            "dev-libs/w746get-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w746icu")],
+        );
+        add_installed(root, "dev-libs/w746prov-2", "0/2", &[]);
+    }
+
+    /// Charter property 2 (PMS 8.1: a build tool must be usable, backlog
+    /// #746): the repaired provider is ordered before the package that builds
+    /// with the tool needing it, and the checker reports no `build-order`.
+    #[test]
+    fn a_cycle_through_a_kept_package_orders_the_repaired_provider_first() {
+        let world = ["dev-libs/w746auto"];
+        let (rc, out) = run_on_copy(
+            &["--plan-world", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            kept_middle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w746")).collect();
+        let at = |what: &str| rows.iter().position(|r| r.ends_with(what)).expect(&out);
+        assert_eq!(rows.len(), 3, "{out}");
+        assert!(at("w746loc-1:0") < at("w746auto-1:0"), "{out}");
+        let (tmp, rc, out, _) = run_on_copy_keeping_tree(
+            &["--plan-world", "--json", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            kept_middle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let plan = tmp.path().join("plan.json");
+        std::fs::write(&plan, out.trim()).expect("plan file");
+        let checker = health_checker();
+        assert_no_build_order(
+            checker.to_str().expect("checker path"),
+            &tmp.path().join("root/var/db/pkg"),
+            &plan,
+        );
+    }
+
+    /// Charter property 2a (backlog #745): a cycle with no cuttable runtime
+    /// edge is broken by building its consumer twice: one slot, two rows, and
+    /// only the second `--json` entry carries `built_twice`.
+    #[test]
+    fn an_all_build_time_cycle_gets_a_second_row() {
+        fn two_cycle_tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w745a-1",
+                "0",
+                &[("BDEPEND", "dev-libs/w745b")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w745b-1",
+                "0",
+                &[("BDEPEND", "dev-libs/w745a")],
+            );
+        }
+        let world = ["dev-libs/w745a", "dev-libs/w745b"];
+        let (rc, out) = run_on_copy(
+            &["--plan-world", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            two_cycle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w745")).collect();
+        assert_eq!(
+            rows,
+            [
+                "[ebuild  N     ] dev-libs/w745b-1:0",
+                "[ebuild  N     ] dev-libs/w745a-1:0",
+                "[ebuild  N     ] dev-libs/w745b-1:0",
+            ],
+            "{out}"
+        );
+        let (tmp, rc, out, _) = run_on_copy_keeping_tree(
+            &["--plan-world", "--json", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            two_cycle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let plan = tmp.path().join("plan.json");
+        std::fs::write(&plan, out.trim()).expect("plan file");
+        let text = std::fs::read_to_string(&plan).expect("plan file");
+        let second = text.match_indices("\"package\":\"w745b\"").count();
+        assert_eq!(second, 2, "{text}");
+        assert_eq!(text.match_indices("\"built_twice\":2").count(), 1, "{text}");
+        let checker = health_checker();
+        assert_no_build_order(
+            checker.to_str().expect("checker path"),
+            &tmp.path().join("root/var/db/pkg"),
+            &plan,
+        );
     }
 
     /// Charter property 5: a stale binding the plan cannot repair is named

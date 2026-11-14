@@ -495,7 +495,11 @@ mod tests {
         let rows = world.ordered(&Order::Alpha);
         assert!(reached > 1);
         assert_eq!(rows.len(), reached);
-        let kept = rows.iter().find(|s| s.cp == "dev-libs/newpkg").unwrap();
+        let kept = rows
+            .iter()
+            .find(|r| r.slot.cp == "dev-libs/newpkg")
+            .map(|r| &r.slot)
+            .unwrap();
         assert_eq!(world.change(kept), Some(crate::Change::Rebuild));
     }
 }

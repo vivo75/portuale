@@ -305,6 +305,20 @@ pub(crate) mod tests {
         make_conf: &str,
         tweak: impl Fn(&Path),
     ) -> (i32, String, String) {
+        let (_, rc, out, err) = run_on_copy_keeping_tree(args, extra, env, make_conf, tweak);
+        (rc, out, err)
+    }
+
+    /// As [`run_on_copy_with_stderr`], keeping the tree copy alive so the
+    /// caller can read back what the run left (a VDB, a plan file): the
+    /// temporary directory, then (exit code, stdout, stderr).
+    pub(crate) fn run_on_copy_keeping_tree(
+        args: &[&str],
+        extra: &[&str],
+        env: &[(&str, &str)],
+        make_conf: &str,
+        tweak: impl Fn(&Path),
+    ) -> (tempfile::TempDir, i32, String, String) {
         let tmp = tempfile::tempdir_in("/var/tmp").unwrap();
         let root = tmp.path().join("root");
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
@@ -342,6 +356,7 @@ pub(crate) mod tests {
             .output()
             .unwrap();
         (
+            tmp,
             out.status.code().unwrap(),
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),

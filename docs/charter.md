@@ -47,8 +47,13 @@ checked by a program:
    serialized (A needs B and B needs A, or longer loops). We drop the
    self-imposed limit that a package is built only once: breaking such a
    loop by building a package twice is allowed, as long as the final state
-   meets every property here. This is not a request to implement it now; for
-   the time being it is enough to know that unserializable dependencies exist.
+   meets every property here. `mrg --plan-world --sort depend` does this:
+   it cuts a cycle at a runtime-only edge that carries no build-time need,
+   and where every runtime edge carries one it builds the back-edge's
+   consumer a second time, right after the cycle. The health checker
+   excuses the need the first build missed when the identical package is
+   merged again later (`cycle-noted`), and still fails a slot that would
+   hold two different versions.
 3. **Packages are as new as possible.** Each package ends at the best
    visible version that fits the constraints of all the others.
 4. **Removal does not break running programs.** The user may remove a package

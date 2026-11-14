@@ -102,7 +102,12 @@ row. A downgrade is shown as `D` and is not refused.
 `--sort` orders the rows. `alpha` is by `category/package:slot` and claims
 nothing about build order. `depend` puts a package after the packages it needs
 before it is built or usable (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); a
-`PDEPEND` orders nothing, as the PMS says (`dependencies.tex`). `resolver` runs
+runtime-only edge out of a package the plan builds with still orders, because
+a build tool must be usable (PMS 8.1); a `PDEPEND` orders nothing, as the PMS
+says (`dependencies.tex`). A cycle with no such edge is broken by building
+its consumer twice: the slot gets a second row, and only the second `--json`
+entry carries `built_twice: 2` (no `from_version`, it is the same version
+built again). `resolver` runs
 `emerge --pretend` as a child process and uses its order, which takes seconds
 to a minute.
 
@@ -112,7 +117,9 @@ and could not be had.
 
 Text output goes to stdout and is rows only. Two lines go to stderr: the
 count and the order, then what was not checked and the command that checks it.
-A third line names each stale slot-operator binding the plan does not repair,
+The count names unique slots, with `, N slot(s) built twice: cat/pkg:slot`
+appended when a cycle was broken by building a package twice. A third line
+names each stale slot-operator binding the plan does not repair,
 once, with the atom and the reason -- a kept consumer whose recorded
 `:slot/sub-slot=` no longer matches the final provider version (the chosen
 one when the plan changes the provider's slot, else the installed one) but
@@ -167,10 +174,11 @@ to one from before the field existed.
 Each `ENTRY` has `category`, `package`, `version`, `slot`, `sub_slot`,
 `outcome` (`new`, `upgrade`, `downgrade` or `reinstall`), `merge_order` (the
 row position, from 0), `source` (always `ebuild`), `from_version` (upgrades and
-downgrades only), `dependencies` (the dependency variables of the chosen
-version), `required_use`, `iuse` and `use` (the USE the plan would build
-with). A kept installed package that is also a row is a `reinstall` entry and
-is not repeated in `kept`. `KEPT` has `category`, `package`, `version` and
+downgrades only, never on a second build), `built_twice` (`2`, on the second
+entry of a slot the plan builds twice only), `dependencies` (the dependency
+variables of the chosen version), `required_use`, `iuse` and `use` (the USE
+the plan would build with). A kept installed package that is also a row is a
+`reinstall` entry and is not repeated in `kept`. `KEPT` has `category`, `package`, `version` and
 `slot` of every other installed package. Each `STALE` has `consumer`
 (`cat/pkg`), `atom` (the recorded atom that forbids the repair, or the stale
 `:=` atom itself when the consumer has no visible candidate), `provider` (the

@@ -1,0 +1,8 @@
+#745 synthetic shape under all six merge orders (checker S0, 2026-11-14):
+prov -RDEPEND-> user, user -BDEPEND-> virt, virt -RDEPEND-> prov; all new, nothing kept
+prov,user,virt -> [('cycle-noted', 'dev-libs/user-1')]
+prov,virt,user -> [('build-order', 'dev-libs/user-1')]
+user,prov,virt -> [('cycle-noted', 'dev-libs/user-1')]
+user,virt,prov -> [('cycle-noted', 'dev-libs/user-1')]
+virt,prov,user -> [('build-order', 'dev-libs/user-1')]
+virt,user,prov -> [('cycle-noted', 'dev-libs/user-1')]

@@ -1,0 +1,52 @@
+{
+ "entries": [
+  {
+   "category": "dev-libs",
+   "package": "w745p",
+   "version": "1",
+   "merge_order": 0,
+   "outcome": "new",
+   "slot": "0",
+   "source": "ebuild",
+   "sub_slot": null,
+   "dependencies": {
+    "BDEPEND": "dev-libs/w745q"
+   },
+   "use": [],
+   "iuse": [],
+   "required_use": ""
+  },
+  {
+   "category": "dev-libs",
+   "package": "w745q",
+   "version": "1",
+   "merge_order": 1,
+   "outcome": "new",
+   "slot": "0",
+   "source": "ebuild",
+   "sub_slot": null,
+   "dependencies": {},
+   "use": [],
+   "iuse": [],
+   "required_use": ""
+  },
+  {
+   "category": "dev-libs",
+   "package": "w745p",
+   "version": "1",
+   "merge_order": 2,
+   "outcome": "new",
+   "slot": "0",
+   "source": "ebuild",
+   "sub_slot": null,
+   "dependencies": {
+    "BDEPEND": "dev-libs/w745q"
+   },
+   "use": [],
+   "iuse": [],
+   "required_use": ""
+  }
+ ],
+ "kept": [],
+ "aborted": null
+}

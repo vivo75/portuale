@@ -85,7 +85,7 @@ pub(crate) mod testkit {
     }
 }
 
-pub use order::Order;
+pub use order::{Order, Pass, Row};
 pub use rebuild::RefusedBinding;
 pub use reorder::{Change, SlotSet};
 
@@ -1293,10 +1293,17 @@ mod tests {
 
     /// A repository ebuild with its md5-cache entry, in the tree copy `root`.
     fn add_ebuild(root: &Path, cpv: &str, slot: &str, rdepend: &str) {
+        add_ebuild_fields(root, cpv, slot, &[("RDEPEND", rdepend)]);
+    }
+
+    /// An ebuild like [`add_ebuild`], with arbitrary metadata variables
+    /// (`BDEPEND`, `DEPEND`, ...) besides `EAPI`, `SLOT` and `KEYWORDS`.
+    fn add_ebuild_fields(root: &Path, cpv: &str, slot: &str, fields: &[(&str, &str)]) {
         let (category, pf) = cpv.split_once('/').expect("category/pf");
         let package = pf.rsplit_once('-').expect("pf").0;
-        let text =
-            format!("EAPI=\"8\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n");
+        let mut vars = vec![("EAPI", "8"), ("SLOT", slot), ("KEYWORDS", "amd64")];
+        vars.extend_from_slice(fields);
+        let text: String = vars.iter().map(|(k, v)| format!("{k}=\"{v}\"\n")).collect();
         let dir = root.join("repo").join(category).join(package);
         std::fs::create_dir_all(&dir).expect("package dir");
         std::fs::write(dir.join(format!("{pf}.ebuild")), &text).expect("ebuild");
@@ -1308,10 +1315,10 @@ mod tests {
         let md5 = String::from_utf8_lossy(&md5);
         let cache = root.join("repo/metadata/md5-cache").join(category);
         std::fs::create_dir_all(&cache).expect("cache dir");
-        let entry = format!(
-            "EAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT={slot}\n_md5_={}\n",
-            md5.split(' ').next().unwrap_or_default()
-        );
+        let mut entry: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        entry.sort();
+        let entry =
+            entry.concat() + &format!("_md5_={}\n", md5.split(' ').next().unwrap_or_default());
         std::fs::write(cache.join(pf), entry).expect("cache entry");
     }
 
@@ -1494,6 +1501,78 @@ mod tests {
                 provider: None,
             }]
         );
+    }
+
+    /// A tree shaped like backlog #746: `w746auto` builds with `w746help`,
+    /// which needs `w746loc` at run time, which needs `w746get`.
+    fn build_time_in_fact_tree(root: &Path) {
+        add_ebuild_fields(
+            root,
+            "dev-libs/w746auto-1",
+            "0",
+            &[("BDEPEND", "dev-libs/w746help")],
+        );
+        add_ebuild(root, "dev-libs/w746help-1", "0", "dev-libs/w746loc");
+        add_ebuild(root, "dev-libs/w746loc-1", "0", "dev-libs/w746get");
+        add_ebuild(root, "dev-libs/w746get-1", "0", "");
+    }
+
+    /// Charter property 2 (PMS 8.1: a build tool must be usable, backlog
+    /// #746): a runtime edge out of a package the plan builds with is a
+    /// build-time need in fact, so the cut spares it.
+    #[test]
+    fn a_build_tool_makes_its_runtime_closure_build_time() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        build_time_in_fact_tree(tree.path());
+        let world = testkit::analyse_fixture_with(&["dev-libs/w746auto"], &[], |o| {
+            o.config_root = tree.path().to_path_buf();
+        });
+        let used = crate::order::build_time_used(&world.edge_kinds);
+        assert!(used.contains("dev-libs/w746help:0"));
+        assert!(!crate::order::is_cuttable_runtime_edge(
+            &world.edge_kinds,
+            &used,
+            &(
+                "dev-libs/w746help:0".to_string(),
+                "dev-libs/w746loc:0".to_string()
+            ),
+        ));
+    }
+
+    /// Charter property 2 (backlog #746): a runtime edge out of a package
+    /// nothing builds with is not a build-time need in fact, so the cut can
+    /// still serialize the cycle there.
+    #[test]
+    fn a_runtime_dependency_of_a_runtime_dependency_is_not_build_time() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        build_time_in_fact_tree(tree.path());
+        let world = testkit::analyse_fixture_with(&["dev-libs/w746auto"], &[], |o| {
+            o.config_root = tree.path().to_path_buf();
+        });
+        let used = crate::order::build_time_used(&world.edge_kinds);
+        assert!(!used.contains("dev-libs/w746loc:0"));
+        assert!(crate::order::is_cuttable_runtime_edge(
+            &world.edge_kinds,
+            &used,
+            &(
+                "dev-libs/w746loc:0".to_string(),
+                "dev-libs/w746get:0".to_string()
+            ),
+        ));
     }
 
     /// The fast plan agrees with the resolver: a rebuild re-records the
