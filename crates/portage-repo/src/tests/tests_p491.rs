@@ -16,14 +16,15 @@
 
 use super::*;
 
-/// Temp vdb: installed `p491lib-1` (`lib_slot`), `p491con-1` (`:6`, baked
+/// Temp vdb: installed `p491lib-1` (`lib_slot`), `p491con-{con_ver}` (`:6`, baked
 /// `>=dev-libs/p491lib-1:6/7=`), `p491keep-1` (`:6`, `keep_rdepend`).
 /// Built fresh per test: the vdb backend snapshots file content.
-fn p491_vdb(lib_slot: &str, keep_rdepend: &str) -> TempDir {
+fn p491_vdb(lib_slot: &str, keep_rdepend: &str, con_ver: &str) -> TempDir {
     let dir = slotundo_temp_dir("p491-seed");
+    let con_pf = format!("p491con-{con_ver}");
     for (pf, slot, rdepend) in [
         ("p491lib-1", lib_slot, None),
-        ("p491con-1", "6", Some(">=dev-libs/p491lib-1:6/7=")),
+        (con_pf.as_str(), "6", Some(">=dev-libs/p491lib-1:6/7=")),
         ("p491keep-1", "6", Some(keep_rdepend)),
     ] {
         let d = dir.join(format!("var/db/pkg/dev-libs/{pf}"));
@@ -51,9 +52,9 @@ fn installed_entry(cat: &str, pkg: &str, ver: &str, slot: &str, sub: &str) -> Gr
     }
 }
 
-fn p491_entries() -> Vec<GraphEntry> {
+fn p491_entries(con_ver: &str) -> Vec<GraphEntry> {
     vec![
-        installed_entry("dev-libs", "p491con", "1", "6", "6"),
+        installed_entry("dev-libs", "p491con", con_ver, "6", "6"),
         installed_entry("dev-libs", "p491lib", "1", "6", "7"),
         installed_entry("dev-libs", "p491keep", "1", "6", "6"),
     ]
@@ -98,8 +99,8 @@ fn p491_pass0_seed_files_the_installed_consumer_but_not_the_child() {
     // no rebuild of an installed-only parent (backlog #623).
     // Portage: depgraph.py, _slot_operator_update_backtrack (parent filed;
     // child filed only when installed).
-    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
-    let entries = p491_entries();
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "1");
+    let entries = p491_entries("1");
     let replace = p491_probe(&root, &entries, HashSet::new(), true);
     assert_eq!(
         replace,
@@ -121,8 +122,8 @@ fn p491_pass0_seed_probes_from_the_child_the_graph_merges() {
     // existing parent package: (sci-libs/gdal-3.13.3-2, installed)
     // new child package: (dev-db/mysql-connector-c-26.10.0:0/24 ...)".
     // Portage: depgraph.py, _slot_operator_update_probe.
-    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
-    let mut entries = p491_entries();
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "1");
+    let mut entries = p491_entries("1");
     entries[1] = GraphEntry {
         outcome: PretendOutcome::Reinstall {
             version: "1".to_string(),
@@ -150,8 +151,8 @@ fn p491_pass0_seed_refuses_an_argument_pinned_parent() {
     // slot-conflict/missing-dep masks): `=dev-libs/p491con-1` pins the parent
     // below its tree replacement.
     // Portage: depgraph.py, _slot_operator_trigger_reinstalls (want_update gate).
-    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
-    let entries = p491_entries();
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "1");
+    let entries = p491_entries("1");
     let replace = p491_probe(
         &root,
         &entries,
@@ -170,8 +171,8 @@ fn p491_pass0_seed_refuses_a_strict_pin_on_the_new_child() {
     // False): a non-built pin the candidate child violates vetoes the probe —
     // only built `:S/SS=` pins relax. The keeper here pins `<dev-libs/p491lib-2`
     // (strict), which `p491lib-2` does not satisfy.
-    let root = p491_vdb("6/7", "<dev-libs/p491lib-2");
-    let entries = p491_entries();
+    let root = p491_vdb("6/7", "<dev-libs/p491lib-2", "1");
+    let entries = p491_entries("1");
     let replace = p491_probe(&root, &entries, HashSet::new(), true);
     assert!(
         replace.is_empty(),
@@ -184,8 +185,8 @@ fn p491_pass0_seed_stays_quiet_without_update() {
     // Portage oracle (plain-mode probe cells: backtrack 0/20, both managers
     // agree): without `--update` an installed parent's dep wants no update.
     // Portage: depgraph.py, _slot_operator_trigger_reinstalls (want_update gate).
-    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
-    let entries = p491_entries();
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "1");
+    let entries = p491_entries("1");
     let replace = p491_probe(&root, &entries, HashSet::new(), false);
     assert!(replace.is_empty(), "no update mode, no seed: {replace:?}");
 }
@@ -195,12 +196,36 @@ fn p491_pass0_seed_stays_quiet_when_the_child_already_moved() {
     // Control: the installed child already sits in the new sub-slot, so no
     // tree instance offers another one (mirrors the built-parent probe's
     // same-subslot control).
-    let root = p491_vdb("6/8", "dev-libs/p491lib:6/7=");
-    let entries = p491_entries();
+    let root = p491_vdb("6/8", "dev-libs/p491lib:6/7=", "1");
+    let entries = p491_entries("1");
     let replace = p491_probe(&root, &entries, HashSet::new(), true);
     assert!(
         replace.is_empty(),
         "no sub-slot change, no seed: {replace:?}"
+    );
+}
+
+#[test]
+fn p491_pass0_seed_stays_quiet_when_no_replacement_is_newer() {
+    // Backlog #748 (Branch B): the host `@world` shape — installed
+    // qtmultimedia-6.11.3 records `ffmpeg:0/60.62.62=`, installed and final
+    // ffmpeg both sit at `0/60.62.62`, and the only tree replacements are
+    // the installed version itself; the visible-but-unmerged ffmpeg-9.0.2
+    // (`0/61.63.63`) the probe finds never merges, so the forced
+    // same-version reinstall repairs no binding. Reduced: installed
+    // p491con-2, the newest tree version, recording
+    // `>=dev-libs/p491lib-1:6/7=`, with installed p491lib-1 at `6/7` and
+    // tree p491lib-2 at `6/8` available but unmerged. Expected: no seed — a
+    // same-version "replacement" re-binds nothing.
+    // Charter property 1 (the final state holds with or without the
+    // reinstall; a resolver/fast difference is judged against the final
+    // state, never filed as a defect by itself).
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "2");
+    let entries = p491_entries("2");
+    let replace = p491_probe(&root, &entries, HashSet::new(), true);
+    assert!(
+        replace.is_empty(),
+        "no newer replacement, no seed: {replace:?}"
     );
 }
 

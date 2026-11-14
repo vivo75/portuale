@@ -87,7 +87,11 @@ pub(crate) fn installed_parent_update_probe(
         let Ok(tree) = gate.repo_candidates(&parent.0, &parent.1) else {
             continue;
         };
-        // The ebuild replacements in the installed slot, not older than it.
+        // The ebuild replacements in the installed slot, strictly newer than
+        // it: a same-version "replacement" re-binds nothing (reinstalling it
+        // re-records identical atoms), so only a genuine replacement can
+        // motivate the seed (#748: the host ffmpeg shape files five
+        // same-version reinstalls that repair no binding).
         // Portage ranges `_iter_similar_available` over visible, unmasked,
         // unexcluded instances only.
         let replacements: Vec<&Candidate> = tree
@@ -95,7 +99,7 @@ pub(crate) fn installed_parent_update_probe(
             .filter(|c| {
                 c.source == CandidateSource::Ebuild
                     && c.slot == parent_slot
-                    && vercmp_ordering(&c.version, version) != Ordering::Less
+                    && vercmp_ordering(&c.version, version) == Ordering::Greater
                     && is_visible(c, &parent.0, &parent.1, config)
                     && !masked.get(&parent).is_some_and(|b| {
                         b.iter()
