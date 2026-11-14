@@ -710,6 +710,70 @@ mod tests {
         assert!(pos(&o, loc) < pos(&o, auto), "{o:?}");
     }
 
+    /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): a
+    /// kept `virtual/*` middle confers no build-time status, so with `prov`
+    /// build-time-used the cycle's only cuttable edge is the virtual's own
+    /// provider edge — cut as the back edge, right after the `base <-> prov`
+    /// pair's charter-2a rebuild (`docs/evidence/02.751/`). Theoretical,
+    /// pinned, not proven safe: no live shape exhibits a consumer building
+    /// against a broken installed provider.
+    #[test]
+    fn the_virtual_provider_edge_is_the_only_cuttable_edge() {
+        let base = "dev-libs/w751base:0";
+        let prov = "dev-libs/w751prov:0";
+        let user = "dev-libs/w751user:0";
+        let virt = "virtual/w751virt:0";
+        let g = graph(&[
+            (base, &[prov]),
+            (prov, &[base, user]),
+            (user, &[virt]),
+            (virt, &[prov]),
+        ]);
+        let kinds = kinds(&[
+            ((base, prov), "BDEPEND"),
+            ((prov, base), "RDEPEND"),
+            ((prov, user), "RDEPEND"),
+            ((user, virt), "BDEPEND"),
+            ((virt, prov), "RDEPEND"),
+        ]);
+        let used = build_time_used(&kinds);
+        // `base BDEPEND prov` makes `prov` build-time-used; the `BDEPEND`
+        // on the virtual confers nothing — the `virtual/*` exclusion.
+        assert_eq!(used, BTreeSet::from([prov.to_string()]));
+        assert!(!is_cuttable_runtime_edge(
+            &kinds,
+            &used,
+            &(prov.to_string(), user.to_string())
+        ));
+        assert!(!is_cuttable_runtime_edge(
+            &kinds,
+            &used,
+            &(prov.to_string(), base.to_string())
+        ));
+        assert!(is_cuttable_runtime_edge(
+            &kinds,
+            &used,
+            &(virt.to_string(), prov.to_string())
+        ));
+        // The first cycle the walk meets is the `base <-> prov` pair, with
+        // no cuttable edge: the consumer is rebuilt ...
+        assert_eq!(
+            runtime_cut(&g, &kinds, &used),
+            Some(CycleCut::Rebuild(
+                prov.to_string(),
+                vec![base.to_string(), prov.to_string()]
+            ))
+        );
+        // ... and with that edge gone the remaining cycle cuts at the
+        // virtual's provider edge — the back edge, and the only cuttable one.
+        let mut rest = g.clone();
+        rest.get_mut(prov).unwrap().remove(base);
+        assert_eq!(
+            runtime_cut(&rest, &kinds, &used),
+            Some(CycleCut::BackEdge(virt.to_string(), prov.to_string()))
+        );
+    }
+
     /// Charter property 2a: an all-build-time cycle has no cuttable
     /// runtime-only edge, so the back-edge consumer is built twice, the
     /// second build after the cycle's last member (backlog #745).

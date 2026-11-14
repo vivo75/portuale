@@ -1,0 +1,9 @@
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0:0
+[ebuild  N     ] dev-libs/newpkg-1.0:0
+[ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]
+[ebuild  N     ] dev-libs/w751user-1:0
+[ebuild  N     ] dev-libs/w751user-1:0
+[ebuild     U  ] dev-libs/w751prov-2:0 [1]
+[ebuild     U  ] dev-libs/w751base-2:0 [1]
+[ebuild     U  ] dev-libs/w751prov-2:0 [1]
+[ebuild  N     ] dev-libs/withdeps-1.0:0

@@ -1,0 +1,7 @@
+# amended temporary runtime_cut dump (eprintln, reverted before close-out)
+# variant (base BDEPEND prov):
+S0-CUT Rebuild dev-libs/w751prov:0 over dev-libs/w751base:0,dev-libs/w751prov:0
+S0-CUT BackEdge virtual/w751virt:0 -> dev-libs/w751prov:0
+# control (dev-libs/ middle):
+S0-CUT Rebuild dev-libs/w751prov:0 over dev-libs/w751base:0,dev-libs/w751prov:0
+S0-CUT Rebuild dev-libs/w751mid:0 over dev-libs/w751prov:0,dev-libs/w751user:0,dev-libs/w751mid:0

@@ -68,6 +68,16 @@
   the whole perl rebuild cluster past the `perl-5.44` upgrade the rebuilds
   are for (10 new `build-order` findings on a 176-row bed plan). The known
   hole (and the real fix) is filed as #751.
+- Pinned theoretical 2026-11-14 (plan `02.751-kept-virtual-cut` §6-A,
+  evidence `docs/evidence/02.751/`): on the amended R/B/R probe (kept
+  `virtual/*` middle, `base BDEPEND prov` so `prov` is build-time-used,
+  stale-provider rebuild) the cut is `Rebuild prov` then
+  `BackEdge(virt, prov)` — the exclusion routing the cut — with rows
+  `[user, user, prov, base, prov]` and a checker verdict of zero
+  non-`pre_existing` failures and zero notes on both the `virtual/` and
+  the `dev-libs/`-middle variants. The consumer builds while the
+  installed provider copy is still usable, so the broken-at-build-time
+  shape is unexhibited: theoretical, pinned, not proven safe.
 - Three outcomes per cycle (`CycleCut`): cut the first cuttable runtime edge;
   cut the closing back edge itself when only it is cuttable, and keep
   scanning (stopping there left every later cycle to the walk below, whose

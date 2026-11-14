@@ -842,6 +842,118 @@ mod tests {
         );
     }
 
+    /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): the
+    /// S0 probe tree — kept `virtual/w751virt`, installed `w751prov-1`
+    /// with a stale `w751base:0/1=` binding rebuilt as `w751prov-2`,
+    /// `w751base-2` with `BDEPEND w751prov` (so the virtual's provider
+    /// edge is the cycle's only cut), consumer `w751user-1` with
+    /// `BDEPEND virtual/w751virt`. The rows keep today's cut and order —
+    /// `prov` twice (charter-2a breaker for the `base <-> prov` pair),
+    /// `user` twice (usability closure), the virtual never a merge —
+    /// and the checker reports no `build-order`. Limitation: a kept
+    /// virtual's stale provider rebuilds after the consumer that builds
+    /// with it, yet nothing exhibits a consumer building against a
+    /// broken copy (here the installed copy is still usable at the
+    /// consumer's build) — theoretical, pinned, not proven safe.
+    #[test]
+    fn a_kept_virtual_with_a_stale_provider_keeps_todays_cut_and_order() {
+        fn stale_virtual_tree(root: &Path) {
+            add_ebuild(
+                root,
+                "virtual/w751virt-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w751prov")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w751prov-2",
+                "0/2",
+                &[("RDEPEND", "dev-libs/w751base dev-libs/w751user")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w751base-2",
+                "0/2",
+                &[("BDEPEND", "dev-libs/w751prov")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w751user-1",
+                "0",
+                &[("BDEPEND", "virtual/w751virt")],
+            );
+            add_installed(
+                root,
+                "virtual/w751virt-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w751prov")],
+            );
+            add_installed(
+                root,
+                "dev-libs/w751prov-1",
+                "0/1",
+                &[("RDEPEND", "dev-libs/w751user dev-libs/w751base:0/1=")],
+            );
+            add_installed(root, "dev-libs/w751base-1", "0/1", &[]);
+        }
+        let world = ["dev-libs/w751user", "dev-libs/w751prov"];
+        let (rc, out) = run_on_copy(
+            &["--plan-world", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            stale_virtual_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w751")).collect();
+        assert_eq!(
+            rows,
+            [
+                "[ebuild  N     ] dev-libs/w751user-1:0",
+                "[ebuild  N     ] dev-libs/w751user-1:0",
+                "[ebuild     U  ] dev-libs/w751prov-2:0 [1]",
+                "[ebuild     U  ] dev-libs/w751base-2:0 [1]",
+                "[ebuild     U  ] dev-libs/w751prov-2:0 [1]",
+            ],
+            "{out}"
+        );
+        let (tmp, rc, out, _) = run_on_copy_keeping_tree(
+            &["--plan-world", "--json", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            stale_virtual_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let plan = tmp.path().join("plan.json");
+        std::fs::write(&plan, out.trim()).expect("plan file");
+        let text = std::fs::read_to_string(&plan).expect("plan file");
+        // Both duplicates are by design, and locked in place: one second
+        // build each for `prov` and `user`, and the virtual never a merge.
+        assert_eq!(
+            text.match_indices("\"package\":\"w751prov\"").count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(
+            text.match_indices("\"package\":\"w751user\"").count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(text.match_indices("\"built_twice\":2").count(), 2, "{text}");
+        assert_eq!(
+            text.match_indices("\"package\":\"w751virt\"").count(),
+            1,
+            "{text}"
+        );
+        let checker = health_checker();
+        assert_no_build_order(
+            checker.to_str().expect("checker path"),
+            &tmp.path().join("root/var/db/pkg"),
+            &plan,
+        );
+    }
+
     /// Charter property 5: a stale binding the plan cannot repair is named
     /// once on stderr, with the atom and the reason; `--json` carries the
     /// same row so the checker sees it.
