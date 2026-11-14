@@ -99,6 +99,25 @@ moves is a regression — stop and file it, do not "re-run and see".
 
 ## Running
 
+Run a long job through a named systemd scope, never as a bare background shell,
+so its liveness can be checked without `ps`/`pgrep` (see
+`LLM/tools/scope/README.md`):
+
+```
+sh LLM/tools/scope/scoperun.sh <slug> /tmp/<slug>.log ../pmtest/scripts/pytest-parallel.sh
+sh LLM/tools/scope/ocgrep.sh <slug> [pattern]   # RUNNING / STOPPED, read-only
+sh LLM/tools/scope/ocstatus.sh <slug> /tmp/<slug>.log [hung_secs]   # STOPPED / HUNG / RUNNING
+sh LLM/tools/scope/scopewait.sh <slug> [secs]   # block until the scope is gone
+sh LLM/tools/scope/ocstop.sh <slug>             # TERM then KILL the whole scope
+```
+
+Before a run that writes a lot (parallel suite, an L0/L1 bed, a corpus run),
+`sh LLM/tools/check-work-space.sh` must pass: `/tmp` and `/var/tmp` each need
+at least 50% free. One full suite leaves ~11 GB in its `PMTEST_BASETEMP` under
+`/var/tmp` (48 GB), so stale runs fill it and the next suite fails with ENOSPC,
+not with a real test failure. `pytest-parallel.sh` and `gate.sh` run the check
+themselves; delete finished basetemps only, never one a live suite is using.
+
 ```
 ../pmtest/scripts/pytest-parallel.sh          # whole suite, 8 workers, ~90 s, rebuilds the binary
 JOBS=n ../pmtest/scripts/pytest-parallel.sh   # change workers; extra args go to pytest

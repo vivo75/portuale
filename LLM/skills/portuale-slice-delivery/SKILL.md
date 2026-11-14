@@ -64,6 +64,20 @@ because then "two writer agents never edit the same file or crate". The pattern 
 subagent implements one task, a fresh reviewer checks it, then the next task
 starts, then a whole-branch review at the end.
 
+Start a long job (suite, bed, corpus run) through
+`LLM/tools/scope/scoperun.sh <slug> <log> <cmd>` and check it with
+`ocgrep.sh`/`ocstatus.sh`/`scopewait.sh`; stop it with `ocstop.sh <slug>`.
+Never use `ps`, `pgrep` or `pkill` to decide whether something is running or to
+kill it: the scope tools are the read-only answer and the reliable kill
+boundary (containers escape a process tree, not a cgroup).
+
+Before a run that writes a lot, `sh LLM/tools/check-work-space.sh` must pass —
+`/tmp` and `/var/tmp` each at least 50% free. A full contract-suite run leaves
+~11 GB in its `PMTEST_BASETEMP` under `/var/tmp`; a nearly full mount fails the
+suite with ENOSPC, which reads like a real test failure. `pytest-parallel.sh`
+and `gate.sh` run the check themselves; clean finished basetemps, never one a
+live suite is using.
+
 ## Backlog numbers
 
 Numbers are global across tiers and **never reused**. Before filing, scan every

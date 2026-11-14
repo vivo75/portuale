@@ -26,6 +26,12 @@ echo "cut-registry rc=$?"; sed 's/^/  /' "$OUT/cut_registry.txt" | grep -v ': OK
 sh LLM/tools/pair_check.sh >"$OUT/pair_check.txt" 2>&1
 echo "pair-check rc=$?"; sed 's/^/  /' "$OUT/pair_check.txt" | grep -v ': OK$'
 
+# Space preflight: a full contract-suite run leaves ~11 GB in /var/tmp, so a
+# nearly full mount fails the suite with ENOSPC, not with a real test failure.
+sh LLM/tools/check-work-space.sh >"$OUT/work_space.txt" 2>&1
+rc=$?; echo "work-space rc=$rc"; sed 's/^/  /' "$OUT/work_space.txt"
+[ $rc -eq 0 ] || { echo "gate: free space on /tmp and /var/tmp first (see above); logs: $OUT"; exit 2; }
+
 cargo fmt --check >"$OUT/fmt.txt" 2>&1; echo "fmt rc=$?"
 cargo clippy --release --all-targets >"$OUT/clippy.txt" 2>&1
 echo "clippy rc=$? warnings=$(grep -c '^warning' "$OUT/clippy.txt")"

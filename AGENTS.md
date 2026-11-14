@@ -132,6 +132,39 @@ the next slice") and expects the same rhythm every time:
     reachable from `main`, not pre-rebase ones), and give every residue
     you defer a real backlog number, checking the number is free first.
 
+## Long jobs, processes and disk space
+
+A long job — the contract suite, an L0/L1 bed run, a corpus run, a batch of
+captures — is started **through a named systemd scope**, so its liveness is a
+read-only question and stopping it is reliable:
+
+```
+sh LLM/tools/scope/scoperun.sh <slug> <log> <cmd> [args...]   # run it
+sh LLM/tools/scope/ocgrep.sh   <slug> [pattern]               # RUNNING / STOPPED
+sh LLM/tools/scope/ocstatus.sh <slug> <log> [hung_secs]       # STOPPED / HUNG / RUNNING
+sh LLM/tools/scope/scopewait.sh <slug> [secs]                 # wait for it to end
+sh LLM/tools/scope/ocstop.sh   <slug>                         # TERM then KILL the scope
+```
+
+Never use `ps`, `ps aux` or `pgrep`/`pkill -f` to decide whether a job is
+running or to kill it: name matching catches the wrong process and misses the
+detached container a test started. See `LLM/tools/scope/README.md` for why the
+cgroup, not the process tree, is the boundary.
+
+Before any run that writes a lot (parallel suite, a bed, a corpus run), check
+the space:
+
+```
+sh LLM/tools/check-work-space.sh          # /tmp and /var/tmp each >= 50% free, exit 1 otherwise
+```
+
+One full contract-suite run leaves ~11 GB in its `PMTEST_BASETEMP` under
+`/var/tmp` (a 48 GB mount), so two or three stale runs fill it and the next
+suite fails with ENOSPC — which reads like a real test failure. `gate.sh` and
+`pytest-parallel.sh` run the check themselves and stop with a message instead.
+When cleaning, delete **finished** scratch dirs only; never the one a live run
+is using (ask `ocgrep.sh`/`ocstatus.sh`, not `ps`).
+
 ## Two repos, one project
 
 `portuale` (this repo: product code, unit tests, human docs in `docs/`,

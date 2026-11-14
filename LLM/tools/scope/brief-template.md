@@ -27,8 +27,16 @@ lines (branch, plan file, batch-specific notes) and the task. Fill in the
 - Rust: new multi-argument functions take an `*Args` struct; no
   `let _ = x;` to silence values or Results; regexes compiled once
   (`OnceLock`); reuse existing parsers.
-- Never use `pkill`/`pgrep -f`. Never write to `/dev/shm`. Remove your
+- Never use `pkill`/`pgrep -f`, `ps aux` or `pgrep` to decide whether a job is
+  running or to kill it. Start long jobs through
+  `LLM/tools/scope/scoperun.sh <slug> <log> <cmd>`, check them with
+  `ocgrep.sh <slug>` / `ocstatus.sh <slug> <log>` / `scopewait.sh <slug>`, and
+  stop them with `ocstop.sh <slug>`. Never write to `/dev/shm`. Remove your
   temp files under `/var/tmp` when done.
+- Before a long test run (parallel suite, a bed, a corpus run) run
+  `sh LLM/tools/check-work-space.sh`: `/tmp` and `/var/tmp` must each be at
+  least 50% free, else stop and clean finished scratch dirs first (never the
+  one a live run is using).
 - Dates: write today's date as `date +%F` prints it, never a guessed or
   planned date, in backlog entries, `DONE`/`filed` stamps, plan headers
   and doc paragraphs.

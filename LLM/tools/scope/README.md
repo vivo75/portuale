@@ -93,6 +93,28 @@ If the box has no user systemd instances at all, rootless podman can run with `p
 | `podman --cgroups=disabled` + parent cgroup kill | yes                                 | fallback when no user systemd          |
 
 
+## Checking a job without `ps`
+
+The scripts in this directory are the read-only answer to "is it still running?"
+and the only sanctioned way to stop it:
+
+```bash
+sh LLM/tools/scope/ocgrep.sh   oc-myslug [pattern]   # RUNNING / STOPPED (exit 0/1)
+sh LLM/tools/scope/ocstatus.sh oc-myslug /tmp/my.log [hung_secs]  # STOPPED/HUNG/RUNNING
+sh LLM/tools/scope/scopewait.sh oc-myslug [secs]     # block until the scope is gone
+sh LLM/tools/scope/ocstop.sh   oc-myslug             # TERM then KILL the whole scope
+```
+
+`ps`, `ps aux` and `pgrep`/`pkill -f` are not used here: name matching finds the
+wrong process, misses a detached container, and answers a question the cgroup
+already answers exactly. A job started through `scoperun.sh` is one scope, so
+`ocstatus.sh` can distinguish a silent hang from a live run.
+
+A job that writes a lot (a parallel suite, a bed, a corpus run) also needs
+`sh LLM/tools/check-work-space.sh` first: `/tmp` and `/var/tmp` each at least
+50% free. One full contract-suite run leaves ~11 GB in its basetemp under
+`/var/tmp`, so stale runs are what fill the mount.
+
 ## Brief template
 
 [`brief-template.md`](brief-template.md) holds the rules block every opencode brief starts with, plus the commit rules for a manager agent.
