@@ -1,6 +1,11 @@
 # crates/portage-repo/src/slot_operator/rebuild_scan.rs
 Rebuilds triggered by slot-operator dependencies.
 
+## test stale_pin_stale_bound_consumer_rebuilds_with_one_entry_per_slot
+- Backlog #738 plan-level pin (fixtures `dev-libs/w738prov`, `dev-libs/w738cons` in pmtest): installed provider at sub-slot 3 with 4 visible, installed consumer bound to `w738prov:0/3=`, tree ebuild `w738prov:=`, pool binary baked `0/3=`. `--update --deep --usepkg` for the provider settles `Complete` with no slot conflict, one merge-bound entry per `(cat, pkg, slot)`, provider `Upgrade 3 -> 4`, consumer `Reinstall` with `slot_operator_rebuild: true` and the `abi_rebuilds` pair.
+- The consumer stays outside the walk here (world holds the provider only), so the stale-pin arm files the schedule (restart 1, pair present). A world-member consumer instead takes the in-walk required-set repair: same healthy outcome, but no pair, no marker, no restart -- that path is not this pin.
+- The rebuild keeps the pool binary: `--binpkg-changed-deps` strips `:slot/sub=` on both sides before comparing (like Portage's `strip_slots` in `_changed_deps`, `_emerge/depgraph.py:3225-3255`), so a sub-slot-only drift is invisible to it in both implementations. On the host the pool serves freshly built binaries, so the same rows land consistent there.
+
 ## fn slot_operator_rebuild_scan
 - Portage `_slot_operator_trigger_reinstalls` (`_emerge/depgraph.py:3089-3132`): the post-walk scan for consumers needing a slot-operator rebuild, with a same-slot arm (bound sub-slot moved under a replacing provider) and a new-slot arm (bound slot abandoned for a fresh one).
 - `new_slot`: cp -> (new version, new slot, new sub-slot) for every entry that replaces an installed version in that slot. `new_slot_fresh`: the same for every entry merged into a fresh slot (no installed instance there) -- Portage's `_get_installed_best` empty-`myinslotlist` case, rendered `[ebuild N]`. A provider that moves slot only ever arrives via `new_slot_fresh`; the update probe's new-child-slot arm (`:3121-3126`) prefers these, falling back to `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the consumer is not bound to (same Portage candidate loop).

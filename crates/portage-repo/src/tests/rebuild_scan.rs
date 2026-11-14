@@ -2521,3 +2521,159 @@ fn slot_operator_rebuild_scan_considers_every_stale_provider() {
     assert!(scan.refused.is_empty(), "{:?}", scan.refused);
     let _ = fs::remove_dir_all(&base);
 }
+
+/// Backlog #738 as a plan-level pin: the host `pvuDN @world` shape after
+/// #741/#744. `w738prov` is installed at sub-slot 3 with 4 visible;
+/// `w738cons` is installed bound to `w738prov:0/3=` while its tree ebuild
+/// carries the unversioned `w738prov:=`; a binary of the consumer built
+/// against `0/3=` sits in the pool. A `--update --deep --usepkg` request
+/// for the provider must settle with no slot conflict, one merge-bound
+/// entry per `(category, package, slot)`, the provider upgraded 3 -> 4,
+/// and the consumer rebuilt (charter property 1: the stale binding
+/// repairs instead of conflicting). The consumer stays outside the walk
+/// here, so the #741 stale-pin arm files the schedule: the `abi_rebuilds`
+/// pair and the `slot_operator_rebuild` row marker pin that path, unlike
+/// the in-walk repair a world-member consumer takes. The rebuild keeps
+/// the pool binary: `--binpkg-changed-deps` strips `:slot/sub=` on both
+/// sides before comparing, exactly like Portage's `strip_slots` in
+/// `_changed_deps` (`_emerge/depgraph.py:3225-3255`), so a sub-slot-only
+/// drift is invisible to it in both implementations (on the host the
+/// pool serves freshly built binaries, so the same rows land
+/// consistent there). The scan-level scheduling is pinned by
+/// `slot_operator_rebuild_scan_schedules_an_outside_consumer_whose_provider_moves_without_deep`
+/// and its deep siblings; this pins the assembled plan.
+#[test]
+fn stale_pin_stale_bound_consumer_rebuilds_with_one_entry_per_slot() {
+    use super::tests_consumer_pin_conflict::{hermetic_root, request_in};
+    use std::collections::HashMap;
+    let root = hermetic_root(&["dev-libs/w738prov"]);
+    let install = |name: &str, slot: &str, rdepend: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("EAPI"), "8\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    install("w738prov-3", "0/3", "");
+    install("w738cons-1", "0", "dev-libs/w738prov:0/3=");
+    let mut req = request_in(&root, &["dev-libs/w738prov"]);
+    req.update = true;
+    req.deep = Deep::Unlimited;
+    req.usepkg = true;
+    let mut seeds: Vec<String> = fs::read_to_string(root.join("var/lib/portage/world"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
+        .map(String::from)
+        .collect();
+    seeds.extend(req.config.profile_packages.iter().cloned());
+    seeds.extend(req.config.system_packages.iter().cloned());
+    seeds.sort();
+    seeds.dedup();
+    req.config.blocker_retry_seed_atoms = seeds.clone();
+    req.config.complete_seed_atoms = seeds;
+    req.config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/w738cons-1".to_string()),
+        ("EAPI".to_string(), "8".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+        ("RDEPEND".to_string(), "dev-libs/w738prov:0/3=".to_string()),
+        ("BUILD_ID".to_string(), "1".to_string()),
+        ("BUILD_TIME".to_string(), "1000".to_string()),
+    ])]);
+    let result = req
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving the #738 shape failed: {e}"));
+    assert!(
+        matches!(result.outcome, ResolveOutcome::Complete),
+        "no abort: {:?}",
+        result.outcome
+    );
+    assert!(
+        result.slot_conflicts.is_empty(),
+        "{:?}",
+        result.slot_conflicts
+    );
+    assert_eq!(
+        result.abi_rebuilds,
+        vec![(
+            "dev-libs/w738prov-4".to_string(),
+            "dev-libs/w738cons-1".to_string()
+        )],
+        "the stale-pin arm files the rebuild pair"
+    );
+    let merge_bound: Vec<&GraphEntry> = result
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.outcome,
+                PretendOutcome::New { .. }
+                    | PretendOutcome::Upgrade { .. }
+                    | PretendOutcome::Downgrade { .. }
+                    | PretendOutcome::Reinstall { .. }
+            )
+        })
+        .collect();
+    let mut slots = std::collections::HashSet::new();
+    for e in &merge_bound {
+        assert!(
+            slots.insert((e.category.clone(), e.package.clone(), e.slot.clone())),
+            "one merge-bound entry per slot: {} {} {:?} {:?}",
+            e.category,
+            e.package,
+            e.slot,
+            e.outcome
+        );
+    }
+    let prov: Vec<&&GraphEntry> = merge_bound
+        .iter()
+        .filter(|e| e.package == "w738prov")
+        .collect();
+    assert_eq!(
+        prov.iter().map(|e| &e.outcome).collect::<Vec<_>>(),
+        vec![&PretendOutcome::Upgrade {
+            from: "3".to_string(),
+            to: "4".to_string(),
+        }],
+        "{:?}",
+        result.entries
+    );
+    let cons: Vec<&&GraphEntry> = merge_bound
+        .iter()
+        .filter(|e| e.package == "w738cons")
+        .collect();
+    assert_eq!(cons.len(), 1, "{:?}", result.entries);
+    match &cons[0].outcome {
+        PretendOutcome::Reinstall {
+            version,
+            slot_operator_rebuild,
+            ..
+        } => {
+            assert_eq!(version, "1");
+            assert!(
+                *slot_operator_rebuild,
+                "the consumer row is the stale-pin rebuild: {:?}",
+                cons[0]
+            );
+        }
+        other => panic!("consumer is rebuilt, not kept: {other:?}"),
+    }
+    assert_eq!(
+        cons[0].source,
+        CandidateSource::Binary,
+        "the rebuild re-resolves through the pool like the host's binary reinstalls"
+    );
+    assert!(
+        result.skipped_updates.is_empty(),
+        "{:?}",
+        result.skipped_updates
+    );
+    let _ = fs::remove_dir_all(&root);
+}

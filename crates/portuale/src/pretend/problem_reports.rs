@@ -589,6 +589,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     config,
                     config_root,
                     categories,
+                    entries: &result.entries,
                     verbose_conflicts,
                     excluded,
                     useoldpkg_atoms_render,
@@ -678,6 +679,9 @@ pub(crate) struct ShowConflictInstanceArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) config_root: &'a Path,
+    /// The settled merge list: a surviving instance reads its
+    /// binary/ebuild label from its own merge row, so the two agree.
+    pub(crate) entries: &'a [GraphEntry],
     /// The run-shared allow-list, built once by the caller.
     pub(crate) categories: &'a portage_repo::Categories,
     pub(crate) verbose_conflicts: bool,
@@ -700,6 +704,36 @@ pub(crate) struct ConflictFlags {
     pub(crate) conflict_is_unspecific: bool,
 }
 
+/// A surviving conflict instance's merge-row kind: Portage's `str(Package)`
+/// reads "binary scheduled for merge" for a binary instance, and the
+/// merge list renders that same entry `[binary ...]`, so the block must
+/// agree with the row (charter property 5).
+// Portage: resolver/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
+fn conflict_instance_kind(
+    entries: &[GraphEntry],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> &'static str {
+    let binary = entries.iter().any(|e| {
+        e.category == category
+            && e.package == package
+            && e.source == portage_repo::CandidateSource::Binary
+            && match &e.outcome {
+                portage_repo::PretendOutcome::New { version: v }
+                | portage_repo::PretendOutcome::Reinstall { version: v, .. } => v == version,
+                portage_repo::PretendOutcome::Upgrade { to, .. }
+                | portage_repo::PretendOutcome::Downgrade { to, .. } => to == version,
+                _ => false,
+            }
+    });
+    if binary {
+        "binary scheduled for merge"
+    } else {
+        "ebuild scheduled for merge"
+    }
+}
+
 /// Print one instance of a slot conflict with the parents that pull it in.
 pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
     let ShowConflictInstanceArgs {
@@ -709,6 +743,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         repos,
         config,
         config_root,
+        entries,
         categories,
         verbose_conflicts,
         excluded,
@@ -723,11 +758,19 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
     let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     let mut any_omitted = *any_omitted_out;
     println!();
+    // Portage appends ` (no parents)` to the header when the instance
+    // has none, instead of a bare `pulled in by`.
+    // Portage: resolver/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
+    let trailer = if inst.parents.is_empty() {
+        " (no parents)".to_string()
+    } else {
+        " pulled in by".to_string()
+    };
     if inst.installed {
         // An installed instance names its position.
         println!(
             // match-str-ok: display line / conflict record, not a Candidate
-            "  ({}/{}-{}:{}/{}::{}, installed{}) {} pulled in by",
+            "  ({}/{}-{}:{}/{}::{}, installed{}) {}{}",
             c.category,
             c.package,
             inst.version,
@@ -735,27 +778,24 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             inst.sub_slot,
             inst.repo_name,
             installed_in_root(root),
-            render_pkg_use_display(&inst.use_display)
+            render_pkg_use_display(&inst.use_display),
+            trailer
         );
     } else {
         println!(
             // match-str-ok: display line / conflict record, not a Candidate
-            "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
+            "  ({}/{}-{}:{}/{}::{}, {}) {}{}",
             c.category,
             c.package,
             inst.version,
             c.slot,
             inst.sub_slot,
             inst.repo_name,
-            render_pkg_use_display(&inst.use_display)
+            conflict_instance_kind(entries, &c.category, &c.package, &inst.version),
+            render_pkg_use_display(&inst.use_display),
+            trailer
         );
     }
-    // A bare `(Argument)` parent shows only when some other
-    // instance is already installed.
-    let show_argument_parents = c
-        .instances
-        .iter()
-        .any(|o| !std::ptr::eq(o, inst) && o.installed);
     // Compare against every other instance in the slot by identity,
     // not version: a same-version merge/installed twin still sees
     // its twin, so the USE parent classifies.
@@ -789,32 +829,30 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
     // in '<root>')`.
     let mut classified_installed: Vec<bool> = Vec::new();
     for p in &inst.parents {
-        if p.parent_cpv.is_empty() && !show_argument_parents {
-            continue;
-        }
         let Some(atom) = parse_atom(&p.atom) else {
             continue;
         };
         let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
-        // A bare command-line parent satisfied by every other
-        // instance is still shown once some other instance is
-        // installed; only fires when no version/slot/USE reason
-        // did.
-        // Portage: resolver/slot_collision.py
+        // A bare command-line parent classifies like any parent: Portage
+        // shows `{atom} (Argument)` whenever it carries a version, slot
+        // or USE reason, and reserves the installed-other gate below for
+        // the reason-less fallback (the `("AtomArg", None)` key).
+        // Portage: resolver/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
         if p.parent_cpv.is_empty() && reasons.is_empty() && others.iter().any(|o| o.installed) {
             reasons.push(SlotConflictReason::Argument);
         }
-        if !reasons.is_empty() {
-            classified.push(ClassifiedParent {
-                parent_cpv: &p.parent_cpv,
-                atom_str: &p.atom,
-                atom,
-                reasons,
-                use_unconditional,
-                use_display: &p.use_display,
-            });
-            classified_installed.push(p.installed);
+        if reasons.is_empty() {
+            continue;
         }
+        classified.push(ClassifiedParent {
+            parent_cpv: &p.parent_cpv,
+            atom_str: &p.atom,
+            atom,
+            reasons,
+            use_unconditional,
+            use_display: &p.use_display,
+        });
+        classified_installed.push(p.installed);
     }
     let num_all_specific: usize = classified.iter().map(|p| p.reasons.len()).sum();
     // Group parents by reason, first-seen order preserved.
@@ -853,13 +891,14 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             })
     });
     flags.conflict_is_unspecific |= !inst.parents.is_empty() && selected.is_empty();
-    show_selected_parents(
-        &mut selected,
-        &classified,
+    show_selected_parents(ShowSelectedParentsArgs {
+        selected: &mut selected,
+        classified: &classified,
         color,
-        &classified_installed,
+        classified_installed: &classified_installed,
         root,
-    );
+        had_parents: !inst.parents.is_empty(),
+    });
     let omitted = num_all_specific - selected.len();
     if omitted > 0 {
         any_omitted = true;
@@ -990,13 +1029,24 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
 }
 
 /// Print the selected parents of a conflict instance, unconditional USE dependencies first.
-pub(crate) fn show_selected_parents(
-    selected: &mut Vec<usize>,
-    classified: &[ClassifiedParent<'_>],
-    color: &Colorizer,
-    classified_installed: &[bool],
-    root: &Path,
-) {
+pub(crate) struct ShowSelectedParentsArgs<'a> {
+    pub(crate) selected: &'a mut Vec<usize>,
+    pub(crate) classified: &'a [ClassifiedParent<'a>],
+    pub(crate) color: &'a Colorizer,
+    pub(crate) classified_installed: &'a [bool],
+    pub(crate) root: &'a Path,
+    pub(crate) had_parents: bool,
+}
+
+pub(crate) fn show_selected_parents(args: ShowSelectedParentsArgs<'_>) {
+    let ShowSelectedParentsArgs {
+        selected,
+        classified,
+        color,
+        classified_installed,
+        root,
+        had_parents,
+    } = args;
     selected.sort_unstable();
     selected.dedup();
     // `unconditional_use_deps` first (Portage's own set order is
@@ -1057,7 +1107,7 @@ pub(crate) fn show_selected_parents(
         print!("    {cur_line}");
         println!("    {marker}");
     }
-    if selected.is_empty() && !classified.is_empty() {
+    if selected.is_empty() && had_parents {
         println!("    (no parents that aren't satisfied by other packages in this slot)");
     }
 }
