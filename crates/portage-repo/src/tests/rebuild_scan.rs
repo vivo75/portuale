@@ -2536,7 +2536,7 @@ fn slot_operator_rebuild_scan_considers_every_stale_provider() {
 /// the in-walk repair a world-member consumer takes. The rebuild keeps
 /// the pool binary: `--binpkg-changed-deps` strips `:slot/sub=` on both
 /// sides before comparing, exactly like Portage's `strip_slots` in
-/// `_changed_deps` (`_emerge/depgraph.py:3225-3255`), so a sub-slot-only
+/// `_changed_deps` (`_emerge/depgraph.py`, `_changed_deps` / `strip_slots`), so a sub-slot-only
 /// drift is invisible to it in both implementations (on the host the
 /// pool serves freshly built binaries, so the same rows land
 /// consistent there). The scan-level scheduling is pinned by
