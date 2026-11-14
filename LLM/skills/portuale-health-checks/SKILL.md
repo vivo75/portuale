@@ -99,9 +99,11 @@ go.
    builds or the L32 life-cycle cells.
 3. `health_checker.py` runs on the L0 plans and a few fixtures, not over every
    contract case.
-4. Property 2a (building a package twice to break a cycle) is modelled in
-   `check_order`/`check_final_state` but has no bed or merge-path proof that
-   a real double build heals the installation.
+4. Property 2a: an identical second build is no longer modelled or emitted
+   (#749, 2026-11-14 — it cannot change the artefact, so it was an illegal
+   attempt to break a cycle). A cycle no order satisfies is reported, and the
+   only recognised rebuild is the bootstrap with a reduced first USE, which is
+   still unbuilt (#753).
 5. Property 3 reads only the local binary index, not a remote binhost (#690).
 
 ## History

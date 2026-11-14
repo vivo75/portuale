@@ -185,8 +185,7 @@ to one from before the field existed.
 Each `ENTRY` has `category`, `package`, `version`, `slot`, `sub_slot`,
 `outcome` (`new`, `upgrade`, `downgrade` or `reinstall`), `merge_order` (the
 row position, from 0), `source` (always `ebuild`), `from_version` (upgrades and
-downgrades only, never on a second build), `built_twice` (`2`, on the second
-entry of a slot the plan builds twice only), `dependencies` (the dependency
+downgrades only), `dependencies` (the dependency
 variables of the chosen version), `required_use`, `iuse` and `use` (the USE
 the plan would build with). A kept installed package that is also a row is a
 `reinstall` entry and is not repeated in `kept`. `KEPT` has `category`, `package`, `version` and
