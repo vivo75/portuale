@@ -174,3 +174,8 @@
   --sort depend` plan, same 249-row set, 0 checker findings before and after;
   21 head rows re-serialized (provider-first in runtime cycles through kept
   `systemd`/`perl`/`python`, e.g. `zlib` after `libarchive`).
+
+## fn build_mask
+- Now `portage_use_reduce::BUILD_KIND_MASK` (single source of truth with the
+  bootstrap rule, which reads kinds maps in this layout). No behaviour
+  change.

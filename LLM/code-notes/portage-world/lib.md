@@ -73,3 +73,19 @@ the slot sets the reorder pass ranks.
   `a_parallel_slot_arm_is_judged_against_its_own_slot`; end to end
   `portuale::plan_world::the_fast_plan_takes_the_newest_arm_of_a_disjunctive_dependency`
   and pmtest `test_740_the_plan_takes_the_newest_arm`.
+
+## field World.use_guards
+- Backlog #753: `(slot, slot it depends on)` -> the USE flags guarding that
+  edge, parsed from the raw `*DEPEND` strings for every reached slot (the
+  S0 seam: `repo_aux_metadata` + evaluated edge existence). No
+  `effective_use_flags` call is needed — whether an arm is active is already
+  encoded in the edge's existence (the walk evaluated it), so the guard
+  relation is purely syntactic. Built in `walk()` next to `edge_kinds`.
+
+## fn edge_use_guards
+- Per-occurrence universal quantification over `conditional_guards`:
+  every raw arm naming the dep's cp must sit under the flag, and at least
+  one such arm must exist (vacuous truth would guard everything). Blockers
+  never name an edge (they pull no merge). A `[flag?]` USE-conditional atom
+  counts as unguarded here too (same conservative direction as the
+  resolver side).

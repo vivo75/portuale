@@ -637,6 +637,7 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
         }
     };
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".into(),

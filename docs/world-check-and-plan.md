@@ -105,20 +105,37 @@ before it is built or usable (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); a
 runtime-only edge out of a package the plan builds with still orders, because
 a build tool must be usable (PMS 8.1); a `PDEPEND` orders nothing, as the PMS
 says (`dependencies.tex`). A cycle that survives every cuttable runtime edge
-is genuine: no order satisfies it, so the walk orders it implicitly and the
-plan reports it on stderr instead of building anything twice:
+is genuine: no order satisfies it — except the charter 2a bootstrap, which
+serializes the one shape a single USE-flag reduction breaks. With a
+reduction the plan carries three rows (the boot row with the reduced USE,
+the middle, the definitive rebuild with the declared USE) and the report
+line names the reduction:
 
 ```
-plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753)
+plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753; bootstrap with USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)
+[ebuild  N     ] dev-libs/w749otherpkg-1:0 (bootstrap: USE="-useboh" temporary — will be rebuilt with the declared USE)
+[ebuild  N     ] dev-libs/w749pkgnew-1:0
+[ebuild  N     ] dev-libs/w749otherpkg-1:0
 ```
 
-The charter's literal rule (property 2/2a) is the boundary: a build
-dependency must be installed before the build, a runtime need only by the
-end. One row per slot, always — a repeated row is a `slot` failure in the
-checker, not a second build. The plan still exits 0 with the single-build
-rows printed; the failure surfaces here plus the checker's own `build-order`
-on the `--json` plan (rc 0 plus that independent finding is the gate — no
-pointer rides `--json` by design). `resolver` runs
+A boot row is never a second identical row: `--json` `entries` objects gain
+`"bootstrap": true` plus `"reduced_use": ["-useboh"]` on boot rows only,
+and the final row of the slot carries the declared USE with no marker
+(acyclic plans carry neither key anywhere). The survivor invariant: the
+last row per slot equals the declared build — same version, same USE (the
+reduced flags restored), same recorded sub-slot bindings — so the boot
+row's files are overwritten by the definitive merge of the same slot and
+there is nothing for the checker to excuse. A marked boot row that is not
+followed by its declared rebuild fails the checker's `slot` finding, and
+an unmarked duplicate still fails as the #749 `slot` failure. STOP rules:
+no single-flag reduction breaks any reported cycle, the reduced boot build
+itself still needs the other package at build time, or more than 3 rows
+would be needed for the affected slots — any of these keeps the old shape
+(single rows plus the bare report line) and the checker fails it as before.
+`--buildpkgonly` never bootstraps (a bootstrap *is* merges), and an
+interrupted bootstrap resumed from bare rows replays unmarked rows, which
+the checker fails as `slot` — a safe failure, never a silent wrong merge.
+`resolver` runs
 `emerge --pretend` as a child process and uses its order, which takes seconds
 to a minute.
 
@@ -129,7 +146,9 @@ and could not be had.
 Text output goes to stdout and is rows only. Two lines go to stderr: the
 count and the order, then what was not checked and the command that checks it
 (a genuine build-time cycle adds its report line first, before the count).
-The count names unique slots — one row per slot, always. A third line names
+The count names unique slots plus the build total, with the bootstrap rows
+counted separately — one row per slot, except the boot row the bootstrap
+adds. A third line names
 each stale slot-operator binding the plan does not repair,
 once, with the atom and the reason -- a kept consumer whose recorded
 `:slot/sub-slot=` no longer matches the final provider version (the chosen
@@ -147,7 +166,7 @@ $ mrg --plan-world --sort depend
 [ebuild  N     ] dev-libs/newpkg-1.0:0
 [ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]
 [ebuild  N     ] dev-libs/withdeps-1.0:0
-plan-world: 4 to install, order depend
+plan-world: 4 to install (4 builds including 0 bootstrap), order depend
 not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan
 ```
 
@@ -165,7 +184,7 @@ $ mrg --plan-world=emptytree --sort depend
 [ebuild   R    ] dev-libs/systempkg-1.0:0
 [ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]
 [ebuild  N     ] dev-libs/withdeps-1.0:0
-plan-world: 8 to install, order depend
+plan-world: 8 to install (8 builds including 0 bootstrap), order depend
 not checked: blockers, REQUIRED_USE, slot conflicts; run 'mrg -pe @world' for the full plan
 ```
 

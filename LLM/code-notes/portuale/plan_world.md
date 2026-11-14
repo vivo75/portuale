@@ -27,3 +27,23 @@
   build-time cycle is `build_time_cycles` non-empty → one stderr report
   line per cycle; rc stays 0 and the checker's independent `build-order`
   is the gate's other half — no pointer rides `--json` by design.
+
+## Charter 2a bootstrap (backlog #753)
+- `select_bootstrap`/`apply_bootstrap` follow the resolver: the shared leaf
+  rule over the same cycles + guard map, the same STOP-1/2/3 refusals, plus
+  a refusal when the boot slot has no recorded USE (no invented override —
+  `planned_use` always covers a merging slot, so this is unreachable, not a
+  fallback). `PlanRow` carries the optional override; `entry_json` renders
+  `"bootstrap":true` + `"reduced_use":["-<flag>"]` on boot rows only and
+  the declared-minus-flag USE, `text_row` the
+  `(bootstrap: USE="…" temporary …)` suffix. Acyclic output is byte-identical
+  (pinned by `an_acyclic_plan_carries_no_bootstrap_key`).
+- The report line keeps the #749 wording and names the reduction inside
+  balanced parens for bootstrapped cycles only; the count line is now
+  `{slots} to install ({rows} builds including {boot} bootstrap)`.
+- `resolver_and_fast_plan_agree_on_the_bootstrap_rows` proves agreement on
+  the same tree (same order, USE sets, markers) with no duplicated rule.
+  Note: the resolver's cycle member order follows its argv-seeded insertion
+  walk, so reversed argv would pick the mirrored single-flag reduction
+  (`pkgnew`/`-usefoo`) — still valid, still agreed row-for-row, but not the
+  owner's sequence; the pins use the owner order.

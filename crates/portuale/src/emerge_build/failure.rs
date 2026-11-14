@@ -560,6 +560,7 @@ mod tests {
 
     fn label_entry(source: CandidateSource, build_id: Option<&str>) -> GraphEntry {
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-util".into(),

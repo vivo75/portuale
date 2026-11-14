@@ -152,6 +152,7 @@ fn implicit_system_deps_n_skips_the_merge_order_bias() {
 fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
     fn entry(package: &str, version: &str, running: bool, deps: Vec<DepEdge>) -> GraphEntry {
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".to_string(),

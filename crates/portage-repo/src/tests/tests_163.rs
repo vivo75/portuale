@@ -14,6 +14,7 @@ fn entry_163(
     required_by: &[(&str, &str)],
 ) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: cat.to_string(),

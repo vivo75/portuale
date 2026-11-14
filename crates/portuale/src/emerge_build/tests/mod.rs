@@ -18,6 +18,7 @@ fn tempdir() -> TempDir {
 
 fn live_test_entry() -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".into(),
@@ -55,6 +56,7 @@ fn live_test_entry() -> GraphEntry {
 
 fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".into(),
@@ -90,6 +92,7 @@ fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
 
 fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: category.into(),

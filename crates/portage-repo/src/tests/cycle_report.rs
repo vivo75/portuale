@@ -53,13 +53,15 @@ fn flags(list: &[(&str, bool)]) -> Vec<(String, bool)> {
 
 #[test]
 fn edge_use_names_the_enabled_flag_that_pulls_the_dependency_in() {
-    let (cycle, facts) = facts_for("dev-libs/usecyclea");
+    // Backlog #753: `usecyclea` bootstraps now; the pin moves to the
+    // still-cycling two-flag shape.
+    let (cycle, facts) = facts_for("dev-libs/cddseva");
     assert_eq!(
-        edge_use_of(&cycle, &facts, "dev-libs/usecyclea-1.0"),
-        flags(&[("x", true)])
+        edge_use_of(&cycle, &facts, "dev-libs/cddseva-1"),
+        flags(&[("doc", true), ("nls", true)])
     );
     assert_eq!(
-        edge_use_of(&cycle, &facts, "dev-libs/usecycleb-1.0"),
+        edge_use_of(&cycle, &facts, "dev-libs/cddsevb-1"),
         flags(&[])
     );
     assert!(facts.test_dep_parents.is_empty());
@@ -92,11 +94,8 @@ fn edge_use_blames_every_flag_when_only_all_of_them_together_drop_it() {
 
 #[test]
 fn a_test_flag_edge_names_its_owner_for_the_features_test_pointer() {
-    let (_, facts) = facts_for("dev-libs/cddtsta");
-    assert_eq!(
-        facts.test_dep_parents,
-        vec!["dev-libs/cddtsta-1".to_string()]
-    );
+    // Backlog #753: `cddtsta` bootstraps now; the FEATURES=test pointer
+    // pin moves to the still-cycling two-flag `test?`+`doc?` shape.
     let (_, facts) = facts_for("dev-libs/cddtdoa");
     assert_eq!(
         facts.test_dep_parents,
@@ -194,12 +193,14 @@ fn report_for(atom: &str, max: usize) -> CycleReport {
     })
 }
 
-/// Portage's JSON report for the same USE-cycle fixture.
+/// Portage's JSON report shape for a USE-cycle fixture. Backlog #753:
+/// `usecyclea` bootstraps now, so the structure is pinned on the
+/// still-cycling two-flag shape (`cddseva` needs both flags off).
 #[test]
 fn json_report_lists_both_rotations_and_the_flag_solution() {
-    let r = report_for("dev-libs/usecyclea", CIRCULAR_MAX_USE_FLAGS_DEFAULT);
-    let a = "dev-libs/usecyclea-1.0".to_string();
-    let b = "dev-libs/usecycleb-1.0".to_string();
+    let r = report_for("dev-libs/cddseva", CIRCULAR_MAX_USE_FLAGS_DEFAULT);
+    let a = "dev-libs/cddseva-1".to_string();
+    let b = "dev-libs/cddsevb-1".to_string();
     assert_eq!(
         r.cycles,
         vec![vec![b.clone(), a.clone()], vec![a.clone(), b.clone()]]
@@ -213,22 +214,27 @@ fn json_report_lists_both_rotations_and_the_flag_solution() {
     };
     assert_eq!(
         r.shortest_cycle,
-        vec![edge(&a, &b, &["x"]), edge(&b, &a, &[])]
+        vec![edge(&a, &b, &["doc", "nls"]), edge(&b, &a, &[])]
     );
-    assert_eq!(r.solutions, vec![(a, vec![flags(&[("x", false)])])]);
+    assert_eq!(
+        r.solutions,
+        vec![(a, vec![flags(&[("doc", false), ("nls", false)])])]
+    );
     assert!(r.test_dep_parents.is_empty() && r.search_truncated.is_empty());
     assert_eq!(r.max_affecting_use, 10);
 }
 
 #[test]
 fn json_report_carries_test_parents_masked_alternatives_and_truncation() {
-    let r = report_for("dev-libs/cddtsta", 10);
-    assert_eq!(r.test_dep_parents, vec!["dev-libs/cddtsta-1".to_string()]);
+    // Backlog #753: `cddtsta` bootstraps now; the FEATURES=test parent pin
+    // moves to the still-cycling two-flag `test?`+`doc?` shape.
+    let r = report_for("dev-libs/cddtdoa", 10);
+    assert_eq!(r.test_dep_parents, vec!["dev-libs/cddtdoa-1".to_string()]);
     assert_eq!(
         r.solutions,
         vec![(
-            "dev-libs/cddtsta-1".to_string(),
-            vec![flags(&[("test", false)])]
+            "dev-libs/cddtdoa-1".to_string(),
+            vec![flags(&[("doc", false), ("test", false)])]
         )]
     );
     let r = report_for("dev-lang/cddgo", 10);

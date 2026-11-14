@@ -3069,6 +3069,7 @@ mod tests_164 {
             source,
         } = args;
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: category.to_string(),
@@ -3718,6 +3719,7 @@ fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
 
 fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: category.to_string(),
@@ -3775,6 +3777,7 @@ mod binary_index;
 mod bind;
 mod binpkg_use;
 mod blockers;
+mod bootstrap;
 mod built_parent_update_probe;
 mod candidates;
 mod complete_graph;

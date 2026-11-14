@@ -138,3 +138,48 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## fn disjunctive_never_calls_tie_break_for_a_single_alternative_at_the_best_rank
 - "b" alone ranks Installed (beats "a"'s Available) -- there is no tie, so tie_break must not be consulted at all.
+
+## struct BootstrapUse
+- Backlog #753 (charter 2a): the boot row's marker — `reduced_flag` (bare,
+  renderers add the `-`) plus the full declared USE, sorted. Lives in this
+  leaf (`regex`-only deps) so `portage-repo`, `portage-world` and (through
+  them) `portuale` name it with no new dependency edge. The marker, not the
+  outcome, distinguishes the rows.
+
+## const BUILD_KIND_MASK
+- `0b11001`: `DEPEND`, `BDEPEND`, `IDEPEND` bits in `portage-world`'s
+  `DEP_KEYS` order. `portage-world/src/order.rs`'s `build_mask` is this
+  const now (single source of truth); both cycle reporters feed kinds maps
+  in this layout to the rule below.
+
+## fn conditional_guards
+- Per-occurrence `flag?` stacks (nested accumulate; `!flag?` adds nothing —
+  a negated arm is removed by forcing the flag on, which the `USE =
+  declared − flag` boot shape cannot express, so it counts as
+  unconditional and is never reduced). Returns one entry per atom
+  occurrence, not per distinct atom: the universal check in the callers
+  needs to see the unguarded second arm (`unrelated? ( X ) X`,
+  `doc? ( X ) nls? ( X )` — backlog #506 pins), which a distinct-atom map
+  would merge away. Best-effort on unbalanced input.
+
+## fn bootstrap_reduction
+- Backlog #753: the [default sicuro] selection — smallest deterministic
+  single-flag reduction over the reported cycle set. Scoring: flags breaking
+  more than one reported cycle first, then reported-cycle order, then member
+  order, then lexicographically first flag. Returns the `(slot, flag)` to
+  reduce, or `None` (callers keep today's report, never enumerate flag
+  combinations). A flag only qualifies when the guard map says its removal
+  drops the edge; unguarded/unconditional edges contribute no flags. On the
+  owner's pair yields `(otherpkg, useboh)` from either caller's cycle order
+  (member order meets `otherpkg` first on both sides for the pinned argv).
+
+## fn boot_closure_reaches_member
+- Backlog #753 STOP rule 2 without a second resolve: DFS from the boot slot
+  over build-kind edges minus the reduced-flag-dropped ones; `true` means
+  the reduction did not break the need. Members include the boot slot
+  itself (a kept build-time self-loop reaches it). The seed successors are
+  filtered by the same kept predicate as the walk (an unfiltered seed set
+  reported reachability through the dropped direct edge — caught by the
+  refusal test). Only the reduced flag drops edges: guards from other
+  flags stay, so a transitive need through another member's own guarded arm
+  still refuses (the `r1 -> r3 -> r2` shape).

@@ -221,6 +221,7 @@ pub(crate) fn uninstall_entry(
     let (slot, sub_slot) = read_vdb_slot(root, &category, &package, &version);
     let repo_name = installed_pkg_repo(root, &category, &package, &version);
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category,

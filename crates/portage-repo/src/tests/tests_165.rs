@@ -293,6 +293,7 @@ fn cfg_165() -> portage_profile::Config {
 
 fn entry_165(cat: &str, pkg: &str, outcome: PretendOutcome, slot: Option<&str>) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: cat.to_string(),

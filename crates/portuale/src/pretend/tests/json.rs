@@ -141,3 +141,29 @@ fn candidate_options_json_names_the_four_binary_options() {
         r#"{"usepkg":true,"usepkgonly":false,"getbinpkg":true,"getbinpkgonly":false}"#
     );
 }
+
+/// Charter 2a (backlog #753): a boot row carries the `bootstrap` marker
+/// and the minus-spelled reduced flag; every other row carries neither
+/// key, so acyclic plans are byte-identical.
+#[test]
+fn bootstrap_json_marks_only_the_boot_row() {
+    use portage_use_reduce::BootstrapUse;
+    let mut boot = world_entry("dev-libs", "w753otherpkg", "0");
+    boot.bootstrap = Some(BootstrapUse {
+        reduced_flag: "useboh".to_string(),
+        declared_use: vec!["useblah".to_string(), "useboh".to_string()],
+    });
+    let top = HashSet::new();
+    let marked = entry_to_json(&boot, 0, &top, false, None);
+    assert!(marked.contains(r#""bootstrap":true"#), "{marked}");
+    assert!(marked.contains(r#""reduced_use":["-useboh"]"#), "{marked}");
+    let plain = entry_to_json(
+        &world_entry("dev-libs", "w753otherpkg", "0"),
+        2,
+        &top,
+        false,
+        None,
+    );
+    assert!(!plain.contains("bootstrap"), "{plain}");
+    assert!(!plain.contains("reduced_use"), "{plain}");
+}

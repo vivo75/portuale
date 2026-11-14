@@ -12,6 +12,7 @@ fn installed_child_row_displays_the_vdb_use_not_an_empty_string() {
     use crate::resolver_trace::child_use_str;
     let root = fixtures_root();
     let parent = GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".to_string(),

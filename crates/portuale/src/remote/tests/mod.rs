@@ -106,6 +106,7 @@ fn ctx_with_args(hostname: &str, ssh_args: Option<&str>) -> RemoteContext {
 fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
     use portage_repo::{CandidateSource, PretendOutcome, VisibilityProvenance};
     portage_repo::GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".to_string(),

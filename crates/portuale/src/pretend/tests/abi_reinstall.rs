@@ -25,6 +25,7 @@ fn entry(
     sub_slot: &str,
 ) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         category: category.to_string(),
         package: package.to_string(),
         outcome,

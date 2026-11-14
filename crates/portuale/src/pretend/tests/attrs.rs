@@ -398,3 +398,23 @@ fn nomerge_row_colours_word_and_package_with_the_row_colour() {
         "[\x1b[36mnomerge      \x1b[39;49;00m ] \x1b[36mdev-libs/usecyclea-1.0\x1b[39;49;00m "
     );
 }
+
+/// Charter 2a (backlog #753): the boot row's text suffix names the removed
+/// flag and the coming rebuild; every other row renders no suffix.
+#[test]
+fn bootstrap_suffix_marks_only_the_boot_row() {
+    use portage_use_reduce::BootstrapUse;
+    let mut boot = world_entry("dev-libs", "w753otherpkg", "0");
+    boot.bootstrap = Some(BootstrapUse {
+        reduced_flag: "useboh".to_string(),
+        declared_use: vec!["useblah".to_string(), "useboh".to_string()],
+    });
+    assert_eq!(
+        bootstrap_suffix(&boot),
+        " (bootstrap: USE=\"-useboh\" temporary — will be rebuilt with the declared USE)"
+    );
+    assert_eq!(
+        bootstrap_suffix(&world_entry("dev-libs", "w753otherpkg", "0")),
+        ""
+    );
+}

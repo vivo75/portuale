@@ -158,12 +158,25 @@ pub(crate) fn assemble_result(
 
     let BuildCycleDisplayOut {
         buildpkgonly_deps_unsatisfied,
-        circular_deps,
-        large_cycle_count,
-        report_cycles,
-        cycle_display,
-        cycle_display_idx,
+        mut circular_deps,
+        mut large_cycle_count,
+        mut report_cycles,
+        mut cycle_display,
+        mut cycle_display_idx,
     } = build_cycle_display(ctx, &pass, params);
+    // Charter 2a bootstrap (backlog #753): when a single USE-flag
+    // reduction breaks a reported hard cycle, synthesize the boot row
+    // after the sort and read the reduced edge set instead of failing.
+    // The re-run below also recomputes every other field, so any cycle
+    // the reduction does not break still fails exactly as today.
+    if super::bootstrap::maybe_bootstrap(ctx, config, &mut pass, &circular_deps) {
+        let fresh = build_cycle_display(ctx, &pass, params);
+        circular_deps = fresh.circular_deps;
+        large_cycle_count = fresh.large_cycle_count;
+        report_cycles = fresh.report_cycles;
+        cycle_display = fresh.cycle_display;
+        cycle_display_idx = fresh.cycle_display_idx;
+    }
 
     collect_autounmask_and_conflicts(params, &mut pass, ctx, config);
 

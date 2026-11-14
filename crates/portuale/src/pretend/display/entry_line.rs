@@ -781,7 +781,7 @@ impl EntryLineCtx<'_> {
                 format!(" {}", self.root_col(root_annotation))
             };
             println!(
-                "{}{root_str}{use_str}{size_suffix}",
+                "{}{root_str}{use_str}{size_suffix}{}",
                 columns_line(ColumnsLineArgs {
                     bracket_word: bracket,
                     field: f,
@@ -795,7 +795,8 @@ impl EntryLineCtx<'_> {
                     binary,
                     system,
                     world
-                })
+                }),
+                bootstrap_suffix(entry),
             );
             return;
         }
@@ -823,6 +824,7 @@ impl EntryLineCtx<'_> {
         }
         tail.push_str(&use_str);
         tail.push_str(&size_suffix);
+        tail.push_str(&bootstrap_suffix(entry));
         println!("[{bword} {f}] {indent}{pkg_str}{tail}");
     }
 

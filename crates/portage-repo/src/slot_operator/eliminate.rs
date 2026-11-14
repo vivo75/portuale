@@ -350,6 +350,7 @@ pub(crate) fn slot_operator_rebuild_entries(
                     .filter(|tree| !tree.is_empty())
                     .or_else(|| (installed_repo != "__unknown__").then(|| installed_repo.clone()));
                 GraphEntry {
+                    bootstrap: None,
                     discovery: 0,
                     dep_input: None,
                     category: pkg.category.clone(),
@@ -877,6 +878,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
         .trim()
         .to_string();
         out.push(GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: pkg.category.clone(),

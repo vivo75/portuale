@@ -61,6 +61,7 @@ fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry
         None => candidate.version.clone(),
     };
     Some(GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: candidate.category,
@@ -228,6 +229,7 @@ mod tests {
 
     fn test_entry() -> GraphEntry {
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".to_string(),

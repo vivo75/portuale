@@ -567,6 +567,7 @@ pub(crate) fn synthesize_surviving_conflict_entries(
                 })
                 .unwrap_or_default();
             let mut entry = GraphEntry {
+                bootstrap: None,
                 discovery: 0,
                 dep_input: None,
                 category: sc.category.clone(),

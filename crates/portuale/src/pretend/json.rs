@@ -49,6 +49,16 @@ pub(crate) fn entry_to_json(
         // already in this order, so a consumer that re-sorts keeps the schedule.
         format!("\"merge_order\":{merge_order}"),
     ];
+    // Charter 2a bootstrap (backlog #753): a reduced-USE first build
+    // carries the marker; the final row of the slot and every acyclic row
+    // carry neither key (byte-identical by construction).
+    if let Some(boot) = &entry.bootstrap {
+        fields.push("\"bootstrap\":true".to_string());
+        fields.push(format!(
+            "\"reduced_use\":[{}]",
+            json_string(&format!("-{}", boot.reduced_flag))
+        ));
+    }
     let outcome_tag = match &entry.outcome {
         PretendOutcome::New { .. } => "new",
         PretendOutcome::Upgrade { .. } => "upgrade",

@@ -19,7 +19,7 @@
 // highest-`AltPreference` alternative a caller closure reports. This crate
 // stays atom-agnostic throughout.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -1768,5 +1768,408 @@ mod tests {
         let got = use_reduce_flat(&toks(&atoms.join(" ")), &set(&[]), MatchMode::Normal)
             .expect("the string path never rejects a use dep");
         assert_eq!(got, atoms.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
+}
+
+/// The mark a bootstrap (reduced-USE first) build carries: the single USE
+/// flag removed relative to the declared build, and the declared USE itself.
+/// Charter 2a: a boot row is never a second identical row (that is what #749
+/// removed) — the marker, not the outcome, distinguishes the rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapUse {
+    /// The one flag forced off for the boot build (stored bare: `useboh`).
+    pub reduced_flag: String,
+    /// The full declared USE of the definitive build, sorted.
+    pub declared_use: Vec<String>,
+}
+
+/// Bit positions follow `portage-world`'s `DEP_KEYS` order (`DEPEND`,
+/// `RDEPEND`, `PDEPEND`, `BDEPEND`, `IDEPEND`): the build-time keys are
+/// `DEPEND`, `BDEPEND` and `IDEPEND`. Both cycle reporters feed kinds maps
+/// in this layout, so the reduction rule below reads them without knowing
+/// which side built them.
+pub const BUILD_KIND_MASK: u8 = 0b11001;
+
+/// Each atom occurrence of `dep_str` with the positive USE flags guarding
+/// it: the active `flag?` stack at its position (nested conditionals
+/// accumulate), in string order. Occurrences — not distinct atoms — are
+/// the unit: the bootstrap rule universally quantifies over them, so an
+/// unguarded second arm keeps the edge even when the first is guarded
+/// (backlog #506: `unrelated? ( X ) X`, `doc? ( X ) nls? ( X )`).
+/// A negated `!flag?` arm guards nothing here: removing it means forcing
+/// the flag on, which the single-flag `USE = declared − flag` boot shape
+/// cannot express, so such an arm counts as unconditional (never reduced).
+/// `||` markers and grouping parens carry no atoms and contribute none.
+/// Best-effort: unbalanced input yields the guards seen before the break.
+pub fn conditional_guards(dep_str: &str) -> Vec<(String, BTreeSet<String>)> {
+    let mut out: Vec<(String, BTreeSet<String>)> = Vec::new();
+    let mut active: Vec<String> = Vec::new();
+    let mut levels: Vec<usize> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for tok in dep_str.split_whitespace() {
+        if let Some(flag) = tok.strip_suffix('?') {
+            // A negated arm adds no guard (see above); a positive one waits
+            // for its group — a stray conditional with no group is dropped,
+            // the way the validating walk rejects it.
+            if !flag.starts_with('!') {
+                pending.push(flag.to_string());
+            }
+        } else if tok == "(" {
+            levels.push(active.len());
+            active.append(&mut pending);
+        } else if tok == ")" {
+            pending.clear();
+            if let Some(len) = levels.pop() {
+                active.truncate(len);
+            }
+        } else {
+            pending.clear();
+            if tok != "||" {
+                out.push((tok.to_string(), active.iter().cloned().collect()));
+            }
+        }
+    }
+    out
+}
+
+/// The smallest deterministic single-flag reduction breaking a reported
+/// cycle set: `(boot slot, flag to force off)`, or `None` when no single
+/// flag breaks any reported cycle (callers keep today's report, never
+/// enumerate flag combinations). `cycles` arrive in reported order with
+/// walk-order members; `edges` is the adjacency they were reported over;
+/// `kinds` carries the `*DEPEND` bits behind each edge in `DEP_KEYS`
+/// layout (a missing entry counts as build-time); `use_guards` maps each
+/// directed edge to the USE flags whose removal drops it. Tie-breaks, in
+/// order: a flag breaking more than one reported cycle in the same pass
+/// wins; then reported-cycle order; then member order within the cycle;
+/// then the lexicographically first flag.
+pub fn bootstrap_reduction(
+    cycles: &[Vec<String>],
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    kinds: &BTreeMap<(String, String), u8>,
+    use_guards: &BTreeMap<(String, String), BTreeSet<String>>,
+) -> Option<(String, String)> {
+    let drops = |edge: &(String, String), flag: &str| {
+        use_guards.get(edge).is_some_and(|g| g.contains(flag))
+    };
+    let is_build_kind =
+        |edge: &(String, String)| kinds.get(edge).is_none_or(|m| m & BUILD_KIND_MASK != 0);
+    let breaks_cycle = |cycle: &[String], flag: &str| {
+        cycle.iter().any(|m| {
+            edges.get(m).is_some_and(|to| {
+                to.iter().any(|n| {
+                    cycle.contains(n)
+                        && is_build_kind(&(m.clone(), n.clone()))
+                        && drops(&(m.clone(), n.clone()), flag)
+                })
+            })
+        })
+    };
+    let mut triples: Vec<(usize, usize, usize, String, String)> = Vec::new();
+    for (ci, cycle) in cycles.iter().enumerate() {
+        for (mi, m) in cycle.iter().enumerate() {
+            let mut flags: BTreeSet<String> = BTreeSet::new();
+            if let Some(to) = edges.get(m) {
+                for n in to {
+                    if cycle.contains(n)
+                        && is_build_kind(&(m.clone(), n.clone()))
+                        && let Some(g) = use_guards.get(&(m.clone(), n.clone()))
+                    {
+                        flags.extend(g.iter().cloned());
+                    }
+                }
+            }
+            for flag in flags {
+                if edges.get(m).is_some_and(|to| {
+                    to.iter()
+                        .any(|n| cycle.contains(n) && drops(&(m.clone(), n.clone()), &flag))
+                }) {
+                    let broken = cycles.iter().filter(|c| breaks_cycle(c, &flag)).count();
+                    triples.push((broken, ci, mi, m.clone(), flag));
+                }
+            }
+        }
+    }
+    triples.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.4.cmp(&b.4))
+    });
+    triples.into_iter().next().map(|(_, _, _, m, f)| (m, f))
+}
+
+/// Whether the reduced boot build still needs a cycle member at build time:
+/// DFS from `boot` over the build-kind edges minus the ones the reduced
+/// flag drops; `true` means the reduction did not break the need, so both
+/// emitters refuse the bootstrap (no second full resolve). `members` holds
+/// every reported cycle member (the boot slot itself included); reaching
+/// any of them — including back to the boot slot through a kept edge —
+/// counts.
+#[allow(clippy::too_many_arguments)]
+pub fn boot_closure_reaches_member(
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    kinds: &BTreeMap<(String, String), u8>,
+    use_guards: &BTreeMap<(String, String), BTreeSet<String>>,
+    boot: &str,
+    reduced_flag: &str,
+    members: &BTreeSet<String>,
+) -> bool {
+    let kept = |edge: &(String, String)| {
+        kinds.get(edge).is_none_or(|m| m & BUILD_KIND_MASK != 0)
+            && !use_guards
+                .get(edge)
+                .is_some_and(|g| g.contains(reduced_flag))
+    };
+    let mut visited: BTreeSet<String> = BTreeSet::from([boot.to_string()]);
+    let mut stack: Vec<String> = edges
+        .get(boot)
+        .map(|to| {
+            to.iter()
+                .filter(|next| kept(&(boot.to_string(), (*next).clone())))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    while let Some(node) = stack.pop() {
+        if members.contains(&node) {
+            return true;
+        }
+        if !visited.insert(node.clone()) {
+            continue;
+        }
+        if let Some(to) = edges.get(&node) {
+            for next in to {
+                if kept(&(node.clone(), next.clone())) {
+                    stack.push(next.clone());
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+
+    fn edges(pairs: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
+        pairs
+            .iter()
+            .map(|(n, to)| {
+                (
+                    (*n).to_string(),
+                    to.iter().map(|t| (*t).to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn kinds(pairs: &[((&str, &str), u8)]) -> BTreeMap<(String, String), u8> {
+        pairs
+            .iter()
+            .map(|((from, to), mask)| ((from.to_string(), to.to_string()), *mask))
+            .collect()
+    }
+
+    fn guards(pairs: &[((&str, &str), &[&str])]) -> BTreeMap<(String, String), BTreeSet<String>> {
+        pairs
+            .iter()
+            .map(|((from, to), flags)| {
+                (
+                    (from.to_string(), to.to_string()),
+                    flags.iter().map(|f| (*f).to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Charter 2a (backlog #753): the owner's pair reduces to the owner's
+    /// own choice — `otherpkg` with `-useboh`.
+    #[test]
+    fn a_bootstrap_reduction_picks_useboh_on_otherpkg() {
+        let other = "dev-libs/w749otherpkg:0";
+        let new = "dev-libs/w749pkgnew:0";
+        let cycles = vec![vec![other.to_string(), new.to_string()]];
+        let edges = edges(&[(other, &[new]), (new, &[other])]);
+        let kinds = kinds(&[((other, new), 0b01000), ((new, other), 0b01000)]);
+        let guards = guards(&[((other, new), &["useboh"]), ((new, other), &["usefoo"])]);
+        assert_eq!(
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            Some((other.to_string(), "useboh".to_string()))
+        );
+    }
+
+    /// The shared-guard tie-break: one flag breaking two reported cycles
+    /// wins even when reported order meets another cycle first.
+    #[test]
+    fn a_flag_breaking_two_cycles_wins_over_cycle_order() {
+        let a0 = "dev-libs/xa0:0";
+        let a1 = "dev-libs/xa1:0";
+        let b0 = "dev-libs/xb0:0";
+        let b1 = "dev-libs/xb1:0";
+        let cycles = vec![
+            vec![a0.to_string(), a1.to_string()],
+            vec![b0.to_string(), b1.to_string()],
+        ];
+        let edges = edges(&[(a0, &[a1]), (a1, &[a0]), (b0, &[b1]), (b1, &[b0])]);
+        let kinds = kinds(&[
+            ((a0, a1), 0b01000),
+            ((a1, a0), 0b01000),
+            ((b0, b1), 0b01000),
+            ((b1, b0), 0b01000),
+        ]);
+        let guards = guards(&[((a0, a1), &["shared", "zona"]), ((b0, b1), &["shared"])]);
+        assert_eq!(
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            Some((a0.to_string(), "shared".to_string()))
+        );
+    }
+
+    /// No single flag on the first cycle's edges breaks it (unconditional),
+    /// so the reduction falls through to the next cycle.
+    #[test]
+    fn an_unbreakable_first_cycle_falls_through_to_the_next() {
+        let a0 = "dev-libs/xa0:0";
+        let a1 = "dev-libs/xa1:0";
+        let b0 = "dev-libs/xb0:0";
+        let b1 = "dev-libs/xb1:0";
+        let cycles = vec![
+            vec![a0.to_string(), a1.to_string()],
+            vec![b0.to_string(), b1.to_string()],
+        ];
+        let edges = edges(&[(a0, &[a1]), (a1, &[a0]), (b0, &[b1]), (b1, &[b0])]);
+        let kinds = kinds(&[
+            ((a0, a1), 0b01000),
+            ((a1, a0), 0b01000),
+            ((b0, b1), 0b01000),
+            ((b1, b0), 0b01000),
+        ]);
+        let guards = guards(&[((b0, b1), &["useboh"])]);
+        assert_eq!(
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            Some((b0.to_string(), "useboh".to_string()))
+        );
+    }
+
+    /// All arms unconditional: no single-flag reduction exists, so the
+    /// cycles are reported as today (STOP rule 1).
+    #[test]
+    fn no_single_flag_reduction_returns_none() {
+        let a0 = "dev-libs/xa0:0";
+        let a1 = "dev-libs/xa1:0";
+        let cycles = vec![vec![a0.to_string(), a1.to_string()]];
+        let edges = edges(&[(a0, &[a1]), (a1, &[a0])]);
+        let kinds = kinds(&[((a0, a1), 0b01000), ((a1, a0), 0b01000)]);
+        assert_eq!(
+            bootstrap_reduction(&cycles, &edges, &kinds, &BTreeMap::new()),
+            None
+        );
+    }
+
+    /// Reported cycle order decides between two independent guarded cycles:
+    /// same input in any map insertion order reduces the same way.
+    #[test]
+    fn reduction_order_is_sorted_cycle_order_deterministic() {
+        let a0 = "dev-libs/xa0:0";
+        let a1 = "dev-libs/xa1:0";
+        let b0 = "dev-libs/xb0:0";
+        let b1 = "dev-libs/xb1:0";
+        let cycles = vec![
+            vec![a0.to_string(), a1.to_string()],
+            vec![b0.to_string(), b1.to_string()],
+        ];
+        let edges = edges(&[(a0, &[a1]), (a1, &[a0]), (b0, &[b1]), (b1, &[b0])]);
+        let kinds = kinds(&[
+            ((a0, a1), 0b01000),
+            ((a1, a0), 0b01000),
+            ((b0, b1), 0b01000),
+            ((b1, b0), 0b01000),
+        ]);
+        let guards = guards(&[((a0, a1), &["zona"]), ((b0, b1), &["useboh"])]);
+        let first = bootstrap_reduction(&cycles, &edges, &kinds, &guards);
+        assert_eq!(first, Some((a0.to_string(), "zona".to_string())));
+        assert_eq!(first, bootstrap_reduction(&cycles, &edges, &kinds, &guards));
+    }
+
+    /// STOP rule 2: the reduced boot build still reaches the other member
+    /// through an unguarded build-time path, so the bootstrap is refused.
+    #[test]
+    fn a_boot_closure_that_still_reaches_the_member_is_refused() {
+        let other = "dev-libs/w753otherpkg:0";
+        let new = "dev-libs/w753pkgnew:0";
+        let mid = "dev-libs/w753mid:0";
+        let graph = edges(&[(other, &[new, mid]), (mid, &[new]), (new, &[other])]);
+        let kinds = kinds(&[
+            ((other, new), 0b01000),
+            ((other, mid), 0b01000),
+            ((mid, new), 0b01000),
+            ((new, other), 0b01000),
+        ]);
+        let guards = guards(&[((other, new), &["useboh"]), ((new, other), &["usefoo"])]);
+        let members: BTreeSet<String> = [other, new].iter().map(|s| s.to_string()).collect();
+        assert!(boot_closure_reaches_member(
+            &graph, &kinds, &guards, other, "useboh", &members
+        ));
+        // The owner's pair has no such path: the reduction breaks the need.
+        let plain = edges(&[(other, &[new]), (new, &[other])]);
+        assert!(!boot_closure_reaches_member(
+            &plain, &kinds, &guards, other, "useboh", &members
+        ));
+    }
+
+    /// The string→flags parser behind the guard map: nested conditionals
+    /// accumulate, negated arms guard nothing, `||` markers carry none —
+    /// and a repeated atom keeps one entry per occurrence, so an unguarded
+    /// second arm is visible to the universal check.
+    #[test]
+    fn conditional_guards_collects_the_active_flag_stack_per_atom() {
+        let guards = conditional_guards(
+            "usefoo? ( dev-libs/a dev-libs/b ) !useboh? ( dev-libs/c ) dev-libs/d",
+        );
+        let of = |atom: &str| {
+            guards
+                .iter()
+                .filter(|(a, _)| a == atom)
+                .map(|(_, g)| g.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of("dev-libs/a"),
+            vec![BTreeSet::from(["usefoo".to_string()])]
+        );
+        assert_eq!(
+            of("dev-libs/b"),
+            vec![BTreeSet::from(["usefoo".to_string()])]
+        );
+        assert_eq!(of("dev-libs/c"), vec![BTreeSet::new()]);
+        assert_eq!(of("dev-libs/d"), vec![BTreeSet::new()]);
+        let nested = conditional_guards("a? ( b? ( dev-libs/x ) dev-libs/y )");
+        let nof = |atom: &str| {
+            nested
+                .iter()
+                .filter(|(a, _)| a == atom)
+                .map(|(_, g)| g.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            nof("dev-libs/x"),
+            vec![BTreeSet::from(["a".to_string(), "b".to_string()])]
+        );
+        assert_eq!(nof("dev-libs/y"), vec![BTreeSet::from(["a".to_string()])]);
+        // Backlog #506: a repeated atom keeps both occurrences — the
+        // unguarded arm is what keeps the edge under either flag.
+        let repeated = conditional_guards("doc? ( dev-libs/x ) nls? ( dev-libs/x )");
+        assert_eq!(
+            repeated
+                .iter()
+                .filter(|(a, _)| a == "dev-libs/x")
+                .map(|(_, g)| g.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                BTreeSet::from(["doc".to_string()]),
+                BTreeSet::from(["nls".to_string()])
+            ]
+        );
     }
 }

@@ -104,6 +104,7 @@ fn cycle_sets(cycles: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// mirrors `synthetic_installed_entry`'s full field list.
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: category.to_string(),

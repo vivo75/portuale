@@ -129,6 +129,7 @@ fn entry_162(
     new_slot: bool,
 ) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: cat.to_string(),

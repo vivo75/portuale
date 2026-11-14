@@ -119,6 +119,7 @@ pub(crate) fn resume_entry(args: ResumeEntryArgs<'_>) -> GraphEntry {
             })
     };
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: category.to_string(),

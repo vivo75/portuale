@@ -52,7 +52,9 @@ checked by a program:
    with an identical environment. The one rebuild this project
    recognises is the bootstrap: a first build with a reduced USE
    whose result the plan discards, and a last build with the declared
-   USE (see backlog #753).
+   USE (see backlog #753). On the owner's pair the recognised shape is
+   `USE="-useboh" otherpkg` (temporary), then `pkgnew`, then `otherpkg`
+   with the declared USE (definitive).
 3. **Packages are as new as possible.** Each package ends at the best
    visible version that fits the constraints of all the others.
 4. **Removal does not break running programs.** The user may remove a package
