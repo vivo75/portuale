@@ -104,12 +104,21 @@ nothing about build order. `depend` puts a package after the packages it needs
 before it is built or usable (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); a
 runtime-only edge out of a package the plan builds with still orders, because
 a build tool must be usable (PMS 8.1); a `PDEPEND` orders nothing, as the PMS
-says (`dependencies.tex`). A cycle with no such edge is broken by building
-its consumer twice, and so is a cut that leaves a build-time need chain
-unmet: the first package whose closure stays unmet is built again after
-the closure becomes satisfied (charter 2a). The slot gets a second row,
-and only the second `--json` entry carries `built_twice: 2` (no
-`from_version`, it is the same version built again). `resolver` runs
+says (`dependencies.tex`). A cycle that survives every cuttable runtime edge
+is genuine: no order satisfies it, so the walk orders it implicitly and the
+plan reports it on stderr instead of building anything twice:
+
+```
+plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753)
+```
+
+The charter's literal rule (property 2/2a) is the boundary: a build
+dependency must be installed before the build, a runtime need only by the
+end. One row per slot, always — a repeated row is a `slot` failure in the
+checker, not a second build. The plan still exits 0 with the single-build
+rows printed; the failure surfaces here plus the checker's own `build-order`
+on the `--json` plan (rc 0 plus that independent finding is the gate — no
+pointer rides `--json` by design). `resolver` runs
 `emerge --pretend` as a child process and uses its order, which takes seconds
 to a minute.
 
@@ -118,10 +127,10 @@ the tree cannot be read, the mode is wrong, or the resolver order was asked for
 and could not be had.
 
 Text output goes to stdout and is rows only. Two lines go to stderr: the
-count and the order, then what was not checked and the command that checks it.
-The count names unique slots, with `, N slot(s) built twice: cat/pkg:slot`
-appended when a cycle was broken by building a package twice. A third line
-names each stale slot-operator binding the plan does not repair,
+count and the order, then what was not checked and the command that checks it
+(a genuine build-time cycle adds its report line first, before the count).
+The count names unique slots — one row per slot, always. A third line names
+each stale slot-operator binding the plan does not repair,
 once, with the atom and the reason -- a kept consumer whose recorded
 `:slot/sub-slot=` no longer matches the final provider version (the chosen
 one when the plan changes the provider's slot, else the installed one) but

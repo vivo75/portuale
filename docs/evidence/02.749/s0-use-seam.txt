@@ -1,0 +1,19 @@
+S0.3 USE-seam probe (2026-11-14, temp test s0_probe_w749_use_conditional_edges, removed afterwards)
+tree: w749pkgnew-1 IUSE=+usefoo +use3 BDEPEND='usefoo? ( otherpkg[useblah] )';
+      w749otherpkg-1 IUSE=+useboh +useblah BDEPEND='useboh? ( pkgnew[use3] )'
+World.edges: pkgnew<->otherpkg both present; kinds=8 both ways (DEP_KEYS[3]=BDEPEND).
+Todays rows: [pkgnew-1:0, otherpkg-1:0, pkgnew-1:0] (the duplicate S1 deletes).
+Verdict: seam works through existing testkit/config; no STOP.
+
+S0PROBE edges={"dev-libs/w749otherpkg:0": {"dev-libs/w749pkgnew:0"}, "dev-libs/w749pkgnew:0": {"dev-libs/w749otherpkg:0"}} kinds={("dev-libs/w749otherpkg:0", "dev-libs/w749pkgnew:0"): 8, ("dev-libs/w749pkgnew:0", "dev-libs/w749otherpkg:0"): 8} rc=0 out=[ebuild  N     ] dev-libs/innernestedsetpkg-1.0:0
+[ebuild  N     ] dev-libs/newpkg-1.0:0
+[ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]
+[ebuild  N     ] dev-libs/w749pkgnew-1:0
+[ebuild  N     ] dev-libs/w749otherpkg-1:0
+[ebuild  N     ] dev-libs/w749pkgnew-1:0
+[ebuild  N     ] dev-libs/withdeps-1.0:0
+ err=plan-world: 6 to install, order depend, 1 slot built twice: dev-libs/w749pkgnew:0
+not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan
+
+
+thread 'plan_world::tests::s0_probe_w749_use_conditional_edges' (704508) panicked at crates/portuale/src/plan_world.rs:1280:9:

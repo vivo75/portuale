@@ -2,23 +2,28 @@
 `mrg --plan-world[=update|emptytree] [--sort alpha|depend|resolver]`: what
 `emerge -uDNp @world` would install, worked out by `portage-world`.
 
-## fn plan_json (#745, #746)
+## fn plan_json (#745, #746) — second-build machinery deleted 2026-11-14
 
-- `Row { slot, pass }` carries the charter-2a second build through to the
-  `--json` document: one `entries` object per row in row order (`merge_order`
-  is the row index), and only a `Pass::Rebuild` entry carries
-  `"built_twice": 2` — with no `from_version`, since it rebuilds the same
-  version to break a cycle rather than replacing an installed one. The first
-  entry keeps today's fields. No-breaker output is byte-identical (the
-  fixture pins prove it).
-- The stderr summary counts unique slots (`rows` would overcount the pair)
-  and appends `, N slot(s) built twice: cat/pkg:slot` (sorted) when a
-  breaker fired. `--sort alpha` and `--sort resolver` print each slot once
-  with no `built_twice`: the rebuild is an ordering artefact of the
-  `depend` walk, not a second package.
-- The checker side lives in pmtest: `check_final_state` collapses an
-  identical cpv in one slot before the slot check (a second build is not a
-  second package; two different versions still fail), and `check_order`
-  turns a `build-order` finding into `cycle-noted` when the plan merges the
-  identical cpv in the identical slot again later with the need matched
-  there (`_second_build`, next to `_order_finding`).
+- Plan `02.749-resolver-2a`: one `entries` object per row in row order
+  (`merge_order` is the row index), one row per slot, no second-build key —
+  the `built_twice` field, the `pass` parameter, and the stderr `built
+  twice` clause went with the `Row`/`Pass` deletion (the owner ruled the
+  positional duplicate illegal). The removed shape (history): the #745
+  tree ordered `[prov, virt, user, user]` — the consumer's `Pass::Rebuild`
+  second row right after the cycle closed — and the checker excused the
+  first build's need with a `cycle-noted` naming that row. No-breaker
+  output is byte-identical (the fixture pins prove it). The stderr summary
+  counts unique slots;
+  `--sort alpha`, `depend` and `resolver` all print each slot once — the
+  duplicate was an ordering artefact of the `depend` walk, not a second
+  package.
+- The checker side went the same day (pmtest): `check_order` keeps the
+  charter-literal boundary (a build atom satisfied at start; runtime
+  needs by the end), a build need met only by a later merge is always a
+  `build-order` failure — merge-it-first, or, when the later merge's
+  build closure reaches back, the cycle message with the #753 pointer
+  (`reaches` on the build-only `_build_graph`); `check_final_state` fails
+  any repeat in one slot (the identical-cpv collapse is gone). A genuine
+  build-time cycle is `build_time_cycles` non-empty → one stderr report
+  line per cycle; rc stays 0 and the checker's independent `build-order`
+  is the gate's other half — no pointer rides `--json` by design.

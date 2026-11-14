@@ -1,4 +1,8 @@
-//! The order a list of slots is shown in.
+//! The order a list of slots is shown in: each slot after the slots it
+//! needs, one row per slot. A dependency cycle is cut at a cuttable
+//! runtime-only edge when it has one; a cycle with none is genuine and is
+//! ordered implicitly, then reported for the checker to fail (charter 2a).
+//! No slot is ever listed twice.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -9,35 +13,19 @@ pub enum Order<'a> {
     /// By `category/package`, then slot. No claim about build order.
     Alpha,
     /// A slot after the slots it needs before it is merged or usable
-    /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`), as the first pass followed
-    /// them. A `PDEPEND`-only edge puts no constraint on the order (PMS).
-    /// A cycle is cut at a cuttable runtime-only edge when it has one (a
-    /// runtime edge out of a package the plan builds with still orders, PMS
-    /// 8.1); a cycle with none is broken by building its consumer twice
-    /// (charter 2a).
+    /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`). A `PDEPEND`-only edge
+    /// puts no constraint on the order (PMS). A cycle is cut at a cuttable
+    /// runtime-only edge when it has one (a runtime edge out of a package
+    /// the plan builds with still orders, PMS 8.1); a cycle with none is
+    /// genuine: the walk below orders it implicitly and
+    /// [`build_time_cycles`] reports it, for the checker to fail (charter
+    /// 2a: a cycle no order satisfies is reported, never papered over by
+    /// building a package twice).
     Depend,
     /// By the position in an order the caller got elsewhere (the resolver's
     /// merge list), keyed `cat/pkg:slot`; a slot not in it comes last, in
     /// alphabetical order.
     Rank(&'a HashMap<String, usize>),
-}
-
-/// One row of an [`Order::Depend`] plan: the slot, and whether it is the
-/// slot's first build or the charter-2a rebuild that breaks a cycle.
-pub struct Row<'a> {
-    /// The slot this row merges.
-    pub slot: &'a SlotSet,
-    /// [`Pass::First`] for every row but the second build of a breaker.
-    pub pass: Pass,
-}
-
-/// Which build of the slot a [`Row`] is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Pass {
-    /// The slot's only, or first, build.
-    First,
-    /// The charter-2a second build that breaks an all-build-time cycle.
-    Rebuild,
 }
 
 impl World {
@@ -52,10 +40,11 @@ impl World {
     }
 
     /// The slots `@world` needs that a plan would change, in `how` order.
-    /// Under [`Order::Depend`] a breaker slot comes twice, first as
-    /// [`Pass::First`] and again as [`Pass::Rebuild`].
+    /// One row per slot: no slot is ever listed twice (charter 2a is
+    /// report-only — a cycle no order satisfies is failed by the checker,
+    /// never papered over by building a package twice).
     #[must_use]
-    pub fn ordered(&self, how: &Order<'_>) -> Vec<Row<'_>> {
+    pub fn ordered(&self, how: &Order<'_>) -> Vec<&SlotSet> {
         let mut changed: Vec<&SlotSet> = self
             .slots
             .iter()
@@ -63,56 +52,19 @@ impl World {
             .collect();
         changed.sort_by_key(|s| s.node());
         match how {
-            Order::Alpha => changed
-                .into_iter()
-                .map(|slot| Row {
-                    slot,
-                    pass: Pass::First,
-                })
-                .collect(),
+            Order::Alpha => changed,
             Order::Rank(rank) => {
                 changed.sort_by_key(|s| rank.get(&s.node()).copied().unwrap_or(usize::MAX));
                 changed
-                    .into_iter()
-                    .map(|slot| Row {
-                        slot,
-                        pass: Pass::First,
-                    })
-                    .collect()
             }
             Order::Depend => {
                 let by_node: HashMap<String, &SlotSet> =
                     changed.iter().map(|s| (s.node(), *s)).collect();
-                let installed: BTreeSet<String> = self
-                    .slots
-                    .iter()
-                    .filter(|s| s.installed.is_some())
-                    .map(|s| s.node())
-                    .collect();
-                let rows: BTreeSet<String> = changed.iter().map(|s| s.node()).collect();
                 let edges = self.ordering_edges();
                 let order = depend_order(&edges, &self.edge_kinds);
-                // Charter 2a, second instrument (backlog #745): duplicate
-                // the first package whose build-time need chain the cut
-                // order leaves unmet, after its closure becomes satisfied.
-                let order =
-                    close_usability_gaps(&edges, &self.edge_kinds, order, &installed, &rows);
-                let mut seen: HashMap<String, usize> = HashMap::new();
                 order
                     .into_iter()
                     .filter_map(|name| by_node.get(&name).copied())
-                    .map(|slot| {
-                        let count = seen.entry(slot.node()).or_insert(0);
-                        *count += 1;
-                        Row {
-                            slot,
-                            pass: if *count == 1 {
-                                Pass::First
-                            } else {
-                                Pass::Rebuild
-                            },
-                        }
-                    })
                     .collect()
             }
         }
@@ -145,10 +97,11 @@ impl World {
 /// nodes it points at. Walks in name order, so the result is the same on
 /// every run. A cycle is cut at the first cuttable runtime-only edge (a
 /// runtime edge out of a package the plan builds with still orders, so it is
-/// not cuttable); a cycle with no cuttable edge is broken by building its
-/// consumer twice, right after the cycle's last member. `kinds` carries the
-/// `*DEPEND` variables behind each edge, as bits of [`crate::DEP_KEYS`]; an
-/// edge without one counts as build-time.
+/// not cuttable); a cycle with no cuttable edge is genuine: no cut is
+/// chosen for it, the walk below orders it implicitly, and
+/// [`build_time_cycles`] reports it for the checker to fail. `kinds`
+/// carries the `*DEPEND` variables behind each edge, as bits of
+/// [`crate::DEP_KEYS`]; an edge without one counts as build-time.
 pub(crate) fn depend_order(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
@@ -157,8 +110,6 @@ pub(crate) fn depend_order(
     // Cutting one runtime edge can open the next cycle: repeat until every
     // remaining cycle is all build-time, then order what is left.
     let mut working = edges.clone();
-    let mut second: Vec<String> = Vec::new();
-    let mut members_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
     loop {
         match runtime_cut(&working, kinds, &build_used) {
             None => break,
@@ -176,39 +127,9 @@ pub(crate) fn depend_order(
                     next.remove(&to);
                 }
             }
-            Some(CycleCut::Rebuild(consumer, members)) => {
-                let back = members.first().cloned().unwrap_or_default();
-                if let Some(next) = working.get_mut(&consumer) {
-                    next.remove(&back);
-                }
-                // Charter 2a builds a package twice, not more: a repeat
-                // consumer only widens the member set its second build
-                // follows.
-                members_of
-                    .entry(consumer.clone())
-                    .or_default()
-                    .extend(members);
-                if !second.contains(&consumer) {
-                    second.push(consumer);
-                }
-            }
         }
     }
-    let mut out = unordered(&working);
-    for consumer in &second {
-        // The second build comes after every member of every cycle the
-        // consumer breaks, so each of them meets charter 2a's excuse.
-        let empty = Vec::new();
-        let members = members_of.get(consumer).unwrap_or(&empty);
-        if let Some(last) = members
-            .iter()
-            .filter_map(|m| out.iter().position(|n| n == m))
-            .max()
-        {
-            out.insert(last + 1, consumer.clone());
-        }
-    }
-    out
+    unordered(&working)
 }
 
 /// The walk of old: every node after the nodes it points at, a cycle cut
@@ -294,17 +215,14 @@ pub(crate) fn is_cuttable_runtime_edge(
     is_runtime_edge(kinds, edge) && !build_used.contains(&edge.0)
 }
 
-/// What the first cycle the walk meets needs: cut this runtime edge, cut the
-/// closing back edge itself when only it is cuttable, or build the back-edge
-/// consumer twice when nothing in the cycle is cuttable.
+/// What the first cycle the walk meets needs: cut this runtime edge, or cut
+/// the closing back edge itself when only it is cuttable.
 #[derive(Debug, PartialEq, Eq)]
 enum CycleCut {
     /// Cut this edge and look for the next cycle.
     Edge(String, String),
     /// The back edge is the only cuttable one: cut it and keep scanning.
     BackEdge(String, String),
-    /// The consumer to build twice, and the members of its cycle.
-    Rebuild(String, Vec<String>),
 }
 
 /// The cut the first cycle the walk meets needs, if it is cyclic. The walk
@@ -351,8 +269,9 @@ fn runtime_cut(
 /// What the cycle the walk just closed needs: the stack from `kid` (the
 /// ancestor the back edge points at) to the current node, closed by the back
 /// edge last. The first cuttable runtime-only edge in that order; the back
-/// edge itself when only it is cuttable; a rebuild of the current node (the
-/// consumer of the back edge's need) when nothing is.
+/// edge itself when only it is cuttable; `None` when nothing is: no cuttable
+/// edge means the cycle is genuine, the walk below orders it implicitly and
+/// [`build_time_cycles`] reports it.
 fn cycle_cut(
     stack: &[(&String, Vec<&String>, usize)],
     kid: &String,
@@ -371,13 +290,7 @@ fn cycle_cut(
         .enumerate()
         .find(|(_, edge)| is_cuttable_runtime_edge(kinds, build_used, edge));
     match first {
-        None => {
-            let members: Vec<String> = stack[start..]
-                .iter()
-                .map(|(n, _, _)| (*n).clone())
-                .collect();
-            Some(CycleCut::Rebuild(stack.last()?.0.clone(), members))
-        }
+        None => None,
         Some((i, _)) if i == last => {
             let back = cycle.last().cloned().expect("the cycle closes");
             Some(CycleCut::BackEdge(back.0, back.1))
@@ -386,164 +299,97 @@ fn cycle_cut(
     }
 }
 
-/// Shared inputs of the usability walk: the graph, its `*DEPEND` kinds,
-/// the installed slots, and the plan's rows.
-struct Usability<'a> {
-    edges: &'a BTreeMap<String, BTreeSet<String>>,
-    kinds: &'a BTreeMap<(String, String), u8>,
-    installed: &'a BTreeSet<String>,
-    rows: &'a BTreeSet<String>,
-}
-
-/// Second builds for packages whose build-time need chain the cut order
-/// leaves unmet (charter 2a, backlog #745): walk `order` in merge order
-/// and duplicate the first package with an unmet chain, at the first later
-/// position where its closure becomes satisfied; repeat until every merge
-/// order position holds. A chain that is never satisfiable gets no second
-/// build. At most twice per slot. Deterministic: first in merge order wins,
-/// edges are walked in name order.
-///
-/// Availability here is slot-node name equality — a name-level
-/// approximation of the checker's `_Moment.gap`, which tests atom
-/// satisfaction (version, slot, sub-slot, USE). Known hole: a provider
-/// under the same `cp:slot` merged earlier satisfies this walk while the
-/// checker's `:=` atom can stay unsatisfied, so the duplicate inserted
-/// here is one the checker does not excuse. No pin: the unit model has
-/// no versions, and a plan-level pin would need a new stale-sub-slot
-/// fixture tree.
-pub(crate) fn close_usability_gaps(
+/// The build-time cycles of `edges`: strongly connected components over
+/// build-kind edges only (`build_mask`; an edge without kind information
+/// counts as build-time, as before), members in walk order, deterministic.
+/// Empty means every build need is serializable; non-empty is genuine: the
+/// plan-world report reads this, nothing else, and the checker fails it
+/// (charter 2a: a cycle no order satisfies is reported, never papered over
+/// by building a package twice).
+pub fn build_time_cycles(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
-    order: Vec<String>,
-    installed: &BTreeSet<String>,
-    rows: &BTreeSet<String>,
-) -> Vec<String> {
-    let ctx = Usability {
-        edges,
-        kinds,
-        installed,
-        rows,
-    };
-    let mut out = order;
-    loop {
-        let mut found: Option<(String, usize)> = None;
-        for (i, name) in out.iter().enumerate() {
-            if out.iter().filter(|n| *n == name).count() >= 2 {
-                continue;
-            }
-            if chain_unmet(name, i, &out, &ctx).is_none() {
-                continue;
-            }
-            if let Some(pos) =
-                ((i + 1)..=out.len()).find(|&o| chain_unmet(name, o, &out, &ctx).is_none())
+) -> Vec<Vec<String>> {
+    let mask = build_mask();
+    let mut nodes: BTreeSet<String> = BTreeSet::new();
+    let mut kids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (from, to) in edges {
+        nodes.insert(from.clone());
+        let mut kept: Vec<String> = Vec::new();
+        for t in to {
+            nodes.insert(t.clone());
+            if kinds
+                .get(&(from.clone(), t.clone()))
+                .is_none_or(|m| m & mask != 0)
             {
-                found = Some((name.clone(), pos));
-                break;
+                kept.push(t.clone());
             }
         }
-        let Some((name, pos)) = found else {
-            break;
-        };
-        out.insert(pos, name);
+        kids.insert(from.clone(), kept);
     }
-    out
-}
-
-/// `Some` chain (the merge itself first) when a build-time need of the
-/// merge of `node` at `pos` is not met there; `None` when its chain holds.
-/// Mirrors the checker's usability walk (`_Moment.gap`): a build need must
-/// be usable, i.e. every package in its `RDEPEND` closure is installed or
-/// merged before `pos`; the merge's own `RDEPEND` needs are satisfiable by
-/// the end and do not count. A cycle back to a node on the chain counts as
-/// usable. Like the checker, an unmet need counts only when its provider
-/// is a plan merge (a kept provider's unmet need was already broken before
-/// the plan) and only when the need can be met at all, by an installed
-/// package or a row; the rest is not fixable by building twice.
-fn chain_unmet(
-    node: &str,
-    pos: usize,
-    order: &[String],
-    ctx: &Usability<'_>,
-) -> Option<Vec<String>> {
-    let mut visiting = vec![node.to_string()];
-    for dep in build_deps(ctx.edges, ctx.kinds, node) {
-        if !is_available(dep, pos, order, ctx.installed) {
-            if !ctx.installed.contains(dep.as_str()) && !ctx.rows.contains(dep) {
-                continue;
-            }
-            let mut members = visiting.clone();
-            members.push(dep.clone());
-            return Some(members);
-        }
-        if let Some(members) = usable_unmet(dep, pos, order, ctx, &mut visiting) {
-            return Some(members);
-        }
-    }
-    None
-}
-
-/// `Some` chain when `provider` is not usable for a merge at `pos`.
-/// A need unmet by anything installed or merged is pre-existing breakage
-/// unless its provider is itself merged by the plan.
-fn usable_unmet(
-    provider: &str,
-    pos: usize,
-    order: &[String],
-    ctx: &Usability<'_>,
-    visiting: &mut Vec<String>,
-) -> Option<Vec<String>> {
-    let targets: Vec<&String> = ctx.edges.get(provider).map_or_else(Vec::new, |s| {
-        s.iter()
-            .filter(|dep| {
-                ctx.kinds
-                    .get(&(provider.to_string(), (*dep).clone()))
-                    .is_some_and(|mask| mask & build_mask() == 0)
-            })
-            .collect()
-    });
-    for dep in targets {
-        if !is_available(dep, pos, order, ctx.installed) {
-            // The plan builds `provider` itself, so an unmet need is the
-            // plan's gap to close; a kept provider's unmet need was already
-            // broken before the plan and is not ours to build twice for.
-            if !ctx.rows.contains(provider) {
-                continue;
-            }
-            return Some(visiting.clone());
-        }
-        if visiting.contains(dep) {
+    // Tarjan, iterative (the closure is deep): `at` is also the walk order,
+    // so popping a component root lists its members in walk order.
+    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut low: HashMap<String, usize> = HashMap::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut on_stack: HashSet<String> = HashSet::new();
+    let mut next = 0usize;
+    let mut cycles: Vec<Vec<String>> = Vec::new();
+    for root in &nodes {
+        if at.contains_key(root) {
             continue;
         }
-        visiting.push(dep.clone());
-        if let Some(members) = usable_unmet(dep, pos, order, ctx, visiting) {
-            return Some(members);
+        at.insert(root.clone(), next);
+        low.insert(root.clone(), next);
+        next += 1;
+        stack.push(root.clone());
+        on_stack.insert(root.clone());
+        let mut work: Vec<(String, usize)> = vec![(root.clone(), 0)];
+        while let Some((node, i)) = work.last_mut() {
+            let kid = kids.get(node.as_str()).and_then(|k| k.get(*i)).cloned();
+            if let Some(kid) = kid {
+                *i += 1;
+                if !at.contains_key(&kid) {
+                    at.insert(kid.clone(), next);
+                    low.insert(kid.clone(), next);
+                    next += 1;
+                    stack.push(kid.clone());
+                    on_stack.insert(kid.clone());
+                    work.push((kid, 0));
+                } else if on_stack.contains(&kid) {
+                    let low_node = low[node.as_str()].min(at[&kid]);
+                    low.insert(node.clone(), low_node);
+                }
+            } else {
+                let (node, _) = work.pop().expect("a node is being walked");
+                if let Some((parent, _)) = work.last() {
+                    let low_parent = low[parent.as_str()].min(low[node.as_str()]);
+                    low.insert(parent.clone(), low_parent);
+                }
+                if low[node.as_str()] == at[node.as_str()] {
+                    let mut members: Vec<String> = Vec::new();
+                    while let Some(top) = stack.pop() {
+                        on_stack.remove(&top);
+                        let done = top == node;
+                        members.push(top);
+                        if done {
+                            break;
+                        }
+                    }
+                    members.reverse();
+                    // A lone node is no cycle — unless it builds against
+                    // itself.
+                    if members.len() > 1
+                        || kids.get(node.as_str()).is_some_and(|k| k.contains(&node))
+                    {
+                        cycles.push(members);
+                    }
+                }
+            }
         }
-        visiting.pop();
     }
-    None
-}
-
-/// The build-time out-edges of `node`: `DEPEND`, `BDEPEND` or `IDEPEND`
-/// (an edge without kind information counts as build-time, as before).
-fn build_deps<'a>(
-    edges: &'a BTreeMap<String, BTreeSet<String>>,
-    kinds: &BTreeMap<(String, String), u8>,
-    node: &str,
-) -> Vec<&'a String> {
-    edges.get(node).map_or_else(Vec::new, |s| {
-        s.iter()
-            .filter(|dep| {
-                kinds
-                    .get(&(node.to_string(), (*dep).clone()))
-                    .is_none_or(|mask| mask & build_mask() != 0)
-            })
-            .collect()
-    })
-}
-
-/// Whether `node` is installed, or merged before `pos`.
-fn is_available(node: &str, pos: usize, order: &[String], installed: &BTreeSet<String>) -> bool {
-    installed.contains(node) || order[..pos].iter().any(|n| n == node)
+    cycles.sort();
+    cycles
 }
 
 #[cfg(test)]
@@ -591,7 +437,7 @@ mod tests {
         world
             .ordered(&Order::Depend)
             .iter()
-            .map(|r| r.slot.cp.clone())
+            .map(|s| s.cp.clone())
             .collect()
     }
 
@@ -627,18 +473,24 @@ mod tests {
         assert!(pos(&o, "b/lib:0") < pos(&o, "a/app:0"));
     }
 
-    /// Charter property 2a: a pure build-time cycle is broken by building
-    /// its consumer twice (changed on purpose: every node was listed once
-    /// before, backlog #745).
+    /// Charter property 2a (backlog #749): a pure build-time cycle has no
+    /// cuttable edge, so no cut is chosen for it — the walk orders it
+    /// implicitly (here `y` before `x`, the walk's name order) and
+    /// `build_time_cycles` reports the pair, which the checker fails.
+    /// Nothing is ever listed twice.
     #[test]
-    fn an_all_build_time_cycle_lists_the_consumer_twice() {
+    fn an_all_build_time_cycle_is_ordered_once_and_reported() {
         let g = graph(&[("a/x:0", &["a/y:0"]), ("a/y:0", &["a/x:0"])]);
         let kinds = kinds(&[
             ((("a/x:0"), ("a/y:0")), "BDEPEND"),
             ((("a/y:0"), ("a/x:0")), "BDEPEND"),
         ]);
         let o = depend_order(&g, &kinds);
-        assert_eq!(o, ["a/y:0", "a/x:0", "a/y:0"]);
+        assert_eq!(o, ["a/y:0", "a/x:0"]);
+        assert_eq!(
+            build_time_cycles(&g, &kinds),
+            [vec!["a/x:0".to_string(), "a/y:0".to_string()]]
+        );
     }
 
     #[test]
@@ -713,10 +565,10 @@ mod tests {
     /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): a
     /// kept `virtual/*` middle confers no build-time status, so with `prov`
     /// build-time-used the cycle's only cuttable edge is the virtual's own
-    /// provider edge — cut as the back edge, right after the `base <-> prov`
-    /// pair's charter-2a rebuild (`docs/evidence/02.751/`). Theoretical,
-    /// pinned, not proven safe: no live shape exhibits a consumer building
-    /// against a broken installed provider.
+    /// provider edge — cut as the back edge once the genuine `base <-> prov`
+    /// pair is left to the implicit walk (`docs/evidence/02.751/`).
+    /// Theoretical, pinned, not proven safe: no live shape exhibits a
+    /// consumer building against a broken installed provider.
     #[test]
     fn the_virtual_provider_edge_is_the_only_cuttable_edge() {
         let base = "dev-libs/w751base:0";
@@ -755,15 +607,18 @@ mod tests {
             &used,
             &(virt.to_string(), prov.to_string())
         ));
-        // The first cycle the walk meets is the `base <-> prov` pair, with
-        // no cuttable edge: the consumer is rebuilt ...
+        // The first cycle the walk meets is the genuine `base <-> prov`
+        // pair, with no cuttable edge: the cut loop leaves it alone (the
+        // walk orders it implicitly and the checker fails it — backlog
+        // #749: reported, never a second build) and cuts the remaining
+        // cycle at the virtual's provider edge instead — the back edge,
+        // and the only cuttable one. It is not a build-time cycle: the
+        // `prov -> base` half is `RDEPEND`, so the report reads nothing.
         assert_eq!(
             runtime_cut(&g, &kinds, &used),
-            Some(CycleCut::Rebuild(
-                prov.to_string(),
-                vec![base.to_string(), prov.to_string()]
-            ))
+            Some(CycleCut::BackEdge(virt.to_string(), prov.to_string()))
         );
+        assert!(build_time_cycles(&g, &kinds).is_empty());
         // ... and with that edge gone the remaining cycle cuts at the
         // virtual's provider edge — the back edge, and the only cuttable one.
         let mut rest = g.clone();
@@ -774,29 +629,10 @@ mod tests {
         );
     }
 
-    /// Charter property 2a: an all-build-time cycle has no cuttable
-    /// runtime-only edge, so the back-edge consumer is built twice, the
-    /// second build after the cycle's last member (backlog #745).
-    #[test]
-    fn a_build_time_cycle_is_broken_by_rebuilding_the_consumer_once() {
-        let prov = "dev-libs/w745prov:0";
-        let user = "dev-libs/w745user:0";
-        let virt = "dev-libs/w745virt:0";
-        let g = graph(&[(prov, &[user]), (user, &[virt]), (virt, &[prov])]);
-        let kinds = kinds(&[
-            ((prov, user), "BDEPEND"),
-            ((user, virt), "BDEPEND"),
-            ((virt, prov), "BDEPEND"),
-        ]);
-        let o = depend_order(&g, &kinds);
-        assert_eq!(o, [virt, user, prov, virt]);
-        assert_eq!(depend_order(&g, &kinds), o);
-    }
-
     /// Charter property 2: a cycle with a cuttable runtime-only edge is cut,
-    /// not rebuilt, so every node is still listed once (backlog #743).
+    /// so every node is still listed once (backlog #743).
     #[test]
-    fn a_cycle_with_a_cuttable_runtime_edge_needs_no_second_build() {
+    fn a_cycle_with_a_cuttable_runtime_edge_lists_each_node_once() {
         let prov = "dev-libs/w743prov:0";
         let zeb = "dev-libs/w743zeb:0";
         let virt = "dev-libs/w743virt:0";
@@ -819,38 +655,10 @@ mod tests {
         assert!(pos(&o, virt) < pos(&o, user), "{o:?}");
     }
 
-    /// Charter property 2a (backlog #745): the cut leaves an unmet
-    /// build-time need chain (`user` needs `virt` usable, `virt` needs
-    /// `prov` usable, `prov` needs `user`), so the consumer is built again
-    /// after the position where the closure becomes satisfied.
-    ///
-    /// The cut this closes is pinned, not inferred: on the mixed `R/B/R`
-    /// `w745` graph `depend_order` itself yields `[prov, virt, user]`.
-    #[test]
-    fn a_usability_gap_in_the_cut_order_gets_a_second_build() {
-        let prov = "dev-libs/w745prov:0";
-        let user = "dev-libs/w745user:0";
-        let virt = "dev-libs/w745virt:0";
-        let g = graph(&[(prov, &[user]), (user, &[virt]), (virt, &[prov])]);
-        let kinds = kinds(&[
-            ((prov, user), "RDEPEND"),
-            ((user, virt), "BDEPEND"),
-            ((virt, prov), "RDEPEND"),
-        ]);
-        let cut = vec![prov.to_string(), virt.to_string(), user.to_string()];
-        let rows: BTreeSet<String> = cut.iter().cloned().collect();
-        let closed = close_usability_gaps(&g, &kinds, cut, &BTreeSet::new(), &rows);
-        assert_eq!(closed, [prov, virt, user, user]);
-        assert_eq!(
-            close_usability_gaps(&g, &kinds, closed.clone(), &BTreeSet::new(), &rows),
-            closed
-        );
-    }
-
-    /// Charter property 2a (backlog #745): the middle link — `depend_order`
+    /// Charter property 2 (backlog #745): the middle link — `depend_order`
     /// on the mixed `R/B/R` `w745` graph yields the cut
-    /// `[prov, virt, user]` that the usability walk then closes, so the
-    /// red-without/green-with chain is pinned end to end.
+    /// `[prov, virt, user]`, which the literal checker passes with no
+    /// finding (every build atom is satisfied at start).
     #[test]
     fn the_mixed_cycle_cut_is_the_order_the_closure_walks() {
         let prov = "dev-libs/w745prov:0";
@@ -863,73 +671,5 @@ mod tests {
             ((virt, prov), "RDEPEND"),
         ]);
         assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
-    }
-
-    /// Charter property 2a (backlog #745): a disjunctive build need met by
-    /// one merged arm needs no second build. Disjunctions reach the walk
-    /// resolved — [`World::edges`](crate::World::edges) records the slots
-    /// the first pass followed — so only the chosen arm is an edge; an arm
-    /// nothing provides is not fixable by building twice and is skipped.
-    #[test]
-    fn a_disjunctive_build_need_met_by_one_arm_needs_no_second_build() {
-        let chosen = "dev-libs/w745a:0";
-        let missing = "dev-libs/w745b:0";
-        let user = "dev-libs/w745user:0";
-        let g = graph(&[(user, &[chosen, missing])]);
-        let kinds = kinds(&[((user, chosen), "BDEPEND"), ((user, missing), "BDEPEND")]);
-        let cut = vec![chosen.to_string(), user.to_string()];
-        let rows: BTreeSet<String> = cut.iter().cloned().collect();
-        assert_eq!(
-            close_usability_gaps(&g, &kinds, cut.clone(), &BTreeSet::new(), &rows),
-            cut
-        );
-    }
-
-    /// Charter property 2a (backlog #745): with the consumer installed the
-    /// closure is already satisfied, so the cut order stands as is.
-    #[test]
-    fn an_installed_consumer_needs_no_second_build() {
-        let prov = "dev-libs/w745prov:0";
-        let user = "dev-libs/w745user:0";
-        let virt = "dev-libs/w745virt:0";
-        let g = graph(&[(prov, &[user]), (user, &[virt]), (virt, &[prov])]);
-        let kinds = kinds(&[
-            ((prov, user), "RDEPEND"),
-            ((user, virt), "BDEPEND"),
-            ((virt, prov), "RDEPEND"),
-        ]);
-        let cut = vec![prov.to_string(), virt.to_string(), user.to_string()];
-        let installed = BTreeSet::from([user.to_string()]);
-        let rows: BTreeSet<String> = cut.iter().cloned().collect();
-        assert_eq!(
-            close_usability_gaps(&g, &kinds, cut.clone(), &installed, &rows),
-            cut
-        );
-    }
-
-    /// Charter property 2a (backlog #745): at most twice per slot — a node
-    /// the cut already duplicated is not duplicated again.
-    #[test]
-    fn a_second_build_is_never_a_third_build() {
-        let prov = "dev-libs/w745prov:0";
-        let user = "dev-libs/w745user:0";
-        let virt = "dev-libs/w745virt:0";
-        let g = graph(&[(prov, &[user]), (user, &[virt]), (virt, &[prov])]);
-        let kinds = kinds(&[
-            ((prov, user), "RDEPEND"),
-            ((user, virt), "BDEPEND"),
-            ((virt, prov), "RDEPEND"),
-        ]);
-        let cut = vec![
-            prov.to_string(),
-            virt.to_string(),
-            user.to_string(),
-            user.to_string(),
-        ];
-        let rows: BTreeSet<String> = cut.iter().cloned().collect();
-        assert_eq!(
-            close_usability_gaps(&g, &kinds, cut.clone(), &BTreeSet::new(), &rows),
-            cut
-        );
     }
 }

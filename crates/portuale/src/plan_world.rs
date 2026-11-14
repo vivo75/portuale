@@ -10,12 +10,13 @@
 //! resolver's own order for the same rows. `--sort depend` puts a package
 //! after what it needs before it is merged or usable: a runtime edge out of
 //! a package the plan builds with still orders (PMS 8.1, backlog #746), and
-//! a cycle with no such edge is broken by building its consumer twice
-//! (charter 2a, backlog #745); a `PDEPEND` orders nothing (PMS).
+//! a cycle with no cuttable edge is reported, never built twice
+//! (charter 2a, backlog #749); a `PDEPEND` orders nothing (PMS). One row
+//! per slot, always: no slot is ever listed twice.
 
 use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
-use portage_world::{Change, Order, Pass, Row, SlotSet, World};
+use portage_world::{Change, Order, SlotSet, World};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -65,41 +66,39 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         _ => Order::Alpha,
     };
     let rows = world.ordered(&order);
+    // Charter 2a (backlog #749): a build-time cycle no order satisfies is
+    // reported, never papered over by building a package twice. The single
+    // rows above are still printed and the exit stays 0: the failure
+    // surfaces here plus the checker's own `build-order` on the `--json`
+    // plan, which is the gate (rc 0 plus that independent finding — no
+    // pointer rides `--json` by design).
+    for cycle in portage_world::build_time_cycles(&world.edges, &world.edge_kinds) {
+        let mut chain = cycle.to_vec();
+        if let Some(first) = cycle.first() {
+            chain.push(first.clone());
+        }
+        eprintln!(
+            "plan-world: build cycle with no serial order: {} (breakable only by a bootstrap variant with reduced USE; see backlog #753)",
+            chain.join(" -> ")
+        );
+    }
     if matches.get_flag("json") {
         println!("{}", plan_json(&world, &rows, &root));
     } else {
-        for entry in &rows {
-            println!("{}", row(&world, entry.slot));
+        for slot in &rows {
+            println!("{}", row(&world, slot));
         }
     }
     let mut slots: BTreeSet<String> = BTreeSet::new();
-    let mut rebuilt: BTreeSet<String> = BTreeSet::new();
-    for entry in &rows {
-        let node = entry.slot.node();
-        slots.insert(node.clone());
-        if entry.pass == Pass::Rebuild {
-            rebuilt.insert(node);
-        }
+    for slot in &rows {
+        slots.insert(slot.node());
     }
     let unread = match world.unreadable.len() {
         0 => String::new(),
         n => format!(", {n} not read"),
     };
-    let twice = if rebuilt.is_empty() {
-        String::new()
-    } else {
-        let slots = if rebuilt.len() == 1 {
-            "1 slot".to_string()
-        } else {
-            format!("{} slots", rebuilt.len())
-        };
-        format!(
-            ", {slots} built twice: {}",
-            rebuilt.into_iter().collect::<Vec<_>>().join(", ")
-        )
-    };
     eprintln!(
-        "plan-world: {} to install, order {sort}{unread}{twice}",
+        "plan-world: {} to install, order {sort}{unread}",
         slots.len()
     );
     eprintln!("{}", not_checked(mode, opts.newuse));
@@ -159,11 +158,11 @@ fn not_checked(mode: Mode, newuse: bool) -> String {
 /// health checker reads: the rows as `entries` in order, and every
 /// installed package they do not replace as `kept` (the checker reads their
 /// dependencies from the VDB).
-fn plan_json(world: &World, rows: &[Row], root: &Path) -> String {
+fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
     let entries: Vec<String> = rows
         .iter()
         .enumerate()
-        .filter_map(|(order, row)| entry_json(world, row.slot, order, row.pass))
+        .filter_map(|(order, slot)| entry_json(world, slot, order))
         .collect();
     let kept: Vec<String> = world
         .kept_installed(root)
@@ -209,10 +208,9 @@ fn plan_json(world: &World, rows: &[Row], root: &Path) -> String {
 }
 
 /// One `entries` object of [`plan_json`]; `None` for a slot with no chosen
-/// version (it has no row either). A [`Pass::Rebuild`] entry carries
-/// `built_twice` and no `from_version`: it builds the same version again to
-/// break a cycle (charter 2a), it does not replace an installed one.
-fn entry_json(world: &World, slot: &SlotSet, order: usize, pass: Pass) -> Option<String> {
+/// version (it has no row either). One entry per row, in row order; a
+/// rebuilt slot is one row like any other.
+fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
     let chosen = slot.chosen()?;
     let (category, package) = slot.cp.split_once('/')?;
     let (outcome, from) = match (world.change(slot)?, slot.installed.as_deref()) {
@@ -231,9 +229,7 @@ fn entry_json(world: &World, slot: &SlotSet, order: usize, pass: Pass) -> Option
         format!("\"merge_order\":{order}"),
         "\"source\":\"ebuild\"".to_string(),
     ];
-    if pass == Pass::Rebuild {
-        fields.push("\"built_twice\":2".to_string());
-    } else if let Some(from) = from {
+    if let Some(from) = from {
         fields.push(format!("\"from_version\":{}", q(from)));
     }
     let pf = format!("{package}-{}", chosen.version);
@@ -695,74 +691,69 @@ mod tests {
         );
     }
 
-    /// Charter property 2a (backlog #745): a cycle with no cuttable runtime
-    /// edge is broken by building its consumer twice: one slot, two rows, and
-    /// only the second `--json` entry carries `built_twice`.
+    /// Charter property 2a (backlog #749): a genuine build-time cycle is
+    /// ordered once per slot and reported, never built twice. The owner's
+    /// USE-conditional pair — `pkgnew` builds with `otherpkg[useblah]`
+    /// under `usefoo`, `otherpkg` builds with `pkgnew[use3]` under
+    /// `useboh`, both flags default-on — so both conditional arms hold
+    /// through the testkit seam: single rows, rc 0, and the exact report
+    /// line on stderr. The failure the checker reports on the same
+    /// `--json` plan is the gate's other half (pinned in pmtest:
+    /// `test_use_conditional_build_cycle_fails`).
     #[test]
-    fn an_all_build_time_cycle_gets_a_second_row() {
-        fn two_cycle_tree(root: &Path) {
+    fn a_genuine_build_cycle_orders_each_slot_once_and_is_reported() {
+        fn genuine_cycle_tree(root: &Path) {
             add_ebuild(
                 root,
-                "dev-libs/w745a-1",
+                "dev-libs/w749pkgnew-1",
                 "0",
-                &[("BDEPEND", "dev-libs/w745b")],
+                &[
+                    ("IUSE", "+usefoo +use3"),
+                    ("BDEPEND", "usefoo? ( dev-libs/w749otherpkg[useblah] )"),
+                ],
             );
             add_ebuild(
                 root,
-                "dev-libs/w745b-1",
+                "dev-libs/w749otherpkg-1",
                 "0",
-                &[("BDEPEND", "dev-libs/w745a")],
+                &[
+                    ("IUSE", "+useboh +useblah"),
+                    ("BDEPEND", "useboh? ( dev-libs/w749pkgnew[use3] )"),
+                ],
             );
         }
-        let world = ["dev-libs/w745a", "dev-libs/w745b"];
-        let (rc, out) = run_on_copy(
+        let world = ["dev-libs/w749pkgnew", "dev-libs/w749otherpkg"];
+        let (rc, out, err) = run_on_copy_with_stderr(
             &["--plan-world", "--sort", "depend"],
             &world,
             &[],
             "",
-            two_cycle_tree,
+            genuine_cycle_tree,
         );
-        assert_eq!(rc, 0, "{out}");
-        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w745")).collect();
+        assert_eq!(rc, 0, "{out}\n{err}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w749")).collect();
         assert_eq!(
             rows,
             [
-                "[ebuild  N     ] dev-libs/w745b-1:0",
-                "[ebuild  N     ] dev-libs/w745a-1:0",
-                "[ebuild  N     ] dev-libs/w745b-1:0",
+                "[ebuild  N     ] dev-libs/w749pkgnew-1:0",
+                "[ebuild  N     ] dev-libs/w749otherpkg-1:0",
             ],
             "{out}"
         );
-        let (tmp, rc, out, _) = run_on_copy_keeping_tree(
-            &["--plan-world", "--json", "--sort", "depend"],
-            &world,
-            &[],
-            "",
-            two_cycle_tree,
-        );
-        assert_eq!(rc, 0, "{out}");
-        let plan = tmp.path().join("plan.json");
-        std::fs::write(&plan, out.trim()).expect("plan file");
-        let text = std::fs::read_to_string(&plan).expect("plan file");
-        let second = text.match_indices("\"package\":\"w745b\"").count();
-        assert_eq!(second, 2, "{text}");
-        assert_eq!(text.match_indices("\"built_twice\":2").count(), 1, "{text}");
-        let checker = health_checker();
-        assert_no_build_order(
-            checker.to_str().expect("checker path"),
-            &tmp.path().join("root/var/db/pkg"),
-            &plan,
+        assert!(
+            err.contains("plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753)"),
+            "{err}"
         );
     }
 
-    /// Charter property 2a (backlog #745): the cut leaves a build-time
-    /// need chain unmet (`user` at #2 needs `virt` usable, which needs
-    /// `prov` usable, which needs `user`), so the consumer is built again
-    /// right after the cycle closes: `[prov, virt, user, user]`. The
-    /// checker notes the first build's need and reports nothing else.
+    /// Charter property 2 (backlog #749): the mixed `R/B/R` #745 shape is a
+    /// runtime-closed cycle, not a genuine build-time one — every build
+    /// atom is satisfied at start, so one row per slot and no finding at
+    /// all. No report line either: the `prov -> base` half is `RDEPEND`,
+    /// so the report reads nothing here.
     #[test]
-    fn a_usability_closure_left_open_by_the_cut_gets_a_second_build() {
-        fn unserializable_cycle_tree(root: &Path) {
+    fn a_runtime_cycle_needs_no_second_build() {
+        fn runtime_cycle_tree(root: &Path) {
             add_ebuild(
                 root,
                 "dev-libs/w745prov-1",
@@ -787,14 +778,14 @@ mod tests {
             "dev-libs/w745virt",
             "dev-libs/w745user",
         ];
-        let (rc, out) = run_on_copy(
+        let (rc, out, err) = run_on_copy_with_stderr(
             &["--plan-world", "--sort", "depend"],
             &world,
             &[],
             "",
-            unserializable_cycle_tree,
+            runtime_cycle_tree,
         );
-        assert_eq!(rc, 0, "{out}");
+        assert_eq!(rc, 0, "{out}\n{err}");
         let rows: Vec<&str> = out.lines().filter(|l| l.contains("w745")).collect();
         assert_eq!(
             rows,
@@ -802,44 +793,48 @@ mod tests {
                 "[ebuild  N     ] dev-libs/w745prov-1:0",
                 "[ebuild  N     ] dev-libs/w745virt-1:0",
                 "[ebuild  N     ] dev-libs/w745user-1:0",
-                "[ebuild  N     ] dev-libs/w745user-1:0",
             ],
             "{out}"
         );
+        assert!(!err.contains("build cycle"), "{err}");
         let (tmp, rc, out, _) = run_on_copy_keeping_tree(
             &["--plan-world", "--json", "--sort", "depend"],
             &world,
             &[],
             "",
-            unserializable_cycle_tree,
+            runtime_cycle_tree,
         );
         assert_eq!(rc, 0, "{out}");
         let plan = tmp.path().join("plan.json");
         std::fs::write(&plan, out.trim()).expect("plan file");
         let text = std::fs::read_to_string(&plan).expect("plan file");
         assert_eq!(
-            text.match_indices("\"package\":\"w745user\"").count(),
-            2,
+            text.match_indices("\"package\":\"w745prov\"").count(),
+            1,
             "{text}"
         );
-        assert_eq!(text.match_indices("\"built_twice\":2").count(), 1, "{text}");
+        assert_eq!(
+            text.match_indices("\"package\":\"w745virt\"").count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(
+            text.match_indices("\"package\":\"w745user\"").count(),
+            1,
+            "{text}"
+        );
+        assert!(!text.contains("\"built_twice\""), "{text}");
         let checker = health_checker();
         let report = assert_no_build_order(
             checker.to_str().expect("checker path"),
             &tmp.path().join("root/var/db/pkg"),
             &plan,
         );
-        assert_eq!(
-            report
-                .match_indices("\"property\": \"cycle-noted\"")
-                .count(),
-            1,
-            "{report}"
-        );
-        assert!(
-            report.contains("\"package\": \"dev-libs/w745user-1\""),
-            "{report}"
-        );
+        // No finding the plan introduces (that is `assert_no_build_order`),
+        // and no note either: the `cycle-noted` excuse is gone with the
+        // strictness that needed it (the `pre_existing` rows are the
+        // fixtures' own broken installed tree, not this plan).
+        assert!(!report.contains("cycle-noted"), "{report}");
     }
 
     /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): the
@@ -848,9 +843,10 @@ mod tests {
     /// `w751base-2` with `BDEPEND w751prov` (so the virtual's provider
     /// edge is the cycle's only cut), consumer `w751user-1` with
     /// `BDEPEND virtual/w751virt`. The rows keep today's cut and order —
-    /// `prov` twice (charter-2a breaker for the `base <-> prov` pair),
-    /// `user` twice (usability closure), the virtual never a merge —
-    /// and the checker reports no `build-order`. Limitation: a kept
+    /// one row per slot (backlog #749: the `prov`/`user` duplicates are
+    /// gone), the virtual never a merge — and the checker reports no
+    /// `build-order`. No report line either: the `base <-> prov` pair is
+    /// runtime-closed, not a build-time cycle. Limitation: a kept
     /// virtual's stale provider rebuilds after the consumer that builds
     /// with it, yet nothing exhibits a consumer building against a
     /// broken copy (here the installed copy is still usable at the
@@ -910,10 +906,8 @@ mod tests {
             rows,
             [
                 "[ebuild  N     ] dev-libs/w751user-1:0",
-                "[ebuild  N     ] dev-libs/w751user-1:0",
                 "[ebuild     U  ] dev-libs/w751prov-2:0 [1]",
                 "[ebuild     U  ] dev-libs/w751base-2:0 [1]",
-                "[ebuild     U  ] dev-libs/w751prov-2:0 [1]",
             ],
             "{out}"
         );
@@ -928,19 +922,19 @@ mod tests {
         let plan = tmp.path().join("plan.json");
         std::fs::write(&plan, out.trim()).expect("plan file");
         let text = std::fs::read_to_string(&plan).expect("plan file");
-        // Both duplicates are by design, and locked in place: one second
-        // build each for `prov` and `user`, and the virtual never a merge.
+        // One row per slot, locked in place: `prov` and `user` single,
+        // the virtual never a merge, and no second-build key anywhere.
         assert_eq!(
             text.match_indices("\"package\":\"w751prov\"").count(),
-            2,
+            1,
             "{text}"
         );
         assert_eq!(
             text.match_indices("\"package\":\"w751user\"").count(),
-            2,
+            1,
             "{text}"
         );
-        assert_eq!(text.match_indices("\"built_twice\":2").count(), 2, "{text}");
+        assert!(!text.contains("\"built_twice\""), "{text}");
         assert_eq!(
             text.match_indices("\"package\":\"w751virt\"").count(),
             1,

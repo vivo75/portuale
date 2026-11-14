@@ -44,19 +44,15 @@ checked by a program:
    package that needs them to build; runtime dependencies are present by the
    end.
    2a. **Cycles are not forbidden.** Some dependency loops cannot be
-   serialized (A needs B and B needs A, or longer loops). We drop the
-   self-imposed limit that a package is built only once: breaking such a
-   loop by building a package twice is allowed, as long as the final state
-   meets every property here. `mrg --plan-world --sort depend` does this:
-   it cuts a cycle at a runtime-only edge that carries no build-time need,
-   and where every runtime edge carries one it builds the back-edge's
-   consumer a second time, right after the cycle. It also verifies the cut
-   result with a usability closure and builds the first package whose
-   build-time need chain stays unmet a second time, after the closure
-   becomes satisfied. The health checker
-   excuses the need the first build missed when the identical package is
-   merged again later (`cycle-noted`), and still fails a slot that would
-   hold two different versions.
+   serialized (A needs B and B needs A, or longer loops). The ordering
+   rule above applies literally: a build dependency must be installed
+   before the package that needs it to build; a runtime dependency
+   need only be present by the end. A cycle no order satisfies must
+   be reported, not papered over — never by building a package twice
+   with an identical environment. The one rebuild this project
+   recognises is the bootstrap: a first build with a reduced USE
+   whose result the plan discards, and a last build with the declared
+   USE (see backlog #753).
 3. **Packages are as new as possible.** Each package ends at the best
    visible version that fits the constraints of all the others.
 4. **Removal does not break running programs.** The user may remove a package

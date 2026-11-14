@@ -8,7 +8,10 @@
   (deterministic run to run). A cycle is cut at the first runtime-only edge
   in cycle order from the ancestor the back edge points at; only when the
   cycle has no runtime-only edge at all (or the back edge is its only one) is
-  the back edge cut, as before. Cutting a runtime edge keeps every
+  the back edge cut, as before. A cycle with no cuttable edge is genuine:
+  no cut is chosen, the walk orders it implicitly, and `build_time_cycles`
+  reports it for the checker to fail (backlog #749: reported, never a
+  second build). Cutting a runtime edge keeps every
   build-time edge, so a build dependency is still merged before the package
   needing it (PMS `dependencies.tex`, `sec:dependency-classes`); a runtime
   dependency only needs its target merged by the end (charter property 2, and
@@ -31,12 +34,10 @@
   the shape (the consumer lands after the provider in the miniature).
 - Fixture caveat recorded: with the cycle closed directly through the
   consumer (`prov -RDEPEND-> user`, plan's literal fixture (b)) the three form
-  a genuinely unserializable cycle (no static order satisfies the checker's
-  strict usability model; that needs a rebuild-twice, charter property 2a,
-  not implemented): pre-fix `cycle-noted`, post-fix one strict-model
-  `build-order` failure naming the cut runtime edge's own need. The fix still
-  produces the best static order (provider first, every build edge kept); the
-  residual is checker strictness on a true cycle, not a missed edge.
+  a runtime-closed cycle, not an unserializable one: the literal checker
+  passes it with zero findings (backlog #749 — the strict usability model
+  that failed it is gone). The fix still produces the best static order
+  (provider first, every build edge kept).
 - `World::edge_kinds` already holds the `*DEPEND` bits behind each edge, so
   the cut needs no second resolution pass. `build_mask` covers
   `DEPEND`/`BDEPEND`/`IDEPEND`; an edge without kind information (unit tests
@@ -68,12 +69,12 @@
   the whole perl rebuild cluster past the `perl-5.44` upgrade the rebuilds
   are for (10 new `build-order` findings on a 176-row bed plan). The known
   hole (and the real fix) is filed as #751.
-- Pinned theoretical 2026-11-14 (plan `02.751-kept-virtual-cut` §6-A,
+- Pinned 2026-11-14 (plan `02.751-kept-virtual-cut` §6-A,
   evidence `docs/evidence/02.751/`): on the amended R/B/R probe (kept
   `virtual/*` middle, `base BDEPEND prov` so `prov` is build-time-used,
-  stale-provider rebuild) the cut is `Rebuild prov` then
-  `BackEdge(virt, prov)` — the exclusion routing the cut — with rows
-  `[user, user, prov, base, prov]` and a checker verdict of zero
+  stale-provider rebuild) the cut lands on the virtual's provider edge
+  (`BackEdge(virt, prov)`) — the exclusion routing the cut — with rows
+  `[user-1 N, prov-2 U, base-2 U]` and a checker verdict of zero
   non-`pre_existing` failures and zero notes on both the `virtual/` and
   the `dev-libs/`-middle variants. The consumer builds while the
   installed provider copy is still usable, so the broken-at-build-time
@@ -81,62 +82,55 @@
 - Three outcomes per cycle (`CycleCut`): cut the first cuttable runtime edge;
   cut the closing back edge itself when only it is cuttable, and keep
   scanning (stopping there left every later cycle to the walk below, whose
-  implicit cuts follow no rule — same #746 perl-cluster symptom); or, when
-  nothing is cuttable, rebuild the back-edge consumer a second time
-  (charter 2a).
-- The breaker loop schedules the first cycle's consumer, removes its back
-  edge and repeats until the graph is acyclic; a node is scheduled at most
-  once (charter 2a builds twice, not more), and its second copy lands after
-  the last member across all its cycles. Termination: every iteration
-  removes one edge. Determinism: name-order walk, sorted member sets, no
-  hash iteration in any choice.
+  implicit cuts follow no rule — same #746 perl-cluster symptom); when
+  nothing is cuttable the cycle is genuine: no cut is chosen (backlog #749),
+  the walk orders it implicitly, and `build_time_cycles` reports it for
+  the checker to fail. Deleted 2026-11-14 (plan `02.749-resolver-2a`):
+  the `CycleCut::Rebuild` third outcome and the breaker loop that built
+  the back-edge consumer twice — the owner ruled the second build illegal
+  (charter property 2 literal), so the duplicate and the strict usability
+  closure went with it; the cut rule above is unchanged.
 
-## fn close_usability_gaps (#745, phase 2)
+## fn close_usability_gaps (#745, phase 2) — deleted 2026-11-14
 
-- After the cut order (with §2.2 breakers) exists, walk it in merge order
-  and duplicate the first package whose build-time need chain is unmet,
-  at the first later position where the closure becomes satisfied; repeat.
-  At most twice per node (a repeat consumer only widens the member set),
-  so the loop terminates. Deterministic: first in merge order wins, edges
-  in name order, positions are the first satisfied ones.
-- `chain_unmet`/`usable_unmet` mirror the checker's `_Moment.gap`: only
-  `DEPEND`/`BDEPEND`/`IDEPEND` out-edges constrain (a package's own
-  `RDEPEND` needs are satisfiable by the end); usability means every
-  package in the `RDEPEND` closure is installed or merged before the
-  position; an in-progress node counts as usable (same cycle guard as the
-  checker); an unmet need counts only when its provider is itself merged
-  (a kept provider's unmet need was already broken before the plan) and
-  only when the need can be met at all (installed or a row). The
-  `installed` set comes from `World.slots` (`installed.is_some()`); the
-  `rows` set decides the provider test and caps the duplicates.
-- `ordered()` filters the cut order to changed rows first, then runs the
-  closure walk on rows only, and maps names to `Row { slot, pass }` by
-  occurrence count — so breaker and usability duplicates share the
-  `built_twice` machinery without a second code path.
-- Availability is slot-node name equality: a name-level approximation of
-  `_Moment.gap`, not atom satisfaction. Known hole (no pin — the unit
-  model has no versions): a same-`cp:slot` provider merged earlier can
-  satisfy the walk while the checker's `:=` atom stays unsatisfied, so the
-  inserted duplicate is one the checker does not excuse.
-- Pins: `the_mixed_cycle_cut_is_the_order_the_closure_walks`
-  (`depend_order` on the mixed `R/B/R` graph is `[prov, virt, user]`, the
-  walk's input); `a_disjunctive_build_need_met_by_one_arm_needs_no_second_build`
-  (disjunctions arrive resolved — `World.edges` records followed slots,
-  `lib.rs:503` — one merged arm satisfies, an unprovidable arm is skipped).
+- Plan `02.749-resolver-2a`: the owner ruled the positional duplicate
+  illegal (charter property 2 literal — a build dep must be installed,
+  its runtime deps only present by the end), so the whole closure walk
+  went with it: `close_usability_gaps`, `struct Usability`, `chain_unmet`,
+  `usable_unmet`, `build_deps`, `is_available` (former `order.rs:391–547`),
+  the `CycleCut::Rebuild` outcome, the `second`/`members_of` insertion
+  loop, and `struct Row` + `enum Pass` with the `built_twice` machinery
+  (`plan_world.rs` entry/JSON/summary: `Row { slot, pass }`, `Pass::First`
+  vs `Pass::Rebuild`, `Pass::Rebuild` carrying `"built_twice": 2` and no
+  `from_version`). What it did (history): after the
+  cut order existed it walked it in merge order and duplicated the first
+  package whose build-time need chain stayed unmet, at the first later
+  position where the closure held (mirroring the checker's `_Moment.gap`);
+  availability was slot-node name equality, a name-level approximation of
+  atom satisfaction, with the known `:=` hole (a same-`cp:slot` provider
+  merged earlier satisfied the walk while the checker's atom stayed
+  unsatisfied). Disjunctions still reach the walk resolved — `World::edges`
+  records the slots the first pass followed — so only the chosen arm is an
+  edge. The checker side went the same day: `_unusable`,
+  `_second_build`, `_Moment`/`gap`, `_components`/Tarjan, the
+  same-component excuse, the identical-cpv collapse. The genuine cycle
+  still fails — the same-component excuse went with the deletion, so a
+  runtime back-edge never turns a merge-it-first case into a "cycle"
+  (`reaches` runs on the build-only `_build_graph`).
 
 ## fn depend_order (#745, #746)
 
-- Returns the node names with each breaker twice: the walk itself
-  (`unordered`) still lists every node once (its `done` set keeps the
-  traversal acyclic); the second copy is inserted afterwards, after the last
-  cycle member. Only `Order::Depend` produces the pair: `alpha` and
-  `resolver` print each slot once with `Pass::First`.
+- Returns the node names, each once: the walk itself (`unordered`) lists
+  every node once (its `done` set keeps the traversal acyclic), and since
+  2026-11-14 (plan `02.749-resolver-2a`) no second copy is ever inserted —
+  a slot is never listed twice (the `Row`/`Pass` pair went with the
+  deletion; `alpha`, `depend` and `resolver` all print each slot once).
 - Bed effect (live-verified, fixed image, seeded `@world` as in
   `l0-health.sh`): the automake finding is gone (`Locale-gettext` #24
   before `automake` #25, `perl-5.44` stays early at #3) and the plan is fully
-  checker-clean (0 findings, 0 failures with the container VDB), with 15
-  second builds of the same version where the walk genuinely finds no
-  cuttable edge (the python toolchain and C library rebuild clusters).
+  checker-clean (0 findings, 0 failures with the container VDB). A cycle
+  with no cuttable edge is ordered implicitly and reported for the
+  checker to fail, not built twice (the S3 beds re-verify the counts).
 - `ordering_edges` drops `PDEPEND`-only edges (PMS: a post dependency imposes
   no order); `depend_order` serializes the rest depth-first in name order
   (deterministic run to run). A cycle is cut at the first runtime-only edge
@@ -165,12 +159,10 @@
   the shape (the consumer lands after the provider in the miniature).
 - Fixture caveat recorded: with the cycle closed directly through the
   consumer (`prov -RDEPEND-> user`, plan's literal fixture (b)) the three form
-  a genuinely unserializable cycle (no static order satisfies the checker's
-  strict usability model; that needs a rebuild-twice, charter property 2a,
-  not implemented): pre-fix `cycle-noted`, post-fix one strict-model
-  `build-order` failure naming the cut runtime edge's own need. The fix still
-  produces the best static order (provider first, every build edge kept); the
-  residual is checker strictness on a true cycle, not a missed edge.
+  a runtime-closed cycle, not an unserializable one: the literal checker
+  passes it with zero findings (backlog #749 — the strict usability model
+  that failed it is gone). The fix still produces the best static order
+  (provider first, every build edge kept).
 - `World::edge_kinds` already holds the `*DEPEND` bits behind each edge, so
   the cut needs no second resolution pass. `build_mask` covers
   `DEPEND`/`BDEPEND`/`IDEPEND`; an edge without kind information (unit tests

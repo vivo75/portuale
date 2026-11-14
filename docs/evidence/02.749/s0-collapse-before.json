@@ -1,0 +1,1 @@
+{"findings": [{"atom": "", "failure": false, "package": "", "pre_existing": false, "property": "checker-limitation", "reason": "property 3 needs the VDB and `-v --json`"}], "plan": "/tmp/opencode/p749/s0d_identical.json", "refused": "", "seconds": 0.0}

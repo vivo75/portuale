@@ -497,8 +497,8 @@ mod tests {
         assert_eq!(rows.len(), reached);
         let kept = rows
             .iter()
-            .find(|r| r.slot.cp == "dev-libs/newpkg")
-            .map(|r| &r.slot)
+            .find(|s| s.cp == "dev-libs/newpkg")
+            .copied()
             .unwrap();
         assert_eq!(world.change(kept), Some(crate::Change::Rebuild));
     }

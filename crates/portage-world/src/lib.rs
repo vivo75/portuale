@@ -85,7 +85,7 @@ pub(crate) mod testkit {
     }
 }
 
-pub use order::{Order, Pass, Row};
+pub use order::{Order, build_time_cycles};
 pub use rebuild::RefusedBinding;
 pub use reorder::{Change, SlotSet};
 
