@@ -567,8 +567,9 @@ mod tests {
     /// No `build-order` failure in the checker's verdict on the `--json` plan
     /// `out`, read with the VDB at `vdb`: no finding the plan introduces
     /// (a finding already true of the installed tree is `pre-existing` and
-    /// not the plan's fault, as in pmtest `test_plan_world.py`).
-    fn assert_no_build_order(checker_out: &str, vdb: &Path, plan: &Path) {
+    /// not the plan's fault, as in pmtest `test_plan_world.py`). Returns the
+    /// verdict for tests that also count its notes.
+    fn assert_no_build_order(checker_out: &str, vdb: &Path, plan: &Path) -> String {
         let result = std::process::Command::new("python3")
             .arg(checker_out)
             .arg("--vdb")
@@ -597,6 +598,7 @@ mod tests {
             plan.display(),
             String::from_utf8_lossy(&check.stdout)
         );
+        report.into_owned()
     }
 
     /// The #746 shape: `w746auto` builds with the kept `w746help`, whose
@@ -750,6 +752,93 @@ mod tests {
             checker.to_str().expect("checker path"),
             &tmp.path().join("root/var/db/pkg"),
             &plan,
+        );
+    }
+
+    /// Charter property 2a (backlog #745): the cut leaves a build-time
+    /// need chain unmet (`user` at #2 needs `virt` usable, which needs
+    /// `prov` usable, which needs `user`), so the consumer is built again
+    /// right after the cycle closes: `[prov, virt, user, user]`. The
+    /// checker notes the first build's need and reports nothing else.
+    #[test]
+    fn a_usability_closure_left_open_by_the_cut_gets_a_second_build() {
+        fn unserializable_cycle_tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w745prov-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w745user")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w745user-1",
+                "0",
+                &[("BDEPEND", "dev-libs/w745virt")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w745virt-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w745prov")],
+            );
+        }
+        let world = [
+            "dev-libs/w745prov",
+            "dev-libs/w745virt",
+            "dev-libs/w745user",
+        ];
+        let (rc, out) = run_on_copy(
+            &["--plan-world", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            unserializable_cycle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w745")).collect();
+        assert_eq!(
+            rows,
+            [
+                "[ebuild  N     ] dev-libs/w745prov-1:0",
+                "[ebuild  N     ] dev-libs/w745virt-1:0",
+                "[ebuild  N     ] dev-libs/w745user-1:0",
+                "[ebuild  N     ] dev-libs/w745user-1:0",
+            ],
+            "{out}"
+        );
+        let (tmp, rc, out, _) = run_on_copy_keeping_tree(
+            &["--plan-world", "--json", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            unserializable_cycle_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let plan = tmp.path().join("plan.json");
+        std::fs::write(&plan, out.trim()).expect("plan file");
+        let text = std::fs::read_to_string(&plan).expect("plan file");
+        assert_eq!(
+            text.match_indices("\"package\":\"w745user\"").count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(text.match_indices("\"built_twice\":2").count(), 1, "{text}");
+        let checker = health_checker();
+        let report = assert_no_build_order(
+            checker.to_str().expect("checker path"),
+            &tmp.path().join("root/var/db/pkg"),
+            &plan,
+        );
+        assert_eq!(
+            report
+                .match_indices("\"property\": \"cycle-noted\"")
+                .count(),
+            1,
+            "{report}"
+        );
+        assert!(
+            report.contains("\"package\": \"dev-libs/w745user-1\""),
+            "{report}"
         );
     }
 

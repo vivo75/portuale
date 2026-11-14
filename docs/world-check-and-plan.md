@@ -105,9 +105,11 @@ before it is built or usable (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); a
 runtime-only edge out of a package the plan builds with still orders, because
 a build tool must be usable (PMS 8.1); a `PDEPEND` orders nothing, as the PMS
 says (`dependencies.tex`). A cycle with no such edge is broken by building
-its consumer twice: the slot gets a second row, and only the second `--json`
-entry carries `built_twice: 2` (no `from_version`, it is the same version
-built again). `resolver` runs
+its consumer twice, and so is a cut that leaves a build-time need chain
+unmet: the first package whose closure stays unmet is built again after
+the closure becomes satisfied (charter 2a). The slot gets a second row,
+and only the second `--json` entry carries `built_twice: 2` (no
+`from_version`, it is the same version built again). `resolver` runs
 `emerge --pretend` as a child process and uses its order, which takes seconds
 to a minute.
 

@@ -81,6 +81,29 @@
   removes one edge. Determinism: name-order walk, sorted member sets, no
   hash iteration in any choice.
 
+## fn close_usability_gaps (#745, phase 2)
+
+- After the cut order (with §2.2 breakers) exists, walk it in merge order
+  and duplicate the first package whose build-time need chain is unmet,
+  at the first later position where the closure becomes satisfied; repeat.
+  At most twice per node (a repeat consumer only widens the member set),
+  so the loop terminates. Deterministic: first in merge order wins, edges
+  in name order, positions are the first satisfied ones.
+- `chain_unmet`/`usable_unmet` mirror the checker's `_Moment.gap`: only
+  `DEPEND`/`BDEPEND`/`IDEPEND` out-edges constrain (a package's own
+  `RDEPEND` needs are satisfiable by the end); usability means every
+  package in the `RDEPEND` closure is installed or merged before the
+  position; an in-progress node counts as usable (same cycle guard as the
+  checker); an unmet need counts only when its provider is itself merged
+  (a kept provider's unmet need was already broken before the plan) and
+  only when the need can be met at all (installed or a row). The
+  `installed` set comes from `World.slots` (`installed.is_some()`); the
+  `rows` set decides the provider test and caps the duplicates.
+- `ordered()` filters the cut order to changed rows first, then runs the
+  closure walk on rows only, and maps names to `Row { slot, pass }` by
+  occurrence count — so breaker and usability duplicates share the
+  `built_twice` machinery without a second code path.
+
 ## fn depend_order (#745, #746)
 
 - Returns the node names with each breaker twice: the walk itself

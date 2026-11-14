@@ -50,7 +50,10 @@ checked by a program:
    meets every property here. `mrg --plan-world --sort depend` does this:
    it cuts a cycle at a runtime-only edge that carries no build-time need,
    and where every runtime edge carries one it builds the back-edge's
-   consumer a second time, right after the cycle. The health checker
+   consumer a second time, right after the cycle. It also verifies the cut
+   result with a usability closure and builds the first package whose
+   build-time need chain stays unmet a second time, after the closure
+   becomes satisfied. The health checker
    excuses the need the first build missed when the identical package is
    merged again later (`cycle-noted`), and still fails a slot that would
    hold two different versions.

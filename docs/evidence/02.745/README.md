@@ -74,7 +74,7 @@ travel together); see also the bed logs in
   only the blamed need moved.
 - Byte-identity on the acyclic fixture world (text, stderr and `--json`
   all identical old binary vs new).
-- Bed `l0-health-20261114T035922Z` (final code): 122 plans, 113 checked,
+- Bed `l0-health-20261114T051249Z` (final code): 122 plans, 113 checked,
   108 clean (was 107), 0 with failures; `FAST_world` 0 findings (was the one
   automake `build-order`); `Locale-gettext` #24 before `automake` #25,
   `perl-5.44` still #3; 15 second builds, no slot holds two versions, no
