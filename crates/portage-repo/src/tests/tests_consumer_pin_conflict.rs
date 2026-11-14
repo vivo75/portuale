@@ -542,6 +542,7 @@ fn walker_conflict_is_fed_back_before_a_consumer_pin_conflict() {
             atom: atom.to_string(),
             use_display: Vec::new(),
             installed: false,
+            parent_source: CandidateSource::Ebuild,
         }],
         installed: false,
     };

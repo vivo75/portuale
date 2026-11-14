@@ -1,0 +1,38 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 7/20).
+
+[ebuild  N     ] dev-libs/binslottarget-1.0 to /home/vivo/repo/PORTUALE/pmtest/fixtures
+[ebuild  N     ] dev-libs/binslottarget-2.0 to /home/vivo/repo/PORTUALE/pmtest/fixtures
+[binary  N     ] dev-libs/binslotconnew-1.0 to /home/vivo/repo/PORTUALE/pmtest/fixtures
+[ebuild  N     ] dev-libs/binslotconold-1.0 to /home/vivo/repo/PORTUALE/pmtest/fixtures
+[ebuild  N     ] dev-libs/binslotgroup-1.0 to /home/vivo/repo/PORTUALE/pmtest/fixtures
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/binslottarget:0
+
+  (dev-libs/binslottarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    <dev-libs/binslottarget-2.0 required by (dev-libs/binslotconold-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^                       ^^^                                                                                                         
+
+  (dev-libs/binslottarget-2.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    >=dev-libs/binslottarget-2.0 required by (dev-libs/binslotconnew-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^^                       ^^^                                                                                                         
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

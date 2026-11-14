@@ -234,6 +234,7 @@ fn direct_solve_arg_parents_protect_the_triangle() {
                     atom: "<dev-libs/paired-2.0".to_string(),
                     use_display: Vec::new(),
                     installed: false,
+                    parent_source: CandidateSource::Ebuild,
                 }],
                 installed: true,
             },
@@ -247,6 +248,7 @@ fn direct_solve_arg_parents_protect_the_triangle() {
                     atom: ">=dev-libs/paired-2.0".to_string(),
                     use_display: Vec::new(),
                     installed: false,
+                    parent_source: CandidateSource::Ebuild,
                 }],
                 installed: false,
             },
@@ -376,6 +378,7 @@ fn direct_solve_ignores_parents_outside_the_conflict() {
         atom: "dev-libs/slotconflicttarget".to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     });
     let conflicts = [conflict];
     let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
@@ -414,6 +417,7 @@ fn direct_solve_solves_past_a_non_built_parent() {
         atom: "dev-libs/slotconflicttarget:0".to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     });
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
@@ -456,6 +460,7 @@ fn direct_solve_solves_past_an_uninstalled_parent() {
         atom: "dev-libs/slotconflicttarget:0/0=".to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     });
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
@@ -496,6 +501,7 @@ fn direct_solve_exclude_alone_arms_the_rebuild_gate() {
         atom: "dev-libs/slotconflicttarget:0/0=".to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     });
     let conflicts = [conflict];
     let excluded = vec!["dev-libs/paired".to_string()];
@@ -599,6 +605,7 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
                     atom,
                     use_display: Vec::new(),
                     installed: pinst,
+                    parent_source: CandidateSource::Ebuild,
                 })
                 .collect(),
             installed,

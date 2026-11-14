@@ -34,6 +34,7 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 ## fn show_conflict_instance
 - Installed nomerge node: `(cpv, installed in '<root>')` (see `build_residual_slot_conflicts`).
 - A merge-bound instance reads its binary/ebuild label from its own merge-list row (backlog #738: the settled entries are threaded in, so the block can never call a `[binary ...]` row an ebuild). Portage's `str(Package)` distinguishes the same way.
+- #752: `conflict_instance_kind` still matches on `(category, package, version, source)` with no resolving root. Single-root by evidence (see the `parent_source_for` note in `resolve/slot_conflict.md`): no S0 or corpus shape settles one `(cat, pkg, ver)` in both roots, so no root is threaded; the `Ebuild` fallback stays documented, not silent.
 - No parents at all renders ` (no parents)` on the header line instead of a bare `pulled in by` (Portage's `else` branch); parents present but none selected render Portage's `(no parents that aren't satisfied by other packages in this slot)` line (already pinned in `show_selected_parents`).
 - A bare `(Argument)` parent classifies like any parent: Portage shows `{atom} (Argument)` whenever it carries a version, slot or USE reason, whether or not another instance is installed (backlog #738 corrected the older note that claimed the installed-other gate applied to all argument display). The installed-other gate applies only to the reason-less fallback below.
 - Comparison: Portage compares against every *other* instance in the slot (`slot_collision.py`: `if other_pkg == pkg: continue`) -- identity, not version: a same-version merge/installed twin (a USE-only break, backlog #222) still sees its twin, so the USE parent classifies.
@@ -51,6 +52,7 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 ## fn show_selected_parents
 - `(parent_cpv, atom, display, installed)` selected-line rendering.
 - Portage shows `unconditional_use_deps` first (its own set order is nondeterministic; portuale keeps the stable classified order within each half).
+- #752: a merge-bound parent reads its `binary scheduled for merge` / `ebuild scheduled for merge` label from the recorded `parent_source` (threaded through `ClassifiedParent`), agreeing with its own merge-list row (charter property 5); the installed arm is untouched. The kind is never parsed out of `parent_cpv`.
 
 ## fn show_cycle_redisplay
 - The circular-dependency block shown again after the merge list.

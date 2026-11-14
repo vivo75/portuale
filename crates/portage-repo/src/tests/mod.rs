@@ -566,6 +566,7 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
                         atom: atom.to_string(),
                         use_display: Vec::new(),
                         installed: pinst,
+                        parent_source: CandidateSource::Ebuild,
                     })
                     .collect(),
                 installed,
@@ -1494,6 +1495,7 @@ fn abi_conflict_record(
         atom: atom.to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     };
     let inst = |version: &str, sub: &str, parents: Vec<(&str, &str)>| SlotConflictInstance {
         version: version.to_string(),

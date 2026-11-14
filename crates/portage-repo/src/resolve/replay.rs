@@ -387,6 +387,12 @@ pub(crate) fn replay_slot_conflicts(
                         use_display: replay_conflict_use_display(ctx, pe, v)
                             .unwrap_or_else(|| pe.use_expand_display.clone()),
                         installed: false,
+                        // The parent entry's own source, read directly (no
+                        // lookup needed): this rebuild would otherwise wipe
+                        // the finish-time kinds.
+                        // Portage: resolver/slot_collision.py,
+                        // _prepare_conflict_msg_and_check_for_specificity
+                        parent_source: pe.source,
                     })
                 })
                 .collect();

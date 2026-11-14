@@ -133,6 +133,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         atom: "app-misc/abiprov:0/9=".to_string(),
         use_display: Vec::new(),
         installed: false,
+        parent_source: CandidateSource::Ebuild,
     }];
     assert!(
         probe(&entries, &[same_sub], &BTreeSet::new(), &[]).is_empty(),

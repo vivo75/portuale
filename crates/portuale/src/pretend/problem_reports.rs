@@ -849,6 +849,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             atom_str: &p.atom,
             atom,
             reasons,
+            parent_source: p.parent_source,
             use_unconditional,
             use_display: &p.use_display,
         });
@@ -1092,6 +1093,8 @@ pub(crate) fn show_selected_parents(args: ShowSelectedParentsArgs<'_>) {
         }
         let parent_pos = if classified_installed[m] {
             format!("{}, installed{}", p.parent_cpv, installed_in_root(root))
+        } else if p.parent_source == portage_repo::CandidateSource::Binary {
+            format!("{}, binary scheduled for merge", p.parent_cpv)
         } else {
             format!("{}, ebuild scheduled for merge", p.parent_cpv)
         };

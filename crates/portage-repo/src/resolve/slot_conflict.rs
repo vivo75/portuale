@@ -50,6 +50,11 @@ pub struct SlotConflictParent {
     pub use_display: Vec<(String, String)>,
     /// An installed parent whose recorded atom the merge breaks.
     pub installed: bool,
+    /// The parent's own merge-row kind (`[binary` vs `[ebuild`), filled at
+    /// the finish-time build sites from the settled entries (never parsed
+    /// out of `parent_cpv`). Read only for merge-bound parents: the
+    /// renderer takes the installed arm before this field.
+    pub parent_source: CandidateSource,
 }
 
 /// `(sub_slot, repo_name, slot)` for `cat/pkg`'s `version`: the highest-priority
@@ -69,6 +74,33 @@ pub(crate) fn slot_conflict_meta(
         Some(c) => (c.sub_slot, c.repo_name, c.slot),
         None => (String::new(), String::new(), String::new()),
     }
+}
+
+/// A merge-bound parent's merge-row kind: the settled entry's own source
+/// for the puller `(category, package, version)` tuple, `Ebuild` when no
+/// settled entry answers (a top-level `(Argument)` parent, or a parent the
+/// finish passes dropped). Single-root match: the tuples carry no
+/// resolving root, and no corpus or fixture shape settles one
+/// `(category, package, version)` in both roots (see the code note).
+// Portage: resolver/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
+pub(crate) fn parent_source_for(
+    entries: &[GraphEntry],
+    pc: &str,
+    pp: &str,
+    pv: &str,
+) -> CandidateSource {
+    if pc.is_empty() {
+        return CandidateSource::Ebuild;
+    }
+    entries
+        .iter()
+        .find(|e| {
+            e.category == pc
+                && e.package == pp
+                && merge_bound_version(&e.outcome).is_some_and(|v| v == pv)
+        })
+        .map(|e| e.source)
+        .unwrap_or(CandidateSource::Ebuild)
 }
 
 /// Which conflict party is installed rather than merge-bound: `Existing` is
@@ -187,6 +219,10 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
                     pkg_use_display_for(gate, config, pc, pp, pv)
                 },
                 installed: false,
+                // Mid-pass best-known kind: the puller is rarely settled
+                // yet, so ebuild; the finish-time passes (refile,
+                // singleton passthrough, replay) overwrite from entries.
+                parent_source: CandidateSource::Ebuild,
             };
             if hits_a {
                 if !parents_a.contains(&entry) {
@@ -292,6 +328,9 @@ pub(crate) fn add_merge_parents(
                     atom: row.atom.clone(),
                     use_display: installed_use_display_for(root, config, cc, cp, cv),
                     installed: true,
+                    // Unread: the renderer takes the installed arm before
+                    // the kind.
+                    parent_source: CandidateSource::Ebuild,
                 };
                 if !inst.parents.contains(&parent) {
                     inst.parents.push(parent);
@@ -325,6 +364,9 @@ pub(crate) struct MergeSameSlotConflictsArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) refile_singletons: bool,
     pub(crate) gate: CategoryGate<'a>,
+    /// The settled entries the refiled (and singleton) parents' merge-row
+    /// kinds are read from; fed from `state.entries` by the finish driver.
+    pub(crate) entries: &'a [GraphEntry],
 }
 
 /// Merges records sharing one `(category, package, slot)` into a single joint
@@ -342,6 +384,7 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
         root,
         refile_singletons,
         gate,
+        entries,
     } = args;
     let mut order: Vec<(String, String, String)> = Vec::new();
     let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
@@ -359,7 +402,32 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
     for key in order {
         let idxs = &groups[&key];
         if idxs.len() == 1 && !refile_singletons {
-            merged.push(conflicts[idxs[0]].clone());
+            // The common backtracking-on case keeps the mid-pass record
+            // (and its first-hit filing, unlike the refile below, which
+            // files under every satisfied instance). The mid-pass kind
+            // still says ebuild, so stamp the settled kind per parent:
+            // re-match each kept parent to its puller tuple (same atom
+            // text and same regenerated `parent_cpv` it was filed with --
+            // never parsed back out of the display string) and read the
+            // kind off the settled entry for that tuple.
+            let mut single = conflicts[idxs[0]].clone();
+            for inst in single.instances.iter_mut().filter(|i| !i.installed) {
+                for parent in inst.parents.iter_mut().filter(|p| !p.installed) {
+                    parent.parent_source = pullers
+                        .get(&(key.0.clone(), key.1.clone()))
+                        .and_then(|ps| {
+                            ps.iter()
+                                .find(|(pc, pp, pv, atom)| {
+                                    atom == &parent.atom
+                                        && slot_conflict_puller_cpv(gate, pc, pp, pv)
+                                            == parent.parent_cpv
+                                })
+                                .map(|(pc, pp, pv, _)| parent_source_for(entries, pc, pp, pv))
+                        })
+                        .unwrap_or(CandidateSource::Ebuild);
+                }
+            }
+            merged.push(single);
             continue;
         }
         // Ordered instance union by (version, installed); the first
@@ -423,6 +491,9 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
                                 pkg_use_display_for(gate, config, pc, pp, pv)
                             },
                             installed: false,
+                            // Portage: resolver/slot_collision.py,
+                            // _prepare_conflict_msg_and_check_for_specificity
+                            parent_source: parent_source_for(entries, pc, pp, pv),
                         };
                         if !parents_per_inst[ii].contains(&entry) {
                             parents_per_inst[ii].push(entry);
@@ -673,6 +744,9 @@ pub(crate) fn build_residual_slot_conflicts(
                     atom: atom.clone(),
                     use_display: installed_use_display_for(root, config, cc, cp2, cv),
                     installed: true,
+                    // Unread: the renderer takes the installed arm before
+                    // the kind.
+                    parent_source: CandidateSource::Ebuild,
                 };
                 if let Some(inst) = record.instances.iter_mut().find(|i| i.installed)
                     && !inst.parents.contains(&entry)
@@ -828,6 +902,9 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
                     pkg_use_display_for(gate, config, pc, pp, pv)
                 },
                 installed: false,
+                // Portage: resolver/slot_collision.py,
+                // _prepare_conflict_msg_and_check_for_specificity
+                parent_source: parent_source_for(entries, pc, pp, pv),
             };
             if hits_merge {
                 if !merge_parents.contains(&entry) {

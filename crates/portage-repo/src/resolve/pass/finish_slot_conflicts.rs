@@ -21,6 +21,7 @@ pub(crate) fn finish_slot_conflicts(
         // final parent atoms).
         refile_singletons: ctx.backtrack_max == 0,
         gate: ctx.gate(),
+        entries: &state.entries,
     });
     solve_pass_slot_conflicts(&mut *state, ctx, bp, config);
 
