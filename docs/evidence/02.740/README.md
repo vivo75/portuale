@@ -22,7 +22,10 @@ Host captures, fresh at HEAD `2a046183` (2026-11-14). Commands:
 
 ## S0 reinstall split (from `resolver.json` entry flags)
 
-- 112 reinstalls = 87 `slot_operator_rebuild` + 25 `changed_use` + 0 other.
+- 131 reinstalls = 106 `slot_operator_rebuild` + 25 `changed_use` + 0 other.
+  The pre-#741 capture was 112 = 87 + 25; the 19 extra slot-op rows are #741's
+  third scan arm (a kept package whose `:=` binding is stale), landed before
+  this slice, so the S0 baseline is 131.
 - Resolver-only reinstalls: 101 = 76 slot-op + 25 changed-use (slot-keyed; the
   101st is `llvm-core/clang:22`, whose cp also has a fast row in slot 23).
 - Of the 76 slot-op rows, 71 name `dev-libs/openssl` in `dependencies`;
@@ -91,7 +94,7 @@ Host captures, fresh at HEAD `2a046183` (2026-11-14). Commands:
 ## S2 beds (2026-11-14 runs vs the 2026-11-13 baselines)
 
 - `l0-health.sh` run `l0-health-20261114T011717Z` vs baseline
-  `l0-health-20261113T214020Z`: the finding sets are identical (683 findings
+  `l0-health-20261113T214020Z`: the finding sets are identical (669 findings
   both sides, zero added, zero removed; `health-report.txt` differs only in
   timing lines). 122 plans, 113 checked, 0 with a failure portuale introduced;
   the world cross-check section is unchanged (584 atoms, 409 slots,
