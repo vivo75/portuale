@@ -103,6 +103,16 @@
   closure walk on rows only, and maps names to `Row { slot, pass }` by
   occurrence count — so breaker and usability duplicates share the
   `built_twice` machinery without a second code path.
+- Availability is slot-node name equality: a name-level approximation of
+  `_Moment.gap`, not atom satisfaction. Known hole (no pin — the unit
+  model has no versions): a same-`cp:slot` provider merged earlier can
+  satisfy the walk while the checker's `:=` atom stays unsatisfied, so the
+  inserted duplicate is one the checker does not excuse.
+- Pins: `the_mixed_cycle_cut_is_the_order_the_closure_walks`
+  (`depend_order` on the mixed `R/B/R` graph is `[prov, virt, user]`, the
+  walk's input); `a_disjunctive_build_need_met_by_one_arm_needs_no_second_build`
+  (disjunctions arrive resolved — `World.edges` records followed slots,
+  `lib.rs:503` — one merged arm satisfies, an unprovidable arm is skipped).
 
 ## fn depend_order (#745, #746)
 

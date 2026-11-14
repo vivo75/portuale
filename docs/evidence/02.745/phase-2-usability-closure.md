@@ -56,3 +56,18 @@ not triggered — §8 itself duplicates nothing on this host.
   changed code (`depend_order`/`close_usability_gaps` are only reached
   from `World::ordered` for `--plan-world --sort depend` and its unit
   tests), so the ordering change cannot move the resolver bed either way.
+
+## Gate logs (sourced totals)
+
+- Workspace, from the repo root: `cargo test --release` → 3520 passed,
+  0 failed (summed over the `test result: ok` lines). Log:
+  `workspace-test-release.log` (copied from `/tmp/opencode/p745/fulltest.log`).
+- pmtest, from the pmtest root:
+  `PMTEST_BASETEMP=/var/tmp/pmtest-p745b scripts/pytest-parallel.sh` →
+  4945 passed, 1 failed, 2 skipped, 2 xfailed. Log: `pmtest-parallel.log`
+  (copied from `/tmp/opencode/p745/pmtest3.log`). The single failure
+  (`test_check_world_mutants.py::test_a_mutation_that_changes_nothing_is_an_error_not_a_kill`,
+  a stray `.pkg.portage_lockfile` left by a parallel worker) passes
+  serially: `python3 -m pytest
+  pytests-contract-suite/test_check_world_mutants.py::test_a_mutation_that_changes_nothing_is_an_error_not_a_kill -q`
+  → 1 passed. Log: `pmtest-flake-serial-pass.log`.

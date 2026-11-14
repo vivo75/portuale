@@ -1,0 +1,12 @@
+.                                                                        [100%]
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 2 warnings in 39.65s

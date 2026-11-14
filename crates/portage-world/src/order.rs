@@ -402,6 +402,15 @@ struct Usability<'a> {
 /// order position holds. A chain that is never satisfiable gets no second
 /// build. At most twice per slot. Deterministic: first in merge order wins,
 /// edges are walked in name order.
+///
+/// Availability here is slot-node name equality — a name-level
+/// approximation of the checker's `_Moment.gap`, which tests atom
+/// satisfaction (version, slot, sub-slot, USE). Known hole: a provider
+/// under the same `cp:slot` merged earlier satisfies this walk while the
+/// checker's `:=` atom can stay unsatisfied, so the duplicate inserted
+/// here is one the checker does not excuse. No pin: the unit model has
+/// no versions, and a plan-level pin would need a new stale-sub-slot
+/// fixture tree.
 pub(crate) fn close_usability_gaps(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
@@ -750,6 +759,9 @@ mod tests {
     /// build-time need chain (`user` needs `virt` usable, `virt` needs
     /// `prov` usable, `prov` needs `user`), so the consumer is built again
     /// after the position where the closure becomes satisfied.
+    ///
+    /// The cut this closes is pinned, not inferred: on the mixed `R/B/R`
+    /// `w745` graph `depend_order` itself yields `[prov, virt, user]`.
     #[test]
     fn a_usability_gap_in_the_cut_order_gets_a_second_build() {
         let prov = "dev-libs/w745prov:0";
@@ -768,6 +780,44 @@ mod tests {
         assert_eq!(
             close_usability_gaps(&g, &kinds, closed.clone(), &BTreeSet::new(), &rows),
             closed
+        );
+    }
+
+    /// Charter property 2a (backlog #745): the middle link — `depend_order`
+    /// on the mixed `R/B/R` `w745` graph yields the cut
+    /// `[prov, virt, user]` that the usability walk then closes, so the
+    /// red-without/green-with chain is pinned end to end.
+    #[test]
+    fn the_mixed_cycle_cut_is_the_order_the_closure_walks() {
+        let prov = "dev-libs/w745prov:0";
+        let user = "dev-libs/w745user:0";
+        let virt = "dev-libs/w745virt:0";
+        let g = graph(&[(prov, &[user]), (user, &[virt]), (virt, &[prov])]);
+        let kinds = kinds(&[
+            ((prov, user), "RDEPEND"),
+            ((user, virt), "BDEPEND"),
+            ((virt, prov), "RDEPEND"),
+        ]);
+        assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
+    }
+
+    /// Charter property 2a (backlog #745): a disjunctive build need met by
+    /// one merged arm needs no second build. Disjunctions reach the walk
+    /// resolved — [`World::edges`](crate::World::edges) records the slots
+    /// the first pass followed — so only the chosen arm is an edge; an arm
+    /// nothing provides is not fixable by building twice and is skipped.
+    #[test]
+    fn a_disjunctive_build_need_met_by_one_arm_needs_no_second_build() {
+        let chosen = "dev-libs/w745a:0";
+        let missing = "dev-libs/w745b:0";
+        let user = "dev-libs/w745user:0";
+        let g = graph(&[(user, &[chosen, missing])]);
+        let kinds = kinds(&[((user, chosen), "BDEPEND"), ((user, missing), "BDEPEND")]);
+        let cut = vec![chosen.to_string(), user.to_string()];
+        let rows: BTreeSet<String> = cut.iter().cloned().collect();
+        assert_eq!(
+            close_usability_gaps(&g, &kinds, cut.clone(), &BTreeSet::new(), &rows),
+            cut
         );
     }
 
