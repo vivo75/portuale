@@ -1,22 +1,87 @@
 #!/bin/sh
 # Preflight before a test run that writes a lot (parallel pytest, an L0/L1 bed,
-# a corpus run): /tmp and /var/tmp must each have at least MIN_PERCENT free.
+# a corpus run): /tmp and /var/tmp must each have at least MIN_PERCENT of their
+# space and MIN_INODES free inodes.
 #
-# usage: sh LLM/tools/check-work-space.sh [min_percent]   (default 50)
-# exit 0 = both mounts have enough room; 1 = one is below the threshold;
-# 2 = usage error. Read-only: it never deletes anything.
+# usage: sh LLM/tools/check-work-space.sh [min_percent]        (default 50)
+#        sh LLM/tools/check-work-space.sh --require-inodes <path> [min]
+# exit 0 = enough room; 1 = below a threshold; 2 = usage error.
+# Read-only: it never deletes and never creates anything.
 #
-# Why: one full contract-suite run leaves ~11 GB in its PMTEST_BASETEMP under
-# /var/tmp (a 48 GB mount), so two or three stale runs fill it and the next
-# suite fails with ENOSPC, not with a real test failure.
+# Why space: one full contract-suite run leaves ~11 GB in its PMTEST_BASETEMP
+# under /var/tmp (a 48 GB mount), so two or three stale runs fill it and the
+# next suite fails with ENOSPC, not with a real test failure.
+#
+# Why inodes (backlog #756): a full run's basetemp needs ~1.8 M inodes
+# (measured 2026-11-15: 1 804 465 for 4967 tests). `/tmp` here is a tmpfs with
+# 1 048 576 in total, so a basetemp there exhausts the inode table while
+# gigabytes are still free and the suite reports ENOSPC as if the product
+# were broken. The 200 000 floor below is a sanity floor ("this mount is in
+# trouble"), NOT a run size: the run-size guard is `--require-inodes`, which
+# `gate.sh` and pmtest's `pytest-parallel.sh` call on the basetemp they will
+# actually use.
 set -u
+MIN_INODES=${PORTUALE_MIN_FREE_INODES:-200000}
+
+usage() {
+    echo "check-work-space: $1" >&2
+    exit 2
+}
+
+case ${MIN_INODES} in
+    ''|*[!0-9]*) usage "PORTUALE_MIN_FREE_INODES must be a number" ;;
+esac
+
+# Resolve the filesystem that will hold <path>: the nearest existing ancestor,
+# so a not-yet-created basetemp is judged without creating it.
+fs_of() {
+    p=$1
+    while [ -n "$p" ] && [ "$p" != "/" ] && [ ! -e "$p" ]; do
+        p=$(dirname "$p")
+    done
+    [ -e "$p" ] || return 1
+    printf '%s\n' "$p"
+}
+
+if [ "${1:-}" = "--require-inodes" ]; then
+    [ $# -ge 2 ] || usage "--require-inodes needs a path"
+    want_path=$2
+    want_min=${3:-${PMTEST_MIN_BASETEMP_INODES:-2500000}}
+    case ${want_min} in
+        ''|*[!0-9]*) usage "the inode minimum must be a positive integer (got '$want_min')" ;;
+    esac
+    [ "${want_min}" -gt 0 ] || usage "the inode minimum must be greater than 0 (got $want_min)"
+    anchor=$(fs_of "$want_path")
+    # `usage` inside the command substitution above would only exit that
+    # subshell, leaving $anchor empty: say it here, where the exit is real.
+    [ -n "$anchor" ] || usage "cannot resolve a filesystem for '$want_path'"
+    # `set --` rather than `read < <(...)`: this script is /bin/sh (dash has
+    # no process substitution).
+    set -- $(df -Pi "$anchor" 2>/dev/null | awk 'NR==2 {print $2, $4}')
+    i_total=${1:-}
+    i_free=${2:-}
+    if [ -z "${i_total:-}" ] || [ -z "${i_free:-}" ]; then
+        echo "check-work-space: cannot read inode counts for '$anchor'" >&2
+        exit 1
+    fi
+    if [ "${i_total}" -eq 0 ]; then
+        echo "check-work-space: '$anchor' reports 0 inodes (cannot be sized); refusing to guess" >&2
+        exit 1
+    fi
+    if [ "${i_free}" -lt "${want_min}" ]; then
+        echo "check-work-space: '$want_path' is on a filesystem with only ${i_free} free inodes (need ${want_min})" >&2
+        echo "  a complete suite run needs ~1.8 M inodes (backlog #756); a 1 M-inode tmpfs like /tmp cannot hold one" >&2
+        echo "  point the basetemp at a bigger filesystem, or lower the floor deliberately: PMTEST_MIN_BASETEMP_INODES=<n>" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
 MIN=${1:-50}
 case $MIN in
-    ''|*[!0-9]*) echo "check-work-space: min_percent must be a number" >&2; exit 2 ;;
+    ''|*[!0-9]*) usage "min_percent must be a number" ;;
 esac
-[ "$MIN" -ge 1 ] && [ "$MIN" -le 99 ] || {
-    echo "check-work-space: min_percent must be 1..99" >&2; exit 2
-}
+[ "$MIN" -ge 1 ] && [ "$MIN" -le 99 ] || usage "min_percent must be 1..99"
 
 status=0
 printf '%-10s %8s %8s %6s %s\n' mount total free use threshold
@@ -30,6 +95,11 @@ for d in /tmp /var/tmp; do
     fi
     total=$1
     free=$2
+    if [ "$total" -eq 0 ]; then
+        printf '%-10s %s\n' "$d" "0 blocks reported (cannot be sized)"
+        status=1
+        continue
+    fi
     pc=$(( free * 100 / total ))
     verdict=ok
     [ "$pc" -lt "$MIN" ] && { verdict=LOW; status=1; }
@@ -37,6 +107,28 @@ for d in /tmp /var/tmp; do
         "$(awk -v k="$total" 'BEGIN {printf "%.1fG", k/1048576}')" \
         "$(awk -v k="$free" 'BEGIN {printf "%.1fG", k/1048576}')" \
         "$pc" "$verdict"
+done
+
+printf '\ninodes (sanity floor %s; the run-size guard is --require-inodes):\n' "$MIN_INODES"
+printf '%-10s %10s %10s %6s %s\n' mount total free use threshold
+for d in /tmp /var/tmp; do
+    set -- $(df -Pi "$d" 2>/dev/null | awk 'NR==2 {print $2, $4, $5}')
+    if [ $# -lt 2 ]; then
+        printf '%-10s %s\n' "$d" "cannot read (not mounted?)"
+        status=1
+        continue
+    fi
+    i_total=$1
+    i_free=$2
+    if [ "$i_total" -eq 0 ]; then
+        printf '%-10s %s\n' "$d" "0 inodes reported (cannot be sized)"
+        status=1
+        continue
+    fi
+    ipc=$(( i_free * 100 / i_total ))
+    iverdict=ok
+    [ "$i_free" -lt "$MIN_INODES" ] && { iverdict=LOW; status=1; }
+    printf '%-10s %10s %10s %5s%% %s\n' "$d" "$i_total" "$i_free" "$ipc" "$iverdict"
 done
 
 if [ "$status" -ne 0 ]; then

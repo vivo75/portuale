@@ -1,0 +1,167 @@
+.FFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+________________ test_inodes_low_and_bytes_fine_fails_on_inodes ________________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_inodes_low_and_bytes_fine0')
+
+    def test_inodes_low_and_bytes_fine_fails_on_inodes(tmp_path):
+        # 150 free inodes is below the 200 000 sanity floor; space is plentiful.
+        env = _env(
+            _shim(tmp_path, bytes_pct=99, inodes_total=1000, inodes_free=150),
+            SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="1000", SHIM_INODES_FREE="150",
+        )
+        out = _run(["sh", str(CHECK)], env)
+>       assert out.returncode == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/check-work-space.sh'], returncode=0, stdout=...   free    use threshold\n/tmp           0.0G     0.0G    99% ok\n/var/tmp       0.0G     0.0G    99% ok\n', stderr='').returncode
+
+pytests-contract-suite/test_harness_guards.py:94: AssertionError
+________________ test_both_plenty_is_ok_and_prints_both_tables _________________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_both_plenty_is_ok_and_pri0')
+
+    def test_both_plenty_is_ok_and_prints_both_tables(tmp_path):
+        env = _env(
+            _shim(tmp_path, bytes_pct=99, inodes_total=10_000_000, inodes_free=9_000_000),
+            SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="10000000", SHIM_INODES_FREE="9000000",
+        )
+        out = _run(["sh", str(CHECK)], env)
+        assert out.returncode == 0
+>       assert "inodes (sanity floor" in out.stdout
+E       AssertionError: assert 'inodes (sanity floor' in 'mount         total     free    use threshold\n/tmp           0.0G     0.0G    99% ok\n/var/tmp       0.0G     0.0G    99% ok\n'
+E        +  where 'mount         total     free    use threshold\n/tmp           0.0G     0.0G    99% ok\n/var/tmp       0.0G     0.0G    99% ok\n' = CompletedProcess(args=['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/check-work-space.sh'], returncode=0, stdout=...   free    use threshold\n/tmp           0.0G     0.0G    99% ok\n/var/tmp       0.0G     0.0G    99% ok\n', stderr='').stdout
+
+pytests-contract-suite/test_harness_guards.py:106: AssertionError
+____________ test_a_zero_inode_filesystem_is_a_message_not_a_crash _____________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_a_zero_inode_filesystem_i0')
+
+    def test_a_zero_inode_filesystem_is_a_message_not_a_crash(tmp_path):
+        env = _env(
+            _shim(tmp_path, bytes_pct=99, inodes_total=0, inodes_free=0),
+            SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="0", SHIM_INODES_FREE="0",
+        )
+        out = _run(["sh", str(CHECK)], env)
+>       assert out.returncode == 1, out.stderr
+E       AssertionError: 
+E       assert 0 == 1
+E        +  where 0 = CompletedProcess(args=['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/check-work-space.sh'], returncode=0, stdout=...   free    use threshold\n/tmp           0.0G     0.0G    99% ok\n/var/tmp       0.0G     0.0G    99% ok\n', stderr='').returncode
+
+pytests-contract-suite/test_harness_guards.py:116: AssertionError
+________________ test_require_inodes_refuses_a_short_filesystem ________________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_require_inodes_refuses_a_0')
+
+    def test_require_inodes_refuses_a_short_filesystem(tmp_path):
+        env = _env(
+            _shim(tmp_path, bytes_pct=99, inodes_total=1_048_576, inodes_free=959_944),
+            SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="1048576", SHIM_INODES_FREE="959944",
+        )
+        target = tmp_path / "not-created-yet" / "basetemp"
+        out = _run(["sh", str(CHECK), "--require-inodes", str(target)], env)
+>       assert out.returncode == 1
+E       AssertionError: assert 2 == 1
+E        +  where 2 = CompletedProcess(args=['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/check-work-space.sh', '--require-inodes', '/...ses_a_0/not-created-yet/basetemp'], returncode=2, stdout='', stderr='check-work-space: min_percent must be a number\n').returncode
+
+pytests-contract-suite/test_harness_guards.py:129: AssertionError
+________ test_require_inodes_accepts_a_big_filesystem_and_the_override _________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_require_inodes_accepts_a_0')
+
+    def test_require_inodes_accepts_a_big_filesystem_and_the_override(tmp_path):
+        env = _env(
+            _shim(tmp_path, bytes_pct=99, inodes_total=10_737_418_240, inodes_free=10_733_796_674),
+            SHIM_BYTES_FREE="99",
+            SHIM_INODES_TOTAL="10737418240",
+            SHIM_INODES_FREE="10733796674",
+        )
+        ok = _run(["sh", str(CHECK), "--require-inodes", str(tmp_path)], env)
+>       assert ok.returncode == 0
+E       AssertionError: assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/check-work-space.sh', '--require-inodes', '/.../test_require_inodes_accepts_a_0'], returncode=2, stdout='', stderr='check-work-space: min_percent must be a number\n').returncode
+
+pytests-contract-suite/test_harness_guards.py:142: AssertionError
+_______ test_pytest_parallel_refuses_a_short_basetemp_before_deleting_it _______
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_pytest_parallel_refuses_a0')
+
+    def test_pytest_parallel_refuses_a_short_basetemp_before_deleting_it(tmp_path):
+        bin_dir = _shim(tmp_path, bytes_pct=99, inodes_total=1_048_576, inodes_free=959_944)
+        env = _env(bin_dir, SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="1048576",
+                   SHIM_INODES_FREE="959944")
+        basetemp = tmp_path / "keep-me"
+        basetemp.mkdir()
+        (basetemp / "sentinel").write_text("must survive a refusal")
+        out = _run(
+            ["bash", str(PARALLEL), f"--basetemp={basetemp}", "-q", "-k", "nothing"],
+            env,
+        )
+>       assert out.returncode == 2
+E       AssertionError: assert 0 == 2
+E        +  where 0 = CompletedProcess(args=['bash', '/home/vivo/repo/PORTUALE/pmtest/scripts/pytest-parallel.sh', '--basetemp=/var/tmp/pmte...aklyCached\n    class c(cls):\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n', stderr='').returncode
+
+pytests-contract-suite/test_harness_guards.py:171: AssertionError
+________ test_gate_refuses_a_short_out_and_removes_only_what_it_created ________
+
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_gate_refuses_a_short_out_0')
+
+    def test_gate_refuses_a_short_out_and_removes_only_what_it_created(tmp_path):
+        bin_dir = _shim(tmp_path, bytes_pct=99, inodes_total=1_048_576, inodes_free=959_944)
+        env = _env(bin_dir, SHIM_BYTES_FREE="99", SHIM_INODES_TOTAL="1048576",
+                   SHIM_INODES_FREE="959944")
+        fresh = tmp_path / "fresh-out"
+>       out = _run(["sh", str(GATE), str(fresh)], env)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+pytests-contract-suite/test_harness_guards.py:181: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+pytests-contract-suite/test_harness_guards.py:71: in _run
+    return subprocess.run(argv, capture_output=True, text=True, env=env, timeout=120)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/subprocess.py:557: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/subprocess.py:1221: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/subprocess.py:2154: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/t...>
+endtime = 10269274.580707995, orig_timeout = 120
+stdout_seq = [b'doc-status rc=1\n', b'  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:667: (c) #660 no `Oracle:`/`Premise:...mmit 7d9080b quotes no pmtest short sha (pmtest has commits in 91ca664286ec00e61071f2334c668e31e3f8befa..HEAD)\n', ...]
+stderr_seq = [], skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['sh', '/home/vivo/repo/PORTUALE/portuale/LLM/tools/gate.sh', '/var/tmp/pmtest/pytest-basetemp/test_gate_refuses_a_short_out_0/fresh-out']' timed out after 120 seconds
+
+/usr/lib/python3.14/subprocess.py:1268: TimeoutExpired
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_harness_guards.py::test_inodes_low_and_bytes_fine_fails_on_inodes
+FAILED pytests-contract-suite/test_harness_guards.py::test_both_plenty_is_ok_and_prints_both_tables
+FAILED pytests-contract-suite/test_harness_guards.py::test_a_zero_inode_filesystem_is_a_message_not_a_crash
+FAILED pytests-contract-suite/test_harness_guards.py::test_require_inodes_refuses_a_short_filesystem
+FAILED pytests-contract-suite/test_harness_guards.py::test_require_inodes_accepts_a_big_filesystem_and_the_override
+FAILED pytests-contract-suite/test_harness_guards.py::test_pytest_parallel_refuses_a_short_basetemp_before_deleting_it
+FAILED pytests-contract-suite/test_harness_guards.py::test_gate_refuses_a_short_out_and_removes_only_what_it_created
+7 failed, 1 passed, 2 warnings in 139.59s (0:02:19)

@@ -113,10 +113,23 @@ sh LLM/tools/scope/ocstop.sh <slug>             # TERM then KILL the whole scope
 
 Before a run that writes a lot (parallel suite, an L0/L1 bed, a corpus run),
 `sh LLM/tools/check-work-space.sh` must pass: `/tmp` and `/var/tmp` each need
-at least 50% free. One full suite leaves ~11 GB in its `PMTEST_BASETEMP` under
-`/var/tmp` (48 GB), so stale runs fill it and the next suite fails with ENOSPC,
-not with a real test failure. `pytest-parallel.sh` and `gate.sh` run the check
-themselves; delete finished basetemps only, never one a live suite is using.
+at least 50% free **and** at least 200 000 free inodes. One full suite leaves
+~11 GB in its `PMTEST_BASETEMP` under `/var/tmp` (48 GB), so stale runs fill it
+and the next suite fails with ENOSPC, not with a real test failure.
+
+Inodes are the other half (backlog #756): a complete run's basetemp needs
+**~1.8 M** inodes (measured 1 804 465 for 4967 tests), and `/tmp` here is a
+tmpfs with only 1 048 576 in total. A basetemp on such a filesystem exhausts
+it while gigabytes are free, and the suite then reports 182 ENOSPC errors that
+look like product failures. So `pytest-parallel.sh` and `gate.sh` also check
+the basetemp's own filesystem with `check-work-space.sh --require-inodes
+<path>` and refuse below 2 500 000 free inodes; a deliberate small run lowers
+that with `PMTEST_MIN_BASETEMP_INODES=<n>` (a positive integer; the byte knob
+is `PMTEST_MIN_FREE_PERCENT`). A malformed value is refused rather than
+ignored — a knob that silently accepts `-5` is a bypass. Note the separate
+`PMTEST_MIN_FREE_INODES` (default 20 000): that one belongs to `conftest.py`'s
+per-tmp-dir guard, not to the basetemp. Keep basetemps under `/var/tmp`, delete finished
+ones only, and never one a live suite is using.
 
 ```
 ../pmtest/scripts/pytest-parallel.sh          # whole suite, 8 workers, ~90 s, rebuilds the binary
