@@ -242,7 +242,9 @@ fn boot_display_inputs(
 /// distinguishes the rows), USE displays recomputed with the flag off,
 /// `deps` the reduced closure (the build-time `DepEdge`s to cycle members
 /// whose arm the flag guards are gone), `dep_input` re-pointed at the
-/// reduced evaluation.
+/// reduced evaluation. `blockers` ride along as filed under the declared
+/// USE (no fixture conditions a blocker on the reduced flag; re-evaluating
+/// them under boot USE is open work, not a known divergence).
 #[allow(clippy::too_many_arguments)]
 fn boot_row(
     definitive: &GraphEntry,

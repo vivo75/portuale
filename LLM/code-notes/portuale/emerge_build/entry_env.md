@@ -33,6 +33,7 @@ The per-entry build environment: tmpdir, FEATURES, USE, identity and metadata ro
 
 ## fn entry_phase_env_tail
 - With a config in scope (`emerge <atom>` and friends, #37 S2) the `USE` is Portage's `PORTAGE_USE`: the resolver's full effective set (`candidate_effective_use_flags`, including the implicit profile flags no package declares in `IUSE`) narrowed by `portage_use` to `IUSE ∪ IUSE_EFFECTIVE`. Without a config (standalone `ebuild <file> merge`/`qmerge`, tests) the previous enabled-IUSE-only `USE` stands. Shared with `run_buildpkgonly`, whose `PackageOptions` carries no `MergeOptions`. The tail is resolved `USE` (or the legacy enabled-IUSE-only `USE` when no config is in scope), the `IUSE_EFFECTIVE`/`USE_EXPAND` rows, and the `SLOT`/repo identity.
+- Charter 2a bootstrap (backlog #753 review C2): when `entry.bootstrap` is set, the reduced flag is subtracted from the enabled set before deriving `USE` — the boot build executes with the reduced USE, not the declared one. The entry's own reduced `use_flags_display` is only read on the no-config legacy path, so without this the boot phase would see (and record in VDB `USE`) the full declared set.
 
 ## fn entry_build_env
 - The run-wide resolved env the caller stashed on `options.build_env` (`portage_profile::phase_environ(config, None)`), then any per-package `package.env` build vars on top of those, then `entry_phase_env_tail`.

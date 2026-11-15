@@ -42,8 +42,7 @@
   balanced parens for bootstrapped cycles only; the count line is now
   `{slots} to install ({rows} builds including {boot} bootstrap)`.
 - `resolver_and_fast_plan_agree_on_the_bootstrap_rows` proves agreement on
-  the same tree (same order, USE sets, markers) with no duplicated rule.
-  Note: the resolver's cycle member order follows its argv-seeded insertion
-  walk, so reversed argv would pick the mirrored single-flag reduction
-  (`pkgnew`/`-usefoo`) — still valid, still agreed row-for-row, but not the
-  owner's sequence; the pins use the owner order.
+  the same tree (same order, USE sets, markers) with no duplicated rule,
+  argv order included: the leaf name-sorts each reported cycle before
+  scoring (review I2), so reversed argv picks the same reduction — the
+  old note claiming a mirrored pick is superseded.

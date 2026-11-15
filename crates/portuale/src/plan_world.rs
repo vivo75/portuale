@@ -1126,6 +1126,29 @@ mod tests {
                 assert!(fast_use.contains(&flag), "{cp}: {flag}");
             }
         }
+        // Reversed argv must agree row-for-row: member order is name order
+        // inside `bootstrap_reduction`, so the insertion-order walk cannot
+        // flip the pick (backlog #753 I2).
+        let reversed: Vec<String> = atoms.iter().rev().map(|s| s.to_string()).collect();
+        let resolved_rev = portage_repo::ResolveRequest::new(
+            &root,
+            &root,
+            &reversed,
+            &config,
+            &root.join("distfiles"),
+        )
+        .resolve()
+        .expect("the pair resolves either way");
+        assert_eq!(resolved_rev.entries.len(), fast.len());
+        for (entry, row) in resolved_rev.entries.iter().zip(fast.iter()) {
+            let cp = format!("{}/{}", entry.category, entry.package);
+            assert_eq!(cp, row.slot.cp);
+            assert_eq!(
+                entry.bootstrap.as_ref().map(|b| b.reduced_flag.clone()),
+                row.bootstrap.as_ref().map(|b| b.reduced_flag.clone()),
+                "{cp}",
+            );
+        }
     }
 
     /// Charter property 2 (backlog #749): the mixed `R/B/R` #745 shape is a

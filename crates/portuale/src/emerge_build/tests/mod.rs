@@ -128,6 +128,7 @@ fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntr
     }
 }
 
+mod bootstrap_merge;
 mod buildpkgonly;
 mod entries;
 mod entry_env;

@@ -172,6 +172,10 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
   drops the edge; unguarded/unconditional edges contribute no flags. On the
   owner's pair yields `(otherpkg, useboh)` from either caller's cycle order
   (member order meets `otherpkg` first on both sides for the pinned argv).
+- Review I2: each reported cycle is name-sorted before scoring, so both
+  emitters agree no matter which walk order reported it (reversed argv
+  picks the same reduction — pinned by the reversed-argv agreement test).
+  A USE-gated self-loop is an ordinary one-member cycle under this rule.
 
 ## fn boot_closure_reaches_member
 - Backlog #753 STOP rule 2 without a second resolve: DFS from the boot slot

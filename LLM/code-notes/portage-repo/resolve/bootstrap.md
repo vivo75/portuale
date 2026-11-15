@@ -27,7 +27,10 @@ Charter 2a bootstrap (backlog #753): the resolver-side synthesis.
   the same installed/forced inputs the walk's display pass uses, drops the
   flag-guarded build-time `DepEdge`s to members, and re-points `dep_input`
   at the reduced evaluation (the health checker reads the boot row's build
-  graph from it). `required_by` is copied (finalised per `(category,
+  graph from it). `blockers` ride along as filed under the declared USE
+  (review m2: no fixture conditions a blocker on the reduced flag;
+  re-evaluating them under boot USE is open work, not a known divergence).
+  `required_by` is copied (finalised per `(category,
   package)` before synthesis, so `--tree` keeps the node) and `discovery`
   is stamped with the final index (collisions with another row's pre-sort
   position are benign: the sort already ran).

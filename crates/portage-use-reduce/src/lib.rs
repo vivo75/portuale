@@ -1842,13 +1842,24 @@ pub fn conditional_guards(dep_str: &str) -> Vec<(String, BTreeSet<String>)> {
 /// directed edge to the USE flags whose removal drops it. Tie-breaks, in
 /// order: a flag breaking more than one reported cycle in the same pass
 /// wins; then reported-cycle order; then member order within the cycle;
-/// then the lexicographically first flag.
+/// then the lexicographically first flag. A USE-gated self-loop is an
+/// ordinary one-member cycle under this rule. Member order is name order:
+/// each reported cycle is sorted first, so both emitters agree no matter
+/// which walk order reported it (reversed argv picks the same reduction).
 pub fn bootstrap_reduction(
     cycles: &[Vec<String>],
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
     use_guards: &BTreeMap<(String, String), BTreeSet<String>>,
 ) -> Option<(String, String)> {
+    let cycles: Vec<Vec<String>> = cycles
+        .iter()
+        .map(|c| {
+            let mut m = c.clone();
+            m.sort();
+            m
+        })
+        .collect();
     let drops = |edge: &(String, String), flag: &str| {
         use_guards.get(edge).is_some_and(|g| g.contains(flag))
     };
@@ -2115,6 +2126,26 @@ mod bootstrap_tests {
         let plain = edges(&[(other, &[new]), (new, &[other])]);
         assert!(!boot_closure_reaches_member(
             &plain, &kinds, &guards, other, "useboh", &members
+        ));
+    }
+
+    /// A USE-gated self-loop reduces like any other single-flag shape:
+    /// the one arm drops under its flag, so the loop breaks (the boot
+    /// closure then has nowhere to go).
+    #[test]
+    fn a_use_gated_self_loop_reduces() {
+        let m = "dev-libs/w753self:0";
+        let cycles = vec![vec![m.to_string()]];
+        let edges = edges(&[(m, &[m])]);
+        let kinds = kinds(&[((m, m), 0b01000)]);
+        let guards = guards(&[((m, m), &["usefoo"])]);
+        assert_eq!(
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            Some((m.to_string(), "usefoo".to_string()))
+        );
+        let members: BTreeSet<String> = [m.to_string()].into_iter().collect();
+        assert!(!boot_closure_reaches_member(
+            &edges, &kinds, &guards, m, "usefoo", &members
         ));
     }
 
