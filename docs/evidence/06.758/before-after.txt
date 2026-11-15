@@ -1,0 +1,21 @@
+# #758 — pair_check's base, before and after
+
+Branch: backlog/758-pair-base (cut from opencode 7aae34b4).
+
+## The false positive, reproduced by forcing the old anchor (main)
+$ PAIR_INTEGRATION=main sh LLM/tools/pair_check.sh
+rc=1
+pair-check: base 841e66330a24ac982273784706b70ef31c6960d1 (portuale, anchor refs/heads/main)
+pair-check: base 91ca664286ec00e61071f2334c668e31e3f8befa (pmtest, anchor refs/heads/main)
+pair-check: merge path touched ( crates/portuale/src/emerge_build/ crates/portuale/src/emerge_getbinpkg.rs ) but LLM/evidence/merge-gate-backlog-758-pair-base.md is missing or does not name both sys-libs/glibc and app-shells/bash merge results
+
+## After: the default anchor is the branch's own fork point
+$ sh LLM/tools/pair_check.sh
+rc=0
+pair-check: base 7aae34b4bc08854f491d5300dd45eab7d9236651 (portuale, anchor refs/heads/opencode)
+pair-check: base ce98f0bd3076e2c040424a36cef09d0ffc8e7a68 (pmtest, anchor refs/heads/opencode)
+pair-check: OK
+
+Exit 0 on a branch that touches only LLM/tools/, while a slice commit that
+touches crates/portuale/src/emerge_build/ still fails (pin:
+test_758_a_slice_that_touches_the_merge_path_is_still_red).

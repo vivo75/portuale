@@ -2,10 +2,19 @@
 # Pairing and merge-path gate check (plan 02.493 Task 4), run from the portuale
 # root (it cds there itself). Exit 1 on a violation, 0 otherwise; warnings
 # print "WARN" and do not change the exit code.
-#   PMTEST_DIR       sibling checkout (default ../pmtest)
-#   BASE             portuale base (default: merge-base HEAD main; on main HEAD^1)
-#   PMTEST_BASE      pmtest base, same defaults
-#   PAIR_STANDALONE  non-empty reason: waives the same-branch-name check
+#   PMTEST_DIR        sibling checkout (default ../pmtest)
+#   BASE              portuale base (default below; on main itself HEAD^1)
+#   PMTEST_BASE       pmtest base, same default
+#   PAIR_INTEGRATION  the branch this project merges into (default: opencode
+#                     if the repo has it, else main)
+#   PAIR_STANDALONE   non-empty reason: waives the same-branch-name check
+#
+# The default base is the point where the branch left the integration branch --
+# merge-base --fork-point on refs/heads/<integration> when it answers and is an
+# ancestor of HEAD, else plain merge-base against that ref (local, then
+# origin/<integration>). Basing on `main` made every branch cut from `opencode`
+# inherit `opencode`'s merge-path obligation, which is how #756 -- a slice
+# touching only LLM/tools/ -- was asked for glibc+bash merge evidence (#758).
 set -u
 cd "$(dirname "$0")/../.." || exit 2
 PMTEST_DIR=${PMTEST_DIR:-../pmtest}
@@ -21,13 +30,42 @@ fail=0
 bad() { echo "pair-check: $1"; fail=1; }
 warn() { echo "pair-check: WARN $1"; }
 
-# Base of a repo: merge-base with main, or HEAD^1 when on main itself.
+# The branch this project integrates into: PAIR_INTEGRATION when set, else
+# `opencode` if the repo has it, else `main`. Prints a full ref name.
+integration_ref() { # repo
+    name=${PAIR_INTEGRATION:-opencode}
+    if git -C "$1" rev-parse -q --verify "refs/heads/$name" >/dev/null 2>&1; then
+        printf 'refs/heads/%s\n' "$name"
+    elif git -C "$1" rev-parse -q --verify "refs/remotes/origin/$name" >/dev/null 2>&1; then
+        printf 'refs/remotes/origin/%s\n' "$name"
+    else
+        printf 'refs/heads/main\n'
+    fi
+}
+
+# Base of a repo: HEAD^1 on `main`, else the point where this branch left the
+# integration branch. `--fork-point` answers only for a LOCAL ref (a
+# remote-tracking ref has no branching reflog, and a reflog-less checkout makes
+# it fail empty: `fatal: No such ref`), so it is tried on refs/heads/ only and
+# accepted only when it is an ancestor of HEAD. Everything else uses plain
+# merge-base, which can over-report (a stale origin/<branch> widens the range)
+# but can never hide a slice's own commit.
 base_of() { # repo branch
     if [ "$2" = main ]; then
         git -C "$1" rev-parse -q --verify HEAD^1 2>/dev/null
-    else
-        git -C "$1" merge-base HEAD main 2>/dev/null
+        return
     fi
+    ref=$(integration_ref "$1")
+    case $ref in
+        refs/heads/*)
+            fp=$(git -C "$1" merge-base --fork-point "$ref" HEAD 2>/dev/null)
+            if [ -n "$fp" ] && git -C "$1" merge-base --is-ancestor "$fp" HEAD 2>/dev/null; then
+                printf '%s\n' "$fp"
+                return
+            fi
+            ;;
+    esac
+    git -C "$1" merge-base HEAD "$ref" 2>/dev/null
 }
 
 # The short branch name, with the refs/heads/ (or remotes/<remote>/) prefix
@@ -52,6 +90,10 @@ fi
 
 BASE=${BASE:-$(base_of . "$pbranch")}
 PMTEST_BASE=${PMTEST_BASE:-$(base_of "$PMTEST_DIR" "$tbranch")}
+# The range a reader cannot see is how this checker over-reported for two
+# slices: name each base and its anchor.
+echo "pair-check: base ${BASE} (portuale, anchor $(integration_ref .))"
+echo "pair-check: base ${PMTEST_BASE} (pmtest, anchor $(integration_ref "$PMTEST_DIR"))"
 
 # (b) merge-path diff needs LLM/evidence/merge-gate-<branch with / -> ->.md
 if [ -n "$BASE" ]; then

@@ -59,7 +59,7 @@ def make_pair(tmp_path, pbranch="feat", tbranch="feat"):
 
 def run(por, pmt, **extra):
     env = dict(os.environ, PMTEST_DIR=str(pmt))
-    for k in ("PAIR_STANDALONE", "BASE", "PMTEST_BASE"):
+    for k in ("PAIR_STANDALONE", "BASE", "PMTEST_BASE", "PAIR_INTEGRATION"):
         env.pop(k, None)
     env.update(extra)
     # BASE must exclude the "tools" setup commit on the branch under test.
@@ -67,6 +67,75 @@ def run(por, pmt, **extra):
     p = subprocess.run(["sh", str(por / "LLM" / "tools" / "pair_check.sh")], env=env,
                        capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr
+
+
+def make_integration_pair(tmp_path, pbranch="feat", tbranch="feat"):
+    """main -> opencode (with a merge-path commit) -> the slice branch.
+
+    The shape that made #758 visible: a branch cut from the integration branch
+    inherits nothing, while `main` as the base would make it inherit the
+    merge-path change that lives on `opencode`.
+    """
+    por, pmt = tmp_path / "portuale", tmp_path / "pmtest"
+    for repo, br in ((por, pbranch), (pmt, tbranch)):
+        os.makedirs(str(repo))
+        git(repo, "init", "-q", "-b", "main")
+        commit(repo, "README", "base")
+        if repo is por:
+            os.makedirs(str(repo / "LLM" / "tools"))
+            shutil.copy(SCRIPT, str(repo / "LLM" / "tools" / "pair_check.sh"))
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "tools; pmtest pair")
+            # The integration branch is where a merge-path change lives.
+            git(repo, "checkout", "-q", "-b", "opencode")
+            commit(repo, MERGE_FILE, "merge path on the integration branch")
+        else:
+            git(repo, "checkout", "-q", "-b", "opencode")
+            commit(repo, "fixtures/integration", "fixture")
+        git(repo, "checkout", "-q", "-b", br)
+    return por, pmt
+
+
+def test_758_a_slice_cut_from_the_integration_branch_is_green(tmp_path):
+    """The defect: `main` as the base made this branch inherit `opencode`'s
+    merge-path change and demand evidence for a docs-only slice."""
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, "docs/note.md", "docs only")
+    commit(pmt, "fixtures/a", "fixture; portuale docs only")
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 0, out
+    assert "anchor refs/heads/opencode" in out, out
+
+
+def test_758_the_old_base_is_still_available_and_still_red(tmp_path):
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, "docs/note.md", "docs only")
+    rc, out = run(por, pmt, BASE="", PAIR_INTEGRATION="main")
+    assert rc == 1 and "merge-gate-feat.md" in out, out
+
+
+def test_758_a_slice_that_touches_the_merge_path_is_still_red(tmp_path):
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, MERGE_FILE, "the slice itself touches the merge path")
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 1 and "merge-gate-feat.md" in out, out
+
+
+def test_758_a_clone_with_only_the_remote_ref_still_resolves(tmp_path):
+    """A fresh clone has refs/remotes/origin/opencode and no local branch;
+    `--fork-point` fails empty there, so the resolution must fall back to
+    plain merge-base against the remote ref rather than to `main`."""
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, "docs/note.md", "docs only")
+    for repo in (por, pmt):
+        tip = git(repo, "rev-parse", "refs/heads/opencode")
+        git(repo, "branch", "-D", "opencode")
+        git(repo, "update-ref", "refs/remotes/origin/opencode", tip)
+        logdir = os.path.join(str(repo), ".git", "logs", "refs", "remotes", "origin")
+        shutil.rmtree(logdir, ignore_errors=True)
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 0, out
+    assert "anchor refs/remotes/origin/opencode" in out, out
 
 
 def test_clean_case(tmp_path):
