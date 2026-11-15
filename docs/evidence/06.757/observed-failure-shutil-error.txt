@@ -1,0 +1,21 @@
+            # Copying file access times may fail on Windows
+            if getattr(why, 'winerror', None) is None:
+                errors.append((src, dst, str(why)))
+        if errors:
+>           raise Error(errors)
+E           shutil.Error: [('/home/vivo/repo/PORTUALE/pmtest/fixtures/var/db/.pkg.portage_lockfile', '/var/tmp/pytest-755d/popen-gw4/test_733_tree_does_not_nest_a_1/root/var/db/.pkg.portage_lockfile', "[Errno 2] No such file or directory: '/home/vivo/repo/PORTUALE/pmtest/fixtures/var/db/.pkg.portage_lockfile'")]
+
+/usr/lib/python3.14/shutil.py:608: Error
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
