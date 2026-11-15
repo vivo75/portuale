@@ -53,7 +53,35 @@ Charter 2a bootstrap (backlog #753): the resolver-side synthesis.
   the dropped arm), then `build_cycle_display` re-runs and every field is
   recomputed. Any cycle the reduction does not break still fails exactly as
   today; cross-root same-cp keys are untouched.
-- `--resume` needs no new machinery: a persisted boot row loses its marker
-  when rebuilt from bare `cat/pkg-ver`, so an interrupted bootstrap resumed
-  this way replays unmarked rows and the checker's unmarked-duplicate rule
-  fails it as `slot` — a safe failure, never a silent wrong merge.
+- `--resume` still rebuilds the entries from bare `cat/pkg-ver`
+  (`emerge_build/resume.rs`), so a resumed boot row loses its marker; the
+  checker's unmarked-duplicate rule fails that as `slot` (a safe failure).
+  Persisting the marker was investigated under #759 and left open: the
+  `mtimedb["resume"]` mergelist items are Portage's `[type, root, cpv,
+  "merge"]` lists, and #585 pins that shape.
+- A boot row is never a second identical row (that is what #749 removed):
+  the `portage_use_reduce::BootstrapUse` marker, not the outcome, distinguishes it, and the
+  final row of the slot carries the declared USE.
+- Candidate eligibility (#759, owner rulings 2026-11-15), applied through
+  the `eligible` predicate of `bootstrap_reduction`: the flag must be in
+  the declared USE and not forced (`forced_or_masked_flags`, the set
+  `boot_display_inputs` already shows); a flag whose removal switches on a
+  `!flag?` arm naming a build-time `cp` the declared USE does not
+  (`flag_adds_build_dep`, two `use_reduce_flat` evaluations) is refused,
+  because the boot row could not carry the new dependency in order. The
+  first pass also requires the entry's `REQUIRED_USE` to hold without the
+  flag; if that finds nothing a second pass drops that requirement (prefer,
+  never refuse: the boot build is replaced at once). Other packages'
+  `[flag]` USE deps on the boot package are ignored for the same reason.
+- `guard_map`/`edge_drops_without_flag` stay syntactic
+  (`conditional_guards`): replacing them with a double `use_reduce`
+  evaluation is not equivalent, because the evaluation treats an arm that
+  is inactive under the declared USE as absent (cyc0w-3 in
+  `circular_dep_solutions_applies_the_autounmask_use_overlay` then
+  bootstraps instead of reporting its cycle). That replacement is open.
+- Interrupted run (#759): `interrupted_bootstrap_notes` (portuale
+  `emerge_build/failure.rs`) reads the installed `USE` of each boot row's
+  cpv; one lacking the removed flag means the run stopped before the
+  definitive row. `entries_not_merged` judges by `CONTENTS`, so after a
+  merged boot row the definitive row of the same cpv counts as merged and
+  drops out of the saved resume list.

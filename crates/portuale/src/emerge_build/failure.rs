@@ -554,6 +554,32 @@ pub(crate) fn atoms_requiring(dependent: &GraphEntry, cp: &(String, String)) -> 
     atoms
 }
 
+/// One line per boot row whose reduced build is still the installed one:
+/// the entry's VDB `USE` lacks the flag the boot build removed, so the run
+/// stopped before the definitive row replaced it.
+pub(crate) fn interrupted_bootstrap_notes(root: &Path, entries: &[GraphEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let boot = entry.bootstrap.as_ref()?;
+            let pf = format!("{}-{}", entry.package, entry_version(entry)?);
+            let installed_use =
+                crate::ebuild_merge::read_entry_text(root, &entry.category, &pf, "USE")?;
+            if installed_use
+                .split_whitespace()
+                .any(|f| f == boot.reduced_flag)
+            {
+                return None;
+            }
+            let cpv = format!("{}/{pf}", entry.category);
+            Some(format!(
+                "!!! {cpv} is still installed without USE flag {}; run: emerge --oneshot ={cpv}",
+                boot.reduced_flag
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

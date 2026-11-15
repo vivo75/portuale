@@ -155,6 +155,7 @@ fn select_bootstrap(world: &World, cycles: &[Vec<String>]) -> Option<(String, St
         &world.edges,
         &world.edge_kinds,
         &world.use_guards,
+        &|_, _| true,
     )?;
     let members: BTreeSet<String> = cycles.iter().flatten().cloned().collect();
     if members.len() + 1 > 3

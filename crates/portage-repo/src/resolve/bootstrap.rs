@@ -1,18 +1,13 @@
-//! Charter 2a bootstrap (backlog #753): a real build-time cycle whose one
-//! USE-conditional arm drops under a single flag, serialized as boot
-//! (reduced USE, temporary) -> middle -> definitive (declared USE).
-//!
-//! The selection rule itself lives in the `portage-use-reduce` leaf
-//! ([`portage_use_reduce::bootstrap_reduction`], shared with the fast
-//! plan); this module only feeds it the resolver's cycles + guard map,
-//! synthesizes the boot row after the sort, and rewrites the sorted vec.
-//! A boot build is never a second identical row (that is what #749
-//! removed): it carries the [`portage_use_reduce::BootstrapUse`] marker,
-//! and the final row of the slot carries the declared USE.
+//! Charter 2a bootstrap: a real build-time cycle whose one USE-conditional
+//! arm drops under a single flag, serialized as boot (reduced USE,
+//! temporary) -> middle -> definitive (declared USE). The selection rule is
+//! `portage_use_reduce::bootstrap_reduction`; this module feeds it the
+//! resolver's cycles, synthesizes the boot row and rewrites the sorted vec.
 
 use crate::*;
 use portage_use_reduce::{
-    BootstrapUse, boot_closure_reaches_member, bootstrap_reduction, conditional_guards,
+    BootstrapUse, MatchMode, boot_closure_reaches_member, bootstrap_reduction, conditional_guards,
+    use_reduce_flat,
 };
 use std::collections::BTreeMap;
 
@@ -124,6 +119,31 @@ fn guard_map(
     out
 }
 
+/// Whether removing `flag` switches on a build-time arm: a `cp` the
+/// build-time dependency strings of `metadata` name under the declared USE
+/// minus `flag` but not under the declared USE (a `!flag?` arm).
+pub(crate) fn flag_adds_build_dep(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    flag: &str,
+) -> bool {
+    let cps = |use_flags: &HashSet<String>| -> BTreeSet<(String, String)> {
+        BUILD_KEYS
+            .iter()
+            .filter_map(|key| metadata.get(*key))
+            .filter_map(|text| {
+                let tokens: Vec<String> = text.split_whitespace().map(String::from).collect();
+                use_reduce_flat(&tokens, use_flags, MatchMode::Normal).ok()
+            })
+            .flatten()
+            .filter_map(|token| token_cp(&token))
+            .collect()
+    };
+    let mut reduced = use_flags.clone();
+    reduced.remove(flag);
+    !cps(&reduced).is_subset(&cps(use_flags))
+}
+
 /// Adjacency over merge-bound entries plus the kinds behind each edge, in
 /// the leaf's node namespace (merge-bound `cat/pkg-ver`). A dep with no
 /// merge-bound instance ends the DFS there: an already-installed package
@@ -198,6 +218,14 @@ fn boot_display_inputs(
         old_use.retain(|f| old_iuse.contains(f));
         InstalledUseState { old_use, old_iuse }
     });
+    (installed, definitive_forced_flags(definitive, config))
+}
+
+/// The force/mask flags of the definitive entry's candidate.
+fn definitive_forced_flags(
+    definitive: &GraphEntry,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
     let input = definitive.dep_input.as_deref();
     let iuse = input
         .and_then(|i| i.metadata.get("IUSE").map(String::as_str))
@@ -225,7 +253,7 @@ fn boot_display_inputs(
             category = definitive.package,
         )
     });
-    let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+    forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
         iuse,
         keywords: &keywords,
         candidate_str: &candidate_str,
@@ -233,8 +261,27 @@ fn boot_display_inputs(
         category: &definitive.category,
         package: &definitive.package,
         config,
-    });
-    (installed, forced)
+    })
+}
+
+/// Whether the entry's `REQUIRED_USE` still holds with `flag` removed from
+/// its declared USE (an unreadable `REQUIRED_USE` counts as holding).
+fn required_use_holds_without(input: &DepInput, flag: &str) -> bool {
+    let Some(required_use) = input.metadata.get("REQUIRED_USE") else {
+        return true;
+    };
+    let iuse: HashSet<String> = input
+        .metadata
+        .get("IUSE")
+        .map(|i| {
+            i.split_whitespace()
+                .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut reduced = input.use_flags.clone();
+    reduced.remove(flag);
+    portage_required_use::check_required_use(required_use, &reduced, &iuse).unwrap_or(true)
 }
 
 /// The boot row for the definitive entry with `flag` forced off: the
@@ -340,7 +387,26 @@ pub(crate) fn maybe_bootstrap(
         kinds,
     } = graph_view(&pass.entries);
     let guards = guard_map(&pass.entries, &cp_index);
-    let Some((boot_cpv, flag)) = bootstrap_reduction(circular_deps, &edges, &kinds, &guards) else {
+    // The boot build only removes a flag, never a forced one; it prefers a
+    // flag whose removal keeps REQUIRED_USE, and refuses one whose removal
+    // switches on a build-time arm it could not carry in order.
+    let eligible = |node: &str, flag: &str, keep_required_use: bool| {
+        let Some(entry) = cpv_index.get(node).map(|&i| &pass.entries[i]) else {
+            return false;
+        };
+        let Some(input) = entry.dep_input.as_deref() else {
+            return false;
+        };
+        input.use_flags.contains(flag)
+            && !definitive_forced_flags(entry, config).contains(flag)
+            && !flag_adds_build_dep(&input.metadata, &input.use_flags, flag)
+            && (!keep_required_use || required_use_holds_without(input, flag))
+    };
+    let Some((boot_cpv, flag)) = [true, false].into_iter().find_map(|strict| {
+        bootstrap_reduction(circular_deps, &edges, &kinds, &guards, &|n, f| {
+            eligible(n, f, strict)
+        })
+    }) else {
         return false;
     };
     let members: BTreeSet<String> = circular_deps.iter().flatten().cloned().collect();
@@ -374,11 +440,6 @@ pub(crate) fn maybe_bootstrap(
         .as_deref()
         .map(|input| input.use_flags.clone())
         .unwrap_or_default();
-    if !declared.contains(&flag) {
-        // The arm was active, so the flag is enabled: without it the
-        // reduction has no meaning (and the USE delta would be empty).
-        return false;
-    }
     let mut declared_use: Vec<String> = declared.iter().cloned().collect();
     declared_use.sort();
     let member_cps: BTreeSet<(String, String)> = members
@@ -433,11 +494,12 @@ pub(crate) fn maybe_bootstrap(
     // Every entry that transitively build-depends on the boot slot: the
     // boot row precedes the earliest of them, the definitive entry follows
     // the latest.
+    let merge_index = merge_bound_index(&pass.entries);
     let mut dependents: BTreeSet<usize> = BTreeSet::new();
     for (i, e) in pass.entries.iter().enumerate() {
         if i != boot_idx
             && merge_bound_cpv(e).is_some()
-            && graph_view_reaches(&pass.entries, i, boot_idx)
+            && graph_view_reaches(&pass.entries, &merge_index, i, boot_idx)
         {
             dependents.insert(i);
         }
@@ -476,12 +538,16 @@ pub(crate) fn maybe_bootstrap(
 /// Whether entry `i` transitively build-depends on entry `j` over the
 /// current `deps` (which, for the boot slot, is already the reduced
 /// closure): the placement rule's own reachability, not the leaf's.
-fn graph_view_reaches(entries: &[GraphEntry], i: usize, j: usize) -> bool {
+fn graph_view_reaches(
+    entries: &[GraphEntry],
+    index: &HashMap<(&str, &str), usize>,
+    i: usize,
+    j: usize,
+) -> bool {
     let target = match merge_bound_cpv(&entries[j]) {
         Some(cpv) => cpv,
         None => return false,
     };
-    let index = merge_bound_index(entries);
     let mut seen: BTreeSet<usize> = BTreeSet::from([i]);
     let mut stack = vec![i];
     while let Some(u) = stack.pop() {

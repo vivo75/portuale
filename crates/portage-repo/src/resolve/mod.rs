@@ -4,6 +4,8 @@ mod backtrack_params;
 mod backtracker;
 mod blockers;
 mod bootstrap;
+#[cfg(test)]
+pub(crate) use bootstrap::flag_adds_build_dep;
 mod complete_graph;
 mod conflict_use_display;
 mod ctx;

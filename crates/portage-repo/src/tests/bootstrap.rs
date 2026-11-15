@@ -9,17 +9,61 @@ use super::*;
 /// The owner's pair over the fixture tree, both flags default-on: the
 /// genuine build-time 2-cycle the #749 report names.
 fn bootstrap_graph(atoms: &[&str]) -> GraphResult {
+    bootstrap_graph_with(atoms, &test_config())
+}
+
+/// [`bootstrap_graph`] under `config`; every boot row built must only
+/// remove USE flags: its enabled set is a strict subset of the declared USE.
+fn bootstrap_graph_with(atoms: &[&str], config: &portage_profile::Config) -> GraphResult {
     let root = fixtures_root();
     let owned: Vec<String> = atoms.iter().map(|a| a.to_string()).collect();
-    ResolveRequest::new(
+    let result = ResolveRequest::new(
         &root,
         &root,
         &owned,
-        &test_config(),
+        config,
         &fixtures_root().join("distfiles"),
     )
     .resolve()
-    .unwrap_or_else(|e| panic!("resolving {owned:?} failed: {e}"))
+    .unwrap_or_else(|e| panic!("resolving {owned:?} failed: {e}"));
+    for boot in result.entries.iter().filter(|e| e.bootstrap.is_some()) {
+        let marker = boot.bootstrap.as_ref().unwrap();
+        let declared: BTreeSet<String> = marker.declared_use.iter().cloned().collect();
+        let on = enabled_use(boot);
+        assert!(
+            on.is_subset(&declared) && declared.contains(&marker.reduced_flag),
+            "boot USE {on:?} must be declared {declared:?} minus {}",
+            marker.reduced_flag
+        );
+        assert!(!on.contains(&marker.reduced_flag), "{on:?}");
+    }
+    result
+}
+
+/// `config` with each `(atom, flag)` forced on, as a profile's
+/// `package.use.force` lines.
+fn forcing(lines: &[(&str, &str)]) -> portage_profile::Config {
+    let mut config = test_config();
+    config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+        package_use_force: lines
+            .iter()
+            .map(|(atom, flag)| (atom.to_string(), vec![flag.to_string()]))
+            .collect(),
+        ..Default::default()
+    }];
+    config
+}
+
+/// The one boot row of `result` as `(package, reduced flag)`.
+fn boot_of(result: &GraphResult) -> Option<(String, String)> {
+    let mut boots = result.entries.iter().filter_map(|e| {
+        e.bootstrap
+            .as_ref()
+            .map(|b| (e.package.clone(), b.reduced_flag.clone()))
+    });
+    let first = boots.next();
+    assert!(boots.next().is_none(), "at most one boot row");
+    first
 }
 
 /// The enabled USE flags one row was built with, from its own display.
@@ -178,4 +222,85 @@ fn bootstrap_refused_under_buildpkgonly() {
     .expect("the buildpkgonly resolve runs");
     assert!(result.entries.iter().all(|e| e.bootstrap.is_none()));
     assert!(!result.circular_deps.is_empty(), "the cycle still reports");
+}
+
+/// A forced flag cannot be dropped (PMS `package.use.force`): the first
+/// candidate `w753otherpkg`/`useboh` is forced, so the next one is tried.
+#[test]
+fn a_forced_flag_is_skipped_for_the_next_candidate() {
+    let config = forcing(&[("dev-libs/w753otherpkg", "useboh")]);
+    let result = bootstrap_graph_with(&["dev-libs/w753pkgnew", "dev-libs/w753otherpkg"], &config);
+    assert_eq!(
+        boot_of(&result),
+        Some(("w753pkgnew".to_string(), "usefoo".to_string()))
+    );
+    assert!(
+        result.circular_deps.is_empty(),
+        "{:?}",
+        result.circular_deps
+    );
+}
+
+/// Every candidate flag forced: no bootstrap, the cycle is reported as before.
+#[test]
+fn only_forced_candidates_keep_the_cycle_report() {
+    let config = forcing(&[
+        ("dev-libs/w753otherpkg", "useboh"),
+        ("dev-libs/w753pkgnew", "usefoo"),
+    ]);
+    let result = bootstrap_graph_with(&["dev-libs/w753pkgnew", "dev-libs/w753otherpkg"], &config);
+    assert_eq!(boot_of(&result), None);
+    assert!(!result.circular_deps.is_empty(), "the cycle still reports");
+}
+
+/// REQUIRED_USE is preferred, never required: `w759a` would be first but
+/// removing `fa` violates its `REQUIRED_USE="fa"`, so `w759b`/`fb` wins.
+#[test]
+fn a_candidate_keeping_required_use_is_preferred() {
+    let result = bootstrap_graph(&["dev-libs/w759a", "dev-libs/w759b"]);
+    assert_eq!(
+        boot_of(&result),
+        Some(("w759b".to_string(), "fb".to_string()))
+    );
+}
+
+/// With only a REQUIRED_USE-violating candidate the bootstrap still happens:
+/// the boot build is temporary.
+#[test]
+fn a_required_use_violating_only_candidate_still_bootstraps() {
+    let result = bootstrap_graph(&["dev-libs/w759c", "dev-libs/w759d"]);
+    assert_eq!(
+        boot_of(&result),
+        Some(("w759c".to_string(), "fc".to_string()))
+    );
+    assert!(
+        result.circular_deps.is_empty(),
+        "{:?}",
+        result.circular_deps
+    );
+}
+
+/// Removing `fe` would switch on `!fe? ( dev-libs/w759x )`, a build-time
+/// need the boot row cannot carry in order: the bootstrap is refused.
+#[test]
+fn a_negated_build_arm_switched_on_by_the_removal_refuses() {
+    let result = bootstrap_graph(&["dev-libs/w759e", "dev-libs/w759f"]);
+    assert_eq!(boot_of(&result), None);
+    assert!(!result.circular_deps.is_empty(), "the cycle still reports");
+}
+
+/// A `!flag?` arm guards nothing: the flag is no dropping candidate for
+/// it, and removing the flag switches the atom on.
+#[test]
+fn a_negated_guard_never_makes_the_flag_a_dropping_candidate() {
+    let text = "!fe? ( dev-libs/x )";
+    assert!(
+        portage_use_reduce::conditional_guards(text)
+            .iter()
+            .all(|(_, guards)| guards.is_empty())
+    );
+    let metadata = HashMap::from([("DEPEND".to_string(), text.to_string())]);
+    let declared = HashSet::from(["fe".to_string()]);
+    assert!(flag_adds_build_dep(&metadata, &declared, "fe"));
+    assert!(!flag_adds_build_dep(&metadata, &declared, "other"));
 }

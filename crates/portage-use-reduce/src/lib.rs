@@ -1846,11 +1846,14 @@ pub fn conditional_guards(dep_str: &str) -> Vec<(String, BTreeSet<String>)> {
 /// ordinary one-member cycle under this rule. Member order is name order:
 /// each reported cycle is sorted first, so both emitters agree no matter
 /// which walk order reported it (reversed argv picks the same reduction).
+/// `eligible(boot slot, flag)` filters the candidates before the tie-breaks,
+/// so a refused flag hands the choice to the next one.
 pub fn bootstrap_reduction(
     cycles: &[Vec<String>],
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
     use_guards: &BTreeMap<(String, String), BTreeSet<String>>,
+    eligible: &dyn Fn(&str, &str) -> bool,
 ) -> Option<(String, String)> {
     let cycles: Vec<Vec<String>> = cycles
         .iter()
@@ -1876,38 +1879,30 @@ pub fn bootstrap_reduction(
             })
         })
     };
-    let mut triples: Vec<(usize, usize, usize, String, String)> = Vec::new();
+    type Rank = (std::cmp::Reverse<usize>, usize, usize, String);
+    let mut best: Option<(Rank, String)> = None;
     for (ci, cycle) in cycles.iter().enumerate() {
         for (mi, m) in cycle.iter().enumerate() {
-            let mut flags: BTreeSet<String> = BTreeSet::new();
-            if let Some(to) = edges.get(m) {
-                for n in to {
-                    if cycle.contains(n)
-                        && is_build_kind(&(m.clone(), n.clone()))
-                        && let Some(g) = use_guards.get(&(m.clone(), n.clone()))
-                    {
-                        flags.extend(g.iter().cloned());
-                    }
+            let mut flags: BTreeSet<&String> = BTreeSet::new();
+            for n in edges.get(m).into_iter().flatten() {
+                let edge = (m.clone(), n.clone());
+                if cycle.contains(n)
+                    && is_build_kind(&edge)
+                    && let Some(g) = use_guards.get(&edge)
+                {
+                    flags.extend(g);
                 }
             }
-            for flag in flags {
-                if edges.get(m).is_some_and(|to| {
-                    to.iter()
-                        .any(|n| cycle.contains(n) && drops(&(m.clone(), n.clone()), &flag))
-                }) {
-                    let broken = cycles.iter().filter(|c| breaks_cycle(c, &flag)).count();
-                    triples.push((broken, ci, mi, m.clone(), flag));
+            for flag in flags.into_iter().filter(|f| eligible(m, f)) {
+                let broken = cycles.iter().filter(|c| breaks_cycle(c, flag)).count();
+                let key = (std::cmp::Reverse(broken), ci, mi, flag.clone());
+                if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                    best = Some((key, m.clone()));
                 }
             }
         }
     }
-    triples.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
-            .then_with(|| a.4.cmp(&b.4))
-    });
-    triples.into_iter().next().map(|(_, _, _, m, f)| (m, f))
+    best.map(|((_, _, _, flag), m)| (m, flag))
 }
 
 /// Whether the reduced boot build still needs a cycle member at build time:
@@ -2006,7 +2001,7 @@ mod bootstrap_tests {
         let kinds = kinds(&[((other, new), 0b01000), ((new, other), 0b01000)]);
         let guards = guards(&[((other, new), &["useboh"]), ((new, other), &["usefoo"])]);
         assert_eq!(
-            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true),
             Some((other.to_string(), "useboh".to_string()))
         );
     }
@@ -2032,7 +2027,7 @@ mod bootstrap_tests {
         ]);
         let guards = guards(&[((a0, a1), &["shared", "zona"]), ((b0, b1), &["shared"])]);
         assert_eq!(
-            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true),
             Some((a0.to_string(), "shared".to_string()))
         );
     }
@@ -2058,7 +2053,7 @@ mod bootstrap_tests {
         ]);
         let guards = guards(&[((b0, b1), &["useboh"])]);
         assert_eq!(
-            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true),
             Some((b0.to_string(), "useboh".to_string()))
         );
     }
@@ -2073,7 +2068,7 @@ mod bootstrap_tests {
         let edges = edges(&[(a0, &[a1]), (a1, &[a0])]);
         let kinds = kinds(&[((a0, a1), 0b01000), ((a1, a0), 0b01000)]);
         assert_eq!(
-            bootstrap_reduction(&cycles, &edges, &kinds, &BTreeMap::new()),
+            bootstrap_reduction(&cycles, &edges, &kinds, &BTreeMap::new(), &|_, _| true),
             None
         );
     }
@@ -2098,9 +2093,12 @@ mod bootstrap_tests {
             ((b1, b0), 0b01000),
         ]);
         let guards = guards(&[((a0, a1), &["zona"]), ((b0, b1), &["useboh"])]);
-        let first = bootstrap_reduction(&cycles, &edges, &kinds, &guards);
+        let first = bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true);
         assert_eq!(first, Some((a0.to_string(), "zona".to_string())));
-        assert_eq!(first, bootstrap_reduction(&cycles, &edges, &kinds, &guards));
+        assert_eq!(
+            first,
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true)
+        );
     }
 
     /// STOP rule 2: the reduced boot build still reaches the other member
@@ -2140,7 +2138,7 @@ mod bootstrap_tests {
         let kinds = kinds(&[((m, m), 0b01000)]);
         let guards = guards(&[((m, m), &["usefoo"])]);
         assert_eq!(
-            bootstrap_reduction(&cycles, &edges, &kinds, &guards),
+            bootstrap_reduction(&cycles, &edges, &kinds, &guards, &|_, _| true),
             Some((m.to_string(), "usefoo".to_string()))
         );
         let members: BTreeSet<String> = [m.to_string()].into_iter().collect();

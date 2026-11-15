@@ -178,3 +178,35 @@ fn bootstrap_three_row_plan_merges_fully_with_the_declared_survivor() {
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 }
+
+/// A run that stops after the boot row merged leaves the reduced build
+/// installed: one line names the package, the removed flag and the command
+/// that restores it. Once the definitive row has merged, nothing is said.
+#[test]
+fn an_interrupted_bootstrap_names_the_reduced_install_and_its_restore_command() {
+    let root = tempdir();
+    let distdir = tempdir();
+    let portage_tmpdir = tempdir();
+    let (entries, repos) = bootstrap_plan(&root);
+    assert!(
+        interrupted_bootstrap_notes(root.path(), &entries).is_empty(),
+        "nothing merged yet"
+    );
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[0..1], &repos, 1);
+    let notes = interrupted_bootstrap_notes(root.path(), &entries);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    for part in [
+        "dev-libs/w753otherpkg-1",
+        "useboh",
+        "emerge --oneshot =dev-libs/w753otherpkg-1",
+    ] {
+        assert!(notes[0].contains(part), "{part} in {:?}", notes[0]);
+    }
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[2..3], &repos, 1);
+    assert!(
+        interrupted_bootstrap_notes(root.path(), &entries).is_empty(),
+        "the definitive build replaced the reduced one"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}

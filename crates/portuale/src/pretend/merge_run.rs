@@ -142,6 +142,9 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         if !emerge_build::is_reported_failure(&e.message) {
             eprintln!("emerge: {}", e.message);
         }
+        for note in emerge_build::interrupted_bootstrap_notes(root, entries) {
+            eprintln!("{note}");
+        }
         return Some(FailedMerge {
             code: ExitCode::from(1),
             merged: merged_entries(entries, &unmerged, &e.report.postinst_failed),
