@@ -110,23 +110,9 @@ pub(crate) fn depend_order(
     // Cutting one runtime edge can open the next cycle: repeat until every
     // remaining cycle is all build-time, then order what is left.
     let mut working = edges.clone();
-    loop {
-        match runtime_cut(&working, kinds, &build_used) {
-            None => break,
-            Some(CycleCut::Edge(from, to)) => {
-                if let Some(next) = working.get_mut(&from) {
-                    next.remove(&to);
-                }
-            }
-            // The back edge is the only cuttable one: cut it too, rather
-            // than stopping the scan. Stopping would leave every later
-            // cycle to the walk below, whose implicit cuts are not chosen
-            // by any rule (backlog #746: the perl cluster moved late).
-            Some(CycleCut::BackEdge(from, to)) => {
-                if let Some(next) = working.get_mut(&from) {
-                    next.remove(&to);
-                }
-            }
+    while let Some((from, to)) = runtime_cut(&working, kinds, &build_used) {
+        if let Some(next) = working.get_mut(&from) {
+            next.remove(&to);
         }
     }
     unordered(&working)
@@ -209,16 +195,6 @@ pub(crate) fn is_cuttable_runtime_edge(
     is_runtime_edge(kinds, edge) && !build_used.contains(&edge.0)
 }
 
-/// What the first cycle the walk meets needs: cut this runtime edge, or cut
-/// the closing back edge itself when only it is cuttable.
-#[derive(Debug, PartialEq, Eq)]
-enum CycleCut {
-    /// Cut this edge and look for the next cycle.
-    Edge(String, String),
-    /// The back edge is the only cuttable one: cut it and keep scanning.
-    BackEdge(String, String),
-}
-
 /// The cut the first cycle the walk meets needs, if it is cyclic. The walk
 /// is in name order, so the cut is the same on every run. `None` when the
 /// graph is acyclic.
@@ -226,7 +202,7 @@ fn runtime_cut(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
     build_used: &BTreeSet<String>,
-) -> Option<CycleCut> {
+) -> Option<(String, String)> {
     let mut done: HashSet<&String> = HashSet::new();
     let mut walking: HashSet<&String> = HashSet::new();
     let mut nodes: BTreeSet<&String> = edges.keys().collect();
@@ -271,26 +247,16 @@ fn cycle_cut(
     kid: &String,
     kinds: &BTreeMap<(String, String), u8>,
     build_used: &BTreeSet<String>,
-) -> Option<CycleCut> {
+) -> Option<(String, String)> {
     let start = stack.iter().position(|(n, _, _)| *n == kid)?;
     let mut cycle: Vec<(String, String)> = stack[start..]
         .windows(2)
         .map(|w| (w[0].0.clone(), w[1].0.clone()))
         .collect();
     cycle.push((stack.last()?.0.clone(), kid.clone()));
-    let last = cycle.len() - 1;
-    let first = cycle
-        .iter()
-        .enumerate()
-        .find(|(_, edge)| is_cuttable_runtime_edge(kinds, build_used, edge));
-    match first {
-        None => None,
-        Some((i, _)) if i == last => {
-            let back = cycle.last().cloned().expect("the cycle closes");
-            Some(CycleCut::BackEdge(back.0, back.1))
-        }
-        Some((_, edge)) => Some(CycleCut::Edge(edge.0.clone(), edge.1.clone())),
-    }
+    cycle
+        .into_iter()
+        .find(|edge| is_cuttable_runtime_edge(kinds, build_used, edge))
 }
 
 /// The build-time cycles of `edges`: strongly connected components over
@@ -550,7 +516,7 @@ mod tests {
         ]);
         assert_eq!(
             runtime_cut(&g, &kinds, &build_time_used(&kinds)),
-            Some(CycleCut::Edge(loc.to_string(), get.to_string()))
+            Some((loc.to_string(), get.to_string()))
         );
         let o = depend_order(&g, &kinds);
         assert!(pos(&o, loc) < pos(&o, auto), "{o:?}");
@@ -610,7 +576,7 @@ mod tests {
         // `prov -> base` half is `RDEPEND`, so the report reads nothing.
         assert_eq!(
             runtime_cut(&g, &kinds, &used),
-            Some(CycleCut::BackEdge(virt.to_string(), prov.to_string()))
+            Some((virt.to_string(), prov.to_string()))
         );
         assert!(build_time_cycles(&g, &kinds).is_empty());
         // ... and with that edge gone the remaining cycle cuts at the
@@ -619,7 +585,7 @@ mod tests {
         rest.get_mut(prov).unwrap().remove(base);
         assert_eq!(
             runtime_cut(&rest, &kinds, &used),
-            Some(CycleCut::BackEdge(virt.to_string(), prov.to_string()))
+            Some((virt.to_string(), prov.to_string()))
         );
     }
 

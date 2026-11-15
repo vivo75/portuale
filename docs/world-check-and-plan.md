@@ -91,8 +91,11 @@ package's best visible version when the atom names no slot, the best
 visible version in that main slot when it does (a `:1` arm is judged
 against slot 1's best, never a parallel slot 2). A branch that qualifies
 outranks one that is merely installed, so the plan takes the arm that
-admits the newest version; when both qualify the installed one wins, and
-the check keeps the installed-first choice. A changed USE still needs
+admits the newest version (an installed arm that only a version bound
+keeps from the best visible version loses too); when both qualify the
+installed one wins, and the check keeps the installed-first choice. This
+newest-arm rule is a project decision under charter property 3: PMS
+accepts any satisfied arm, so it is not a conformance rule. A changed USE still needs
 `plan-world-newuse` to become a rebuild row.
 
 It does not check blockers, `REQUIRED_USE` or slot conflicts, so it can list

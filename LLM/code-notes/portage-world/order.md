@@ -179,3 +179,6 @@
 - Now `portage_use_reduce::BUILD_KIND_MASK` (single source of truth with the
   bootstrap rule, which reads kinds maps in this layout). No behaviour
   change.
+
+## fn runtime_cut (#760)
+- Returns the one edge to cut. It used to return `CycleCut::Edge` or `CycleCut::BackEdge`, handled identically: cutting the back edge when it is the only cuttable one must not stop the scan, or every later cycle is left to the walk's implicit cuts, which no rule chooses (backlog #746: the perl cluster moved late).

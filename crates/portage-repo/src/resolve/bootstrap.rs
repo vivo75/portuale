@@ -6,8 +6,8 @@
 
 use crate::*;
 use portage_use_reduce::{
-    BootstrapUse, MatchMode, boot_closure_reaches_member, bootstrap_reduction, conditional_guards,
-    use_reduce_flat,
+    BootstrapUse, MatchMode, boot_closure_reaches_member, bootstrap_reduction_strict_first,
+    conditional_guards, use_reduce_flat,
 };
 use std::collections::BTreeMap;
 
@@ -264,14 +264,17 @@ fn definitive_forced_flags(
     })
 }
 
-/// Whether the entry's `REQUIRED_USE` still holds with `flag` removed from
-/// its declared USE (an unreadable `REQUIRED_USE` counts as holding).
-fn required_use_holds_without(input: &DepInput, flag: &str) -> bool {
-    let Some(required_use) = input.metadata.get("REQUIRED_USE") else {
+/// Whether `REQUIRED_USE` still holds with `flag` removed from `use_flags`
+/// (an unreadable `REQUIRED_USE` counts as holding).
+fn required_use_holds_without(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    flag: &str,
+) -> bool {
+    let Some(required_use) = metadata.get("REQUIRED_USE") else {
         return true;
     };
-    let iuse: HashSet<String> = input
-        .metadata
+    let iuse: HashSet<String> = metadata
         .get("IUSE")
         .map(|i| {
             i.split_whitespace()
@@ -279,9 +282,26 @@ fn required_use_holds_without(input: &DepInput, flag: &str) -> bool {
                 .collect()
         })
         .unwrap_or_default();
-    let mut reduced = input.use_flags.clone();
+    let mut reduced = use_flags.clone();
     reduced.remove(flag);
     portage_required_use::check_required_use(required_use, &reduced, &iuse).unwrap_or(true)
+}
+
+/// Whether the boot build may force `flag` off: the flag is on, the profile
+/// does not force it, removing it switches on no build-time arm, and (when
+/// `keep_required_use`) `REQUIRED_USE` still holds. Shared by the resolver
+/// and the fast plan so both pick the same bootstrap.
+pub fn bootstrap_flag_eligible(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    forced: &HashSet<String>,
+    flag: &str,
+    keep_required_use: bool,
+) -> bool {
+    use_flags.contains(flag)
+        && !forced.contains(flag)
+        && !flag_adds_build_dep(metadata, use_flags, flag)
+        && (!keep_required_use || required_use_holds_without(metadata, use_flags, flag))
 }
 
 /// The boot row for the definitive entry with `flag` forced off: the
@@ -394,19 +414,19 @@ pub(crate) fn maybe_bootstrap(
         let Some(entry) = cpv_index.get(node).map(|&i| &pass.entries[i]) else {
             return false;
         };
-        let Some(input) = entry.dep_input.as_deref() else {
-            return false;
-        };
-        input.use_flags.contains(flag)
-            && !definitive_forced_flags(entry, config).contains(flag)
-            && !flag_adds_build_dep(&input.metadata, &input.use_flags, flag)
-            && (!keep_required_use || required_use_holds_without(input, flag))
-    };
-    let Some((boot_cpv, flag)) = [true, false].into_iter().find_map(|strict| {
-        bootstrap_reduction(circular_deps, &edges, &kinds, &guards, &|n, f| {
-            eligible(n, f, strict)
+        entry.dep_input.as_deref().is_some_and(|input| {
+            bootstrap_flag_eligible(
+                &input.metadata,
+                &input.use_flags,
+                &definitive_forced_flags(entry, config),
+                flag,
+                keep_required_use,
+            )
         })
-    }) else {
+    };
+    let Some((boot_cpv, flag)) =
+        bootstrap_reduction_strict_first(circular_deps, &edges, &kinds, &guards, &eligible)
+    else {
         return false;
     };
     let members: BTreeSet<String> = circular_deps.iter().flatten().cloned().collect();

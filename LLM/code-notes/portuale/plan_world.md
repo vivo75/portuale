@@ -46,3 +46,6 @@
   argv order included: the leaf name-sorts each reported cycle before
   scoring (review I2), so reversed argv picks the same reduction — the
   old note claiming a mirrored pick is superseded.
+
+## fn run (bootstrap, #760)
+- `select_bootstrap`/`apply_bootstrap` moved to `portage-world` (`World::build_plan`, see `portage-world/bootstrap.md`). It returns `(boot slot, reduced flag)` as `Bootstrap { node, flag }`; the caller keeps today's single-rows-plus-report shape when there is none (STOP rules 1-3: no single-flag reduction, a boot that still needs a member, more than 3 affected rows, or no recorded USE to reduce from).

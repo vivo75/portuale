@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
+mod bootstrap;
 mod memo;
 mod order;
 mod rebuild;
@@ -85,6 +86,7 @@ pub(crate) mod testkit {
     }
 }
 
+pub use bootstrap::{Bootstrap, BuildPlan, PlanRow};
 pub use order::{Order, build_time_cycles};
 pub use rebuild::RefusedBinding;
 pub use reorder::{Change, SlotSet};
@@ -415,55 +417,7 @@ fn dependency_keys(
     }
 }
 
-/// The USE flags guarding the `node -> dep` edge: the flags whose removal
-/// drops every build-time arm naming the dep's `cp` (the S0-proved seam:
-/// raw `*DEPEND` strings via `repo_aux_metadata` plus this slot's own
-/// effective USE). `None` when the slot has no readable candidate or no
-/// flag drops the edge — the caller keeps today's report then.
-fn edge_use_guards(
-    node: &str,
-    dep: &str,
-    chosen: &BTreeMap<String, &Candidate>,
-) -> Option<BTreeSet<String>> {
-    let best = chosen.get(node)?;
-    let (cp, _) = node.rsplit_once(':')?;
-    let (category, package) = cp.split_once('/')?;
-    let dep_cp = dep.rsplit_once(':').map_or(dep, |(cp, _)| cp);
-    let pf = format!("{package}-{}", best.version);
-    let meta = portage_repo::repo_aux_metadata(&best.repo_location, category, &pf).ok()?;
-    // No effective-USE call here by design: whether an arm is active is
-    // already encoded in the edge's existence (the walk evaluated it), so
-    // the guard relation itself is purely syntactic.
-    let mut candidates: BTreeSet<String> = BTreeSet::new();
-    let mut arms: Vec<(String, BTreeSet<String>)> = Vec::new();
-    for key in ["DEPEND", "BDEPEND", "IDEPEND"] {
-        let Some(text) = meta.get(key) else {
-            continue;
-        };
-        for (atom, guards) in portage_use_reduce::conditional_guards(text) {
-            candidates.extend(guards.iter().cloned());
-            let Some(parsed) = portage_dep::parse_atom(&atom) else {
-                continue;
-            };
-            if parsed.blocker != portage_dep::Blocker::None {
-                continue;
-            }
-            if format!("{}/{}", parsed.category, parsed.package) == dep_cp {
-                arms.push((atom, guards));
-            }
-        }
-    }
-    if arms.is_empty() {
-        return None;
-    }
-    // Universally quantified: an unguarded arm naming the dep keeps the
-    // edge, so no single flag drops it.
-    let dropping: BTreeSet<String> = candidates
-        .into_iter()
-        .filter(|f| arms.iter().all(|(_, g)| g.contains(f)))
-        .collect();
-    Some(dropping)
-}
+/// Whether the USE dependencies of `atom_str` hold for a candidate
 /// package declaring `iuse` and enabling `enabled`. A flag the package does
 /// not declare is judged by the dependency's `(+)`/`(-)` default; a flag
 /// that is enabled counts as declared (implicit IUSE).
@@ -566,14 +520,9 @@ pub struct World {
     /// `cat/pkg:slot` -> the enabled USE flags of the version a plan would
     /// install there, for each reached slot with a change.
     pub planned_use: BTreeMap<String, BTreeSet<String>>,
-    /// `(slot, slot it depends on)` -> the USE flags guarding that edge in
-    /// the raw `*DEPEND` strings: the flags whose removal drops every
-    /// build-time arm naming the dep. Parsed from the raw strings for every
-    /// reached slot (not just [`World::planned_use`]'s changed subset), so
-    /// the charter 2a bootstrap recovers the guard through the existing
-    /// seam; no effective-USE call is needed because the edge's existence
-    /// already encodes the evaluated USE.
-    pub use_guards: BTreeMap<(String, String), BTreeSet<String>>,
+    /// The charter 2a bootstrap that breaks the build-time cycles, if one
+    /// single-flag reduction does ([`World::build_plan`] applies it).
+    pub bootstrap: Option<Bootstrap>,
     /// `cat/pkg-ver` of the ebuilds of every reached package whose metadata
     /// could not be read: they are no candidates, so their dependencies
     /// are missing from the walk. Sorted.
@@ -627,6 +576,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
     loop {
         let mut world = walk(opts, (&repos, &config), &rebuilds)?;
         if !opts.rebuilds {
+            world.bootstrap = bootstrap::select(&world, &config);
             return Ok(world);
         }
         let mut stale = if opts.emptytree {
@@ -652,6 +602,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         if stale.rebuild.is_subset(&rebuilds) {
             world.rebuilds = rebuilds;
             world.refused = stale.refused;
+            world.bootstrap = bootstrap::select(&world, &config);
             return Ok(world);
         }
         rebuilds.extend(stale.rebuild);
@@ -757,15 +708,6 @@ fn walk(
     // slot -> the slots it depends on (itself left out).
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
-    let mut use_guards: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
-    // `cat/pkg:slot` -> the chosen candidate, for the per-slot effective
-    // USE the guard map is built from.
-    let mut chosen: BTreeMap<String, &Candidate> = BTreeMap::new();
-    for slot in &slots {
-        if let Some(best) = slot.chosen() {
-            chosen.insert(slot.node(), best);
-        }
-    }
     for (node, atoms) in node_atoms {
         let to = edges.entry(node.clone()).or_default();
         for (atom, mask) in &atoms {
@@ -773,15 +715,6 @@ fn walk(
                 if *dep != node {
                     to.insert(dep.clone());
                     *edge_kinds.entry((node.clone(), dep.clone())).or_default() |= mask;
-                    // The guard behind this edge, when one USE flag's removal
-                    // drops every build-time arm naming the dep: parsed from
-                    // the raw strings with this slot's own effective USE, the
-                    // S0-proved seam (`docs/evidence/02.753/`).
-                    if let Some(guards) = edge_use_guards(&node, dep, &chosen)
-                        && !guards.is_empty()
-                    {
-                        use_guards.insert((node.clone(), dep.clone()), guards);
-                    }
                 }
             }
         }
@@ -792,11 +725,11 @@ fn walk(
         unmatched,
         edges,
         edge_kinds,
-        use_guards,
         reached,
         rebuilds: BTreeSet::new(),
         refused: Vec::new(),
         planned_use,
+        bootstrap: None,
         unreadable,
     })
 }
@@ -1337,15 +1270,7 @@ mod tests {
     /// taken for a missing package.
     #[test]
     fn an_unreadable_ebuild_is_reported() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status()
-            .expect("cp runs");
-        assert!(copied.success());
+        let tree = fixture_copy();
         let dir = tree.path().join("repo/dev-libs/w692unread");
         std::fs::create_dir_all(&dir).expect("package dir");
         std::fs::write(
@@ -1364,6 +1289,19 @@ mod tests {
                 ["dev-libs/w692unread-1"]
             );
         }
+    }
+
+    /// A private copy of the fixture tree, to add ebuilds to.
+    fn fixture_copy() -> tempfile::TempDir {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        tree
     }
 
     /// A repository ebuild with its md5-cache entry, in the tree copy `root`.
@@ -1404,14 +1342,7 @@ mod tests {
     /// and one whose other recorded pins forbid the plan, are not.
     #[test]
     fn a_sub_slot_change_rebuilds_the_slot_operator_consumers_only() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         add_ebuild(tree.path(), "dev-libs/w693prov-2", "0/2", "");
         add_ebuild(tree.path(), "dev-libs/w693calm-1", "0/1", "");
         add_ebuild(
@@ -1465,117 +1396,87 @@ mod tests {
         );
     }
 
-    /// PMS `dependencies.tex`, `sec:slot-dep`: a kept consumer whose recorded
-    /// `:=` binding names a sub-slot the installed provider no longer has is
-    /// rebuilt even though the plan leaves the provider alone (backlog #741).
+    /// PMS `dependencies.tex`, `sec:slot-dep`, charter property 1: a kept
+    /// consumer whose recorded `:=` binding is stale is rebuilt even though
+    /// the plan leaves its provider alone, unless the rebuild would hold a
+    /// changed provider back (a recorded versioned dep forbids the chosen
+    /// version) or the consumer has no visible ebuild; those two are refused
+    /// and named, with the provider the binding names when it is installed.
     #[test]
-    fn a_kept_package_with_a_stale_binding_is_rebuilt() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
-        add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
-        add_ebuild(
-            tree.path(),
-            "dev-libs/w741user-1",
-            "0",
-            "dev-libs/w741prov:=",
+    fn a_stale_binding_is_rebuilt_or_refused() {
+        type Case<'a> = (
+            &'a str,                            // case name
+            &'a [(&'a str, &'a str, &'a str)],  // ebuilds: cpv, SLOT, RDEPEND
+            &'a [(&'a str, &'a str)],           // installed: cpf, SLOT
+            (&'a str, &'a str),                 // the consumer and its recorded RDEPEND
+            &'a [&'a str],                      // expected rebuilds
+            Option<(&'a str, Option<&'a str>)>, // expected refusal: atom, provider
         );
-        let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741user-1", "0")];
-        let world = testkit::analyse_fixture_with(&["dev-libs/w741user"], &installed, |o| {
-            o.config_root = tree.path().to_path_buf();
-            o.rebuilds = true;
-            std::fs::write(
-                o.root
-                    .join("var/db/pkg/dev-libs/w741user-1")
-                    .join("RDEPEND"),
-                "dev-libs/w741prov:0/1=",
-            )
-            .expect("recorded RDEPEND");
-        });
-        assert_eq!(
-            world.rebuilds.iter().collect::<Vec<_>>(),
-            ["dev-libs/w741user:0"]
-        );
-        assert!(world.refused.is_empty(), "{:?}", world.refused);
-    }
-
-    /// Charter property 1 with the owner's guard: a stale consumer whose
-    /// recorded versioned dep forbids the plan's chosen provider version is
-    /// refused, not scheduled, so the rebuild cannot hold the provider back.
-    #[test]
-    fn a_rebuild_that_would_hold_back_a_changed_provider_is_refused() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
-        add_ebuild(tree.path(), "dev-libs/w741core-2", "0/2", "");
-        add_ebuild(tree.path(), "dev-libs/w741user-1", "0", "dev-libs/w741core");
-        let installed = [("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")];
-        let world = testkit::analyse_fixture_with(&["dev-libs/w741user"], &installed, |o| {
-            o.config_root = tree.path().to_path_buf();
-            o.rebuilds = true;
-            std::fs::write(
-                o.root
-                    .join("var/db/pkg/dev-libs/w741user-1")
-                    .join("RDEPEND"),
-                "=dev-libs/w741core-1* dev-libs/w741core:0/9=",
-            )
-            .expect("recorded RDEPEND");
-        });
-        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
-        assert_eq!(
-            world.refused,
-            [crate::rebuild::RefusedBinding {
-                consumer: "dev-libs/w741user".to_string(),
-                atom: "=dev-libs/w741core-1*".to_string(),
-                provider: Some("dev-libs/w741core-2".to_string()),
-            }]
-        );
-    }
-
-    /// A stale consumer with no visible ebuild cannot be rebuilt: it is
-    /// refused, with the provider the binding names when it is installed.
-    #[test]
-    fn a_consumer_with_no_visible_ebuild_is_not_rebuilt() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
-        add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
-        let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741gone-1", "0")];
-        let world = testkit::analyse_fixture_with(&["dev-libs/w741gone"], &installed, |o| {
-            o.config_root = tree.path().to_path_buf();
-            o.rebuilds = true;
-            std::fs::write(
-                o.root
-                    .join("var/db/pkg/dev-libs/w741gone-1")
-                    .join("RDEPEND"),
-                "dev-libs/w741prov:0/1=",
-            )
-            .expect("recorded RDEPEND");
-        });
-        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
-        assert_eq!(
-            world.refused,
-            [crate::rebuild::RefusedBinding {
-                consumer: "dev-libs/w741gone".to_string(),
-                atom: "dev-libs/w741prov:0/1=".to_string(),
-                provider: None,
-            }]
-        );
+        let cases: [Case; 3] = [
+            (
+                "stale :=, provider left alone",
+                &[
+                    ("dev-libs/w741prov-2", "0/2", ""),
+                    ("dev-libs/w741user-1", "0", "dev-libs/w741prov:="),
+                ],
+                &[("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741user-1", "0")],
+                ("w741user-1", "dev-libs/w741prov:0/1="),
+                &["dev-libs/w741user:0"],
+                None,
+            ),
+            (
+                "a pin would hold the changed provider back",
+                &[
+                    ("dev-libs/w741core-2", "0/2", ""),
+                    ("dev-libs/w741user-1", "0", "dev-libs/w741core"),
+                ],
+                &[("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")],
+                ("w741user-1", "=dev-libs/w741core-1* dev-libs/w741core:0/9="),
+                &[],
+                Some(("=dev-libs/w741core-1*", Some("dev-libs/w741core-2"))),
+            ),
+            (
+                "no visible ebuild for the consumer",
+                &[("dev-libs/w741prov-2", "0/2", "")],
+                &[("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741gone-1", "0")],
+                ("w741gone-1", "dev-libs/w741prov:0/1="),
+                &[],
+                Some(("dev-libs/w741prov:0/1=", None)),
+            ),
+        ];
+        for (name, ebuilds, installed, (consumer, recorded), rebuilds, refusal) in cases {
+            let tree = fixture_copy();
+            for (cpv, slot, rdepend) in ebuilds {
+                add_ebuild(tree.path(), cpv, slot, rdepend);
+            }
+            let atom = format!("dev-libs/{}", consumer.rsplit_once('-').unwrap().0);
+            let world = testkit::analyse_fixture_with(&[&atom], installed, |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.rebuilds = true;
+                std::fs::write(
+                    o.root
+                        .join("var/db/pkg/dev-libs")
+                        .join(consumer)
+                        .join("RDEPEND"),
+                    recorded,
+                )
+                .expect("recorded RDEPEND");
+            });
+            assert_eq!(
+                world.rebuilds.iter().collect::<Vec<_>>(),
+                rebuilds,
+                "{name}"
+            );
+            let expected: Vec<crate::rebuild::RefusedBinding> = refusal
+                .into_iter()
+                .map(|(atom, provider)| crate::rebuild::RefusedBinding {
+                    consumer: format!("dev-libs/{}", consumer.rsplit_once('-').unwrap().0),
+                    atom: atom.to_string(),
+                    provider: provider.map(str::to_string),
+                })
+                .collect();
+            assert_eq!(world.refused, expected, "{name}");
+        }
     }
 
     /// A tree shaped like backlog #746: `w746auto` builds with `w746help`,
@@ -1597,14 +1498,7 @@ mod tests {
     /// build-time need in fact, so the cut spares it.
     #[test]
     fn a_build_tool_makes_its_runtime_closure_build_time() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         build_time_in_fact_tree(tree.path());
         let world = testkit::analyse_fixture_with(&["dev-libs/w746auto"], &[], |o| {
             o.config_root = tree.path().to_path_buf();
@@ -1626,14 +1520,7 @@ mod tests {
     /// still serialize the cycle there.
     #[test]
     fn a_runtime_dependency_of_a_runtime_dependency_is_not_build_time() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         build_time_in_fact_tree(tree.path());
         let world = testkit::analyse_fixture_with(&["dev-libs/w746auto"], &[], |o| {
             o.config_root = tree.path().to_path_buf();
@@ -1656,14 +1543,7 @@ mod tests {
     /// stays out silently, neither rebuilt nor refused.
     #[test]
     fn a_consumer_whose_tree_dropped_the_dependency_is_left_alone() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         add_ebuild(tree.path(), "dev-libs/w741prov-2", "0/2", "");
         add_ebuild(tree.path(), "dev-libs/w741solo-1", "0", "");
         let installed = [("dev-libs/w741prov-2", "0/2"), ("dev-libs/w741solo-1", "0")];
@@ -1703,14 +1583,7 @@ mod tests {
     /// The analysis of [`newest_arm_tree`] in plan (`true`) or check
     /// (`false`) mode.
     fn newest_arm_world(rebuilds: bool) -> World {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         newest_arm_tree(tree.path());
         let installed = [("dev-libs/w740prov-3", "0/3"), ("dev-libs/w740sudo-1", "0")];
         testkit::analyse_fixture_with(
@@ -1775,19 +1648,43 @@ mod tests {
         assert_eq!(chosen_version(&world, "dev-libs/w740compat", "3"), None);
     }
 
+    /// Charter property 3: an installed arm that only a version bound
+    /// excludes from the best visible version loses to an arm that admits
+    /// it. `<prov-2` is satisfied by the installed `prov-1`, but the best
+    /// visible `prov-2` is outside it, so the plan takes `alt` (a check
+    /// keeps the installed arm).
+    #[test]
+    fn an_installed_arm_excluded_only_by_a_version_bound_loses_in_a_plan() {
+        for (rebuilds, alt_change) in [(true, Some(Change::New)), (false, None)] {
+            let tree = fixture_copy();
+            add_ebuild(
+                tree.path(),
+                "dev-libs/w765user-1",
+                "0",
+                "|| ( <dev-libs/w765prov-2 dev-libs/w765alt )",
+            );
+            for cpv in ["w765prov-1", "w765prov-2", "w765alt-1"] {
+                add_ebuild(tree.path(), &format!("dev-libs/{cpv}"), "0", "");
+            }
+            let installed = [("dev-libs/w765prov-1", "0"), ("dev-libs/w765user-1", "0")];
+            let world = testkit::analyse_fixture_with(&["dev-libs/w765user"], &installed, |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.rebuilds = rebuilds;
+            });
+            assert_eq!(
+                slot_change(&world, "dev-libs/w765alt", "0"),
+                alt_change,
+                "plan mode: {rebuilds}"
+            );
+        }
+    }
+
     /// Plan 02.740 (the selenium `|| ( firefox firefox-bin )` shape, with
     /// `firefox-bin` installed): two best-visible arms tie on the new rank,
     /// so the installed one wins and no extra package is pulled in.
     #[test]
     fn a_best_visible_tie_prefers_the_installed_branch() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         add_ebuild(
             tree.path(),
             "dev-libs/w740tie-1",
@@ -1817,14 +1714,7 @@ mod tests {
     /// version (charter property 3).
     #[test]
     fn a_stale_installed_arm_loses_to_a_best_visible_uninstalled_one() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         add_ebuild(
             tree.path(),
             "dev-libs/w740stale-1",
@@ -1855,14 +1745,7 @@ mod tests {
     /// best-visible with `w740prov-2:2` present.
     #[test]
     fn a_parallel_slot_arm_is_judged_against_its_own_slot() {
-        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
-        let copied = std::process::Command::new("cp")
-            .arg("-a")
-            .arg(fixtures)
-            .arg(tree.path())
-            .status();
-        assert!(copied.expect("cp runs").success());
+        let tree = fixture_copy();
         add_ebuild(
             tree.path(),
             "dev-libs/w740multi-1",

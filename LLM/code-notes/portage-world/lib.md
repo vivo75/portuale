@@ -89,3 +89,6 @@ the slot sets the reorder pass ranks.
   never name an edge (they pull no merge). A `[flag?]` USE-conditional atom
   counts as unguarded here too (same conservative direction as the
   resolver side).
+
+## fn analyse (guards, #760)
+- The USE guard of a build-time edge (`node -> dep`: the flags whose removal drops every build-time arm naming the dependency's `cp`) is no longer a `World` field read for every edge. `bootstrap::select` computes it only for the edges between members of one reported cycle (`bootstrap.rs`), from the raw `*DEPEND` strings via `repo_aux_metadata` (the S0-proved seam, `docs/evidence/02.753/`); `World::planned_use` is where the boot slot's declared USE comes from. Consequence: the guard of an edge outside every cycle no longer cuts the placement or closure walks (the resolver's `graph_view_reaches` never used it either).

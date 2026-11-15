@@ -12,3 +12,6 @@ rebuilds over the kept set.
 
 ## fn kept_installed
 - See `## fn slot_operator`: `(node, InstalledPackage)` pairs in VDB order for every installed package the plan does not replace. `plan_json` renders `kept` from it, so the JSON is byte-identical to the old inline filter (verified by `json_rows_equal_text_rows_in_order` and the host kept count 1925 -> 1905, exactly the 20 new rows).
+
+## struct Scan (#760)
+- `slot_operator` is split into `Scan::{final_provider, provider_cpv, stale_atoms, held_back, judge}` plus one `refuse(...)` constructor. The installed records are read once (`all_installed_packages`, first record per `(category, package, slot)`) instead of per atom in `final_provider`/`provider_cpv`/`kept_installed`; `World::kept_of` is `kept_installed` over an already-read list.

@@ -1905,13 +1905,56 @@ pub fn bootstrap_reduction(
     best.map(|((_, _, _, flag), m)| (m, flag))
 }
 
+/// [`bootstrap_reduction`] run twice: first with only the flags for which
+/// `eligible(slot, flag, true)` holds, then, if none, with
+/// `eligible(slot, flag, false)` (the third argument is "keep
+/// `REQUIRED_USE`"). The one place both emitters take the choice from.
+pub fn bootstrap_reduction_strict_first(
+    cycles: &[Vec<String>],
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    kinds: &BTreeMap<(String, String), u8>,
+    use_guards: &BTreeMap<(String, String), BTreeSet<String>>,
+    eligible: &dyn Fn(&str, &str, bool) -> bool,
+) -> Option<(String, String)> {
+    [true, false].into_iter().find_map(|strict| {
+        bootstrap_reduction(cycles, edges, kinds, use_guards, &|n, f| {
+            eligible(n, f, strict)
+        })
+    })
+}
+
+/// Whether `goal` holds for a node reachable from `start` (not `start`
+/// itself, unless a path returns to it) over the edges `keep` accepts.
+pub fn reaches(
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    start: &str,
+    keep: &dyn Fn(&str, &str) -> bool,
+    goal: &dyn Fn(&str) -> bool,
+) -> bool {
+    let mut visited: BTreeSet<&str> = BTreeSet::from([start]);
+    let mut stack: Vec<&str> = vec![start];
+    while let Some(node) = stack.pop() {
+        for next in edges.get(node).into_iter().flatten() {
+            if !keep(node, next) {
+                continue;
+            }
+            if goal(next) {
+                return true;
+            }
+            if visited.insert(next) {
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
 /// Whether the reduced boot build still needs a cycle member at build time:
-/// DFS from `boot` over the build-kind edges minus the ones the reduced
+/// a walk from `boot` over the build-kind edges minus the ones the reduced
 /// flag drops; `true` means the reduction did not break the need, so both
 /// emitters refuse the bootstrap (no second full resolve). `members` holds
 /// every reported cycle member (the boot slot itself included); reaching
-/// any of them — including back to the boot slot through a kept edge —
-/// counts.
+/// any of them, including back to the boot slot, counts.
 #[allow(clippy::too_many_arguments)]
 pub fn boot_closure_reaches_member(
     edges: &BTreeMap<String, BTreeSet<String>>,
@@ -1921,38 +1964,14 @@ pub fn boot_closure_reaches_member(
     reduced_flag: &str,
     members: &BTreeSet<String>,
 ) -> bool {
-    let kept = |edge: &(String, String)| {
-        kinds.get(edge).is_none_or(|m| m & BUILD_KIND_MASK != 0)
+    let kept = |from: &str, to: &str| {
+        let edge = (from.to_string(), to.to_string());
+        kinds.get(&edge).is_none_or(|m| m & BUILD_KIND_MASK != 0)
             && !use_guards
-                .get(edge)
+                .get(&edge)
                 .is_some_and(|g| g.contains(reduced_flag))
     };
-    let mut visited: BTreeSet<String> = BTreeSet::from([boot.to_string()]);
-    let mut stack: Vec<String> = edges
-        .get(boot)
-        .map(|to| {
-            to.iter()
-                .filter(|next| kept(&(boot.to_string(), (*next).clone())))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    while let Some(node) = stack.pop() {
-        if members.contains(&node) {
-            return true;
-        }
-        if !visited.insert(node.clone()) {
-            continue;
-        }
-        if let Some(to) = edges.get(&node) {
-            for next in to {
-                if kept(&(node.clone(), next.clone())) {
-                    stack.push(next.clone());
-                }
-            }
-        }
-    }
-    false
+    reaches(edges, boot, &kept, &|n| members.contains(n))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Installed packages a plan keeps but must build again.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use portage_dep::SlotOperator;
@@ -19,6 +19,14 @@ impl World {
         &self,
         root: &std::path::Path,
     ) -> Vec<(String, portage_repo::InstalledPackage)> {
+        self.kept_of(&portage_repo::all_installed_packages(root))
+    }
+
+    /// [`World::kept_installed`] over an already-read installed list.
+    fn kept_of(
+        &self,
+        installed: &[portage_repo::InstalledPackage],
+    ) -> Vec<(String, portage_repo::InstalledPackage)> {
         // `World::change`, not the slot's own: a kept package the plan builds
         // again is replaced too, even though its version does not move.
         let changed: HashSet<String> = self
@@ -27,7 +35,7 @@ impl World {
             .filter(|s| self.change(s).is_some())
             .map(|s| s.node())
             .collect();
-        portage_repo::all_installed_packages(root)
+        installed
             .iter()
             .filter(|p| {
                 let slot = p.slot.split('/').next().unwrap_or_default();
@@ -59,56 +67,6 @@ pub struct RefusedBinding {
 pub(crate) struct StaleBindings {
     pub(crate) rebuild: BTreeSet<String>,
     pub(crate) refused: Vec<RefusedBinding>,
-}
-
-/// The installed sub-slot and `cat/pkg-ver` of the provider version the plan
-/// leaves behind in `(category, package, slot)`: the chosen version when the
-/// plan changes the slot, else the installed VDB version. `None` when neither
-/// exists.
-fn final_provider(
-    world: &World,
-    db: &Arc<dyn portage_vdb::InstalledDb>,
-    root: &std::path::Path,
-    provider: (&str, &str, &str),
-) -> Option<(String, String)> {
-    let (category, package, slot) = provider;
-    if let Some(s) = world
-        .slots
-        .iter()
-        .find(|s| s.cp == format!("{category}/{package}") && s.slot == slot)
-        && s.change().is_some()
-    {
-        let chosen = s.chosen()?;
-        return Some((
-            chosen.sub_slot.clone(),
-            format!("{category}/{package}-{}", chosen.version),
-        ));
-    }
-    let version = portage_repo::all_installed_packages(root)
-        .iter()
-        .find(|p| {
-            p.category == category
-                && p.package == package
-                && p.slot.split('/').next().unwrap_or_default() == slot
-        })
-        .map(|p| p.version.clone())?;
-    let raw = db
-        .aux_get(
-            &EntryKey::new(category, format!("{package}-{version}")),
-            "SLOT",
-        )
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let sub = raw
-        .split_once('/')
-        .map_or_else(|| raw.clone(), |(_, sub)| sub.to_string());
-    // PMS: a `SLOT` without a sub-slot part carries an implicit sub-slot
-    // equal to the slot; an empty read means the entry is gone.
-    if sub.is_empty() {
-        return None;
-    }
-    Some((sub, format!("{category}/{package}-{version}")))
 }
 
 /// The recorded `USE` of the installed `key`, `+`/`-` markers stripped.
@@ -150,20 +108,6 @@ fn reduced_recorded_atoms(
             .map(|tok| portage_dep::evaluate_atom_conditionals(&tok, use_flags).unwrap_or(tok))
             .collect(),
     )
-}
-
-/// `cat/pkg-ver` of the provider version the final state binds `atom_str`
-/// against: the `cat/pkg-ver` [`final_provider`] leaves behind in the slot
-/// the atom names. `None` when the atom names no slot or no version is left.
-fn provider_cpv(
-    world: &World,
-    db: &Arc<dyn portage_vdb::InstalledDb>,
-    root: &std::path::Path,
-    atom_str: &str,
-) -> Option<String> {
-    let a = portage_repo::parse_dep_atom(atom_str, "rebuild_provider")?;
-    let slot = a.slot.as_deref()?;
-    final_provider(world, db, root, (&a.category, &a.package, slot)).map(|(_, cpv)| cpv)
 }
 
 /// Whether the chosen ebuild's tree metadata still names any of the stale
@@ -218,6 +162,230 @@ struct TreeNamesProviderArgs<'a> {
     config: &'a Config,
 }
 
+/// One stale-binding scan: the plan, the installed records read once, and
+/// what the reduction of recorded text needs.
+struct Scan<'a> {
+    world: &'a World,
+    db: Arc<dyn portage_vdb::InstalledDb>,
+    /// `(category, package, slot)` -> the installed version, first found.
+    installed: HashMap<(String, String, String), String>,
+    memos: &'a Memos<'a>,
+    config: &'a Config,
+}
+
+/// The refusal of `atom` for the kept `installed` consumer.
+fn refuse(
+    installed: &portage_repo::InstalledPackage,
+    atom: &str,
+    provider: Option<String>,
+) -> RefusedBinding {
+    RefusedBinding {
+        consumer: format!("{}/{}", installed.category, installed.package),
+        atom: atom.to_string(),
+        provider,
+    }
+}
+
+impl Scan<'_> {
+    /// The sub-slot and `cat/pkg-ver` of the provider version the plan leaves
+    /// behind in `(category, package, slot)`: the chosen version when the
+    /// plan changes the slot, else the installed one. `None` when neither
+    /// exists.
+    fn final_provider(
+        &self,
+        (category, package, slot): (&str, &str, &str),
+    ) -> Option<(String, String)> {
+        let cp = format!("{category}/{package}");
+        if let Some(s) = self
+            .world
+            .slots
+            .iter()
+            .find(|s| s.cp == cp && s.slot == slot)
+            && s.change().is_some()
+        {
+            let chosen = s.chosen()?;
+            return Some((chosen.sub_slot.clone(), format!("{cp}-{}", chosen.version)));
+        }
+        let key = (category.to_string(), package.to_string(), slot.to_string());
+        let version = self.installed.get(&key)?;
+        let raw = self
+            .db
+            .aux_get(
+                &EntryKey::new(category, format!("{package}-{version}")),
+                "SLOT",
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        // PMS: a `SLOT` without a sub-slot part carries an implicit sub-slot
+        // equal to the slot; an empty read means the entry is gone.
+        let sub = raw.split_once('/').map_or(raw.as_str(), |(_, sub)| sub);
+        (!sub.is_empty()).then(|| (sub.to_string(), format!("{cp}-{version}")))
+    }
+
+    /// `cat/pkg-ver` of the provider version the final state binds `atom_str`
+    /// against; `None` when the atom names no slot or no version is left.
+    fn provider_cpv(&self, atom_str: &str) -> Option<String> {
+        let a = portage_repo::parse_dep_atom(atom_str, "rebuild_provider")?;
+        let slot = a.slot.as_deref()?;
+        self.final_provider((&a.category, &a.package, slot))
+            .map(|(_, cpv)| cpv)
+    }
+
+    /// The recorded `:=` atoms in `texts` naming a sub-slot the final
+    /// provider version no longer has.
+    fn stale_atoms(&self, texts: &[String]) -> Vec<String> {
+        let mut raw: Vec<String> = Vec::new();
+        for tok in texts.iter().flat_map(|t| t.split_whitespace()) {
+            let Some(a) = portage_repo::parse_dep_atom(tok, "rebuild_stale") else {
+                continue;
+            };
+            let (Some(slot), Some(recorded)) = (&a.slot, &a.sub_slot) else {
+                continue;
+            };
+            if a.blocker != portage_dep::Blocker::None
+                || a.slot_operator != Some(SlotOperator::Equals)
+                || recorded == "*"
+            {
+                continue;
+            }
+            let Some((sub, _)) = self.final_provider((&a.category, &a.package, slot)) else {
+                continue;
+            };
+            if sub != *recorded && !raw.iter().any(|t| t == tok) {
+                raw.push(tok.to_string());
+            }
+        }
+        raw
+    }
+
+    /// The first recorded non-`:=` atom of `reduced` that the version the
+    /// plan chooses in a slot it changes no longer matches: a rebuild would
+    /// hold that package back.
+    fn held_back(
+        &self,
+        installed: &portage_repo::InstalledPackage,
+        reduced: &[String],
+    ) -> Option<RefusedBinding> {
+        for tok in reduced {
+            let Some(a) = portage_repo::parse_dep_atom(tok, "rebuild_holdback") else {
+                continue;
+            };
+            if a.blocker != portage_dep::Blocker::None
+                || a.slot_operator == Some(SlotOperator::Equals)
+            {
+                continue;
+            }
+            let cp = format!("{}/{}", a.category, a.package);
+            for s in self
+                .world
+                .slots
+                .iter()
+                .filter(|s| s.cp == cp && s.change().is_some())
+            {
+                if a.slot.as_ref().is_some_and(|want| *want != s.slot) {
+                    continue;
+                }
+                let Some(next) = s.chosen() else {
+                    continue;
+                };
+                if !self
+                    .memos
+                    .atom_matches(tok, next, (&a.category, &a.package), self.config)
+                {
+                    let provider = self
+                        .final_provider((&a.category, &a.package, &s.slot))
+                        .map(|(_, cpv)| cpv);
+                    return Some(refuse(installed, tok, provider));
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether the kept `installed` consumer at `node` is rebuilt (`Ok(true)`),
+    /// left alone (`Ok(false)`), or refused with the reason.
+    fn judge(
+        &self,
+        node: &str,
+        installed: &portage_repo::InstalledPackage,
+    ) -> Result<bool, RefusedBinding> {
+        let key = EntryKey::new(
+            installed.category.clone(),
+            format!("{}-{}", installed.package, installed.version),
+        );
+        let texts: Vec<String> = DEP_KEYS
+            .iter()
+            .map(|dep| {
+                self.db
+                    .aux_get(&key, dep)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let raw = self.stale_atoms(&texts);
+        let Some(first) = raw.first() else {
+            return Ok(false);
+        };
+        // Reduced atoms for the confirmation and the hold-back check; a text
+        // that does not reduce refuses the consumer rather than mis-judging it.
+        let use_flags = recorded_use(&self.db, &key);
+        let mut reduced: Vec<String> = Vec::new();
+        for text in texts.iter().filter(|t| !t.trim().is_empty()) {
+            let Some(atoms) = reduced_recorded_atoms(text, &use_flags, self.memos, self.config)
+            else {
+                return Err(refuse(installed, first, self.provider_cpv(first)));
+            };
+            reduced.extend(atoms);
+        }
+        let active: HashSet<&str> = reduced.iter().map(String::as_str).collect();
+        let stale: Vec<&String> = raw
+            .iter()
+            .filter(|tok| {
+                active.contains(
+                    portage_dep::evaluate_atom_conditionals(tok, &use_flags)
+                        .unwrap_or_else(|| (*tok).clone())
+                        .as_str(),
+                )
+            })
+            .collect();
+        let Some(first) = stale.first() else {
+            return Ok(false);
+        };
+        // The final provider version a rebuild would use must exist.
+        let Some(chosen) = self
+            .world
+            .slots
+            .iter()
+            .find(|s| s.node() == node)
+            .and_then(|s| s.chosen())
+        else {
+            return Err(refuse(installed, first, None));
+        };
+        if let Some(refusal) = self.held_back(installed, &reduced) {
+            return Err(refusal);
+        }
+        // A rebuild re-records the chosen ebuild's live dependencies: when
+        // its tree no longer names any stale provider, there is nothing stale
+        // left to repair, so the consumer stays out silently.
+        let providers: Vec<(String, String)> = stale
+            .iter()
+            .filter_map(|tok| {
+                portage_repo::parse_dep_atom(tok, "rebuild_naming").map(|a| (a.category, a.package))
+            })
+            .collect();
+        Ok(tree_names_provider(TreeNamesProviderArgs {
+            chosen,
+            category: &installed.category,
+            package: &installed.package,
+            providers: &providers,
+            memos: self.memos,
+            config: self.config,
+        }))
+    }
+}
+
 /// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
 /// dependency no longer matches the provider version the plan leaves behind:
 /// the chosen one when the plan changes the provider's slot, else the
@@ -242,165 +410,30 @@ pub(crate) fn slot_operator(
     memos: &Memos,
     config: &Config,
 ) -> StaleBindings {
-    let db = portage_vdb::for_root(root);
+    let all = portage_repo::all_installed_packages(root);
+    let mut installed = HashMap::new();
+    for p in all.iter() {
+        let slot = p.slot.split('/').next().unwrap_or_default().to_string();
+        installed
+            .entry((p.category.clone(), p.package.clone(), slot))
+            .or_insert_with(|| p.version.clone());
+    }
+    let scan = Scan {
+        world,
+        db: portage_vdb::for_root(root),
+        installed,
+        memos,
+        config,
+    };
     let mut rebuild = BTreeSet::new();
     let mut refused: Vec<RefusedBinding> = Vec::new();
-    for (node, installed) in world.kept_installed(root) {
-        let key = EntryKey::new(
-            installed.category.clone(),
-            format!("{}-{}", installed.package, installed.version),
-        );
-        let use_flags = recorded_use(&db, &key);
-        // Raw stale `:=` candidates: recorded atoms naming a sub-slot the
-        // final provider version no longer has.
-        let mut raw: Vec<String> = Vec::new();
-        for dep in DEP_KEYS {
-            let text = db.aux_get(&key, dep).ok().flatten().unwrap_or_default();
-            for tok in text.split_whitespace() {
-                let Some(a) = portage_repo::parse_dep_atom(tok, "rebuild_stale") else {
-                    continue;
-                };
-                if a.blocker != portage_dep::Blocker::None
-                    || a.slot_operator != Some(SlotOperator::Equals)
-                {
-                    continue;
-                }
-                let (Some(slot), Some(recorded)) = (&a.slot, &a.sub_slot) else {
-                    continue;
-                };
-                if recorded == "*" {
-                    continue;
-                }
-                let Some((sub, _)) =
-                    final_provider(world, &db, root, (&a.category, &a.package, slot))
-                else {
-                    continue;
-                };
-                if sub != *recorded && !raw.iter().any(|t| t == tok) {
-                    raw.push(tok.to_string());
-                }
+    for (node, installed) in world.kept_of(&all) {
+        match scan.judge(&node, &installed) {
+            Ok(true) => {
+                rebuild.insert(node);
             }
-        }
-        if raw.is_empty() {
-            continue;
-        }
-        // Reduced atoms for the confirmation and the hold-back check; a text
-        // that does not reduce refuses the consumer rather than mis-judging it.
-        let mut reduced: Vec<String> = Vec::new();
-        let mut unreduced = false;
-        for dep in DEP_KEYS {
-            let text = db.aux_get(&key, dep).ok().flatten().unwrap_or_default();
-            if text.trim().is_empty() {
-                continue;
-            }
-            match reduced_recorded_atoms(&text, &use_flags, memos, config) {
-                Some(atoms) => reduced.extend(atoms),
-                None => {
-                    unreduced = true;
-                    break;
-                }
-            }
-        }
-        if unreduced {
-            refused.push(RefusedBinding {
-                consumer: format!("{}/{}", installed.category, installed.package),
-                atom: raw[0].clone(),
-                provider: provider_cpv(world, &db, root, &raw[0]),
-            });
-            continue;
-        }
-        let active: HashSet<&str> = reduced.iter().map(String::as_str).collect();
-        let stale: Vec<&str> = raw
-            .iter()
-            .map(String::as_str)
-            .filter(|tok| {
-                active.contains(
-                    portage_dep::evaluate_atom_conditionals(tok, &use_flags)
-                        .unwrap_or_else(|| (*tok).to_string())
-                        .as_str(),
-                )
-            })
-            .collect();
-        if stale.is_empty() {
-            continue;
-        }
-        // The final provider version a rebuild would use must exist.
-        let Some(chosen) = world
-            .slots
-            .iter()
-            .find(|s| s.node() == node)
-            .and_then(|s| s.chosen())
-        else {
-            refused.push(RefusedBinding {
-                consumer: format!("{}/{}", installed.category, installed.package),
-                atom: stale[0].to_string(),
-                provider: None,
-            });
-            continue;
-        };
-        // No rebuild may hold a package back: every recorded non-`:=` atom
-        // naming a slot the plan changes must match the chosen version there.
-        let mut held_back: Option<RefusedBinding> = None;
-        'outer: for tok in &reduced {
-            let Some(a) = portage_repo::parse_dep_atom(tok, "rebuild_holdback") else {
-                continue;
-            };
-            if a.blocker != portage_dep::Blocker::None
-                || a.slot_operator == Some(SlotOperator::Equals)
-            {
-                continue;
-            }
-            for s in world
-                .slots
-                .iter()
-                .filter(|s| s.cp == format!("{}/{}", a.category, a.package) && s.change().is_some())
-            {
-                if let Some(want) = &a.slot
-                    && want != &s.slot
-                {
-                    continue;
-                }
-                let Some(next) = s.chosen() else {
-                    continue;
-                };
-                if !memos.atom_matches(tok, next, (&a.category, &a.package), config) {
-                    let provider =
-                        final_provider(world, &db, root, (&a.category, &a.package, &s.slot))
-                            .map(|(_, cpv)| cpv);
-                    held_back = Some(RefusedBinding {
-                        consumer: format!("{}/{}", installed.category, installed.package),
-                        atom: (*tok).to_string(),
-                        provider,
-                    });
-                    break 'outer;
-                }
-            }
-        }
-        match held_back {
-            Some(refusal) => refused.push(refusal),
-            None => {
-                // A rebuild re-records the chosen ebuild's live dependencies:
-                // when its tree no longer names any stale provider, there is
-                // nothing stale left to repair, so the consumer stays out
-                // silently (the resolver's third arm applies the same gate).
-                let stale_cps: Vec<(String, String)> = stale
-                    .iter()
-                    .filter_map(|tok| {
-                        portage_repo::parse_dep_atom(tok, "rebuild_naming")
-                            .map(|a| (a.category, a.package))
-                    })
-                    .collect();
-                if tree_names_provider(TreeNamesProviderArgs {
-                    chosen,
-                    category: &installed.category,
-                    package: &installed.package,
-                    providers: &stale_cps,
-                    memos,
-                    config,
-                }) {
-                    rebuild.insert(node);
-                }
-            }
+            Ok(false) => {}
+            Err(refusal) => refused.push(refusal),
         }
     }
     refused.sort_by(|a, b| (&a.consumer, &a.atom).cmp(&(&b.consumer, &b.atom)));

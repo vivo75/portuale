@@ -20,7 +20,7 @@
 use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
 use portage_use_reduce::BootstrapUse;
-use portage_world::{Change, Order, SlotSet, World};
+use portage_world::{Change, Order, PlanRow, SlotSet, World};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -69,41 +69,28 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         },
         _ => Order::Alpha,
     };
-    let rows = world.ordered(&order);
-    // Charter 2a bootstrap (backlog #753): when a single USE-flag
-    // reduction breaks a reported build-time cycle, the plan carries the
-    // boot row (reduced USE, temporary) plus the definitive rebuild with
-    // the declared USE. The report line below then names the reduction;
-    // the checker accepts only the complete pair. Anything the reduction
-    // does not break keeps today's shape: single rows plus the bare
-    // report line.
-    let cycles = portage_world::build_time_cycles(&world.edges, &world.edge_kinds);
-    let bootstrap = select_bootstrap(&world, &cycles);
-    for cycle in &cycles {
+    // Charter 2a bootstrap: a single USE-flag reduction that breaks a
+    // reported build-time cycle adds the boot row; the checker accepts only
+    // the complete pair. A cycle the reduction does not break keeps the
+    // bare report line.
+    let plan = world.build_plan(&order);
+    for cycle in &plan.cycles {
         let mut chain = cycle.to_vec();
-        if let Some(first) = cycle.first() {
-            chain.push(first.clone());
-        }
+        chain.extend(cycle.first().cloned());
         let mut line = format!(
             "plan-world: build cycle with no serial order: {} (breakable only by a bootstrap variant with reduced USE; see backlog #753",
             chain.join(" -> ")
         );
-        if let Some((boot, flag)) = bootstrap.as_ref()
-            && cycle.iter().any(|m| {
-                m == boot
-                    && world.use_guards.iter().any(|((from, to), flags)| {
-                        from == boot && cycle.contains(to) && flags.contains(flag)
-                    })
-            })
-        {
+        if let Some(boot) = plan.bootstrap.filter(|b| b.breaks(cycle)) {
             line.push_str(&format!(
-                "; bootstrap with USE=\"-{flag}\" {boot} temporary — will be rebuilt with the declared USE"
+                "; bootstrap with USE=\"-{}\" {} temporary — will be rebuilt with the declared USE",
+                boot.flag, boot.node
             ));
         }
         line.push(')');
         eprintln!("{line}");
     }
-    let final_rows = apply_bootstrap(&world, &rows, bootstrap.as_ref());
+    let final_rows = plan.rows;
     if matches.get_flag("json") {
         println!("{}", plan_json(&world, &final_rows, &root));
     } else {
@@ -130,156 +117,6 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         eprintln!("{}", refused_line(&world));
     }
     ExitCode::SUCCESS
-}
-
-/// One row of the final plan: the slot plus, on the boot row only, the
-/// reduction override. The boot row renders the same slot with the reduced
-/// flag forced off; the definitive row carries the declared USE and no
-/// marker.
-struct PlanRow<'a> {
-    slot: &'a SlotSet,
-    bootstrap: Option<BootstrapUse>,
-}
-
-/// The charter 2a bootstrap over this world's build-time cycles, if one
-/// single-flag reduction applies: `(boot slot, reduced flag)`. The caller
-/// keeps today's single-rows-plus-report shape on `None` (STOP rules 1–3:
-/// no single-flag reduction, a boot that still needs a member, more than
-/// 3 affected rows, or no recorded USE to reduce from).
-fn select_bootstrap(world: &World, cycles: &[Vec<String>]) -> Option<(String, String)> {
-    if cycles.is_empty() {
-        return None;
-    }
-    let (boot, flag) = portage_use_reduce::bootstrap_reduction(
-        cycles,
-        &world.edges,
-        &world.edge_kinds,
-        &world.use_guards,
-        &|_, _| true,
-    )?;
-    let members: BTreeSet<String> = cycles.iter().flatten().cloned().collect();
-    if members.len() + 1 > 3
-        || portage_use_reduce::boot_closure_reaches_member(
-            &world.edges,
-            &world.edge_kinds,
-            &world.use_guards,
-            &boot,
-            &flag,
-            &members,
-        )
-        || !world.planned_use.contains_key(&boot)
-    {
-        return None;
-    }
-    Some((boot, flag))
-}
-
-/// The final rows: the ordered rows with, when bootstrapping, the boot
-/// row (same slot, reduced USE) taking the earliest of the boot slot's own
-/// position and its transitive dependents, and the definitive entry moving
-/// to immediately after the last entry that transitively build-depends on
-/// the boot slot (reduced build graph).
-fn apply_bootstrap<'a>(
-    world: &World,
-    rows: &[&'a SlotSet],
-    bootstrap: Option<&(String, String)>,
-) -> Vec<PlanRow<'a>> {
-    let Some((boot_node, flag)) = bootstrap else {
-        return rows
-            .iter()
-            .map(|slot| PlanRow {
-                slot,
-                bootstrap: None,
-            })
-            .collect();
-    };
-    let Some(boot_pos) = rows.iter().position(|s| s.node() == *boot_node) else {
-        return rows
-            .iter()
-            .map(|slot| PlanRow {
-                slot,
-                bootstrap: None,
-            })
-            .collect();
-    };
-    // The reduced graph: the boot slot's flag-guarded outgoing edges are gone.
-    let reduced = |from: &str, to: &str| {
-        world
-            .use_guards
-            .get(&(from.to_string(), to.to_string()))
-            .is_none_or(|flags| !flags.contains(flag))
-    };
-    // Every row that transitively build-depends on the boot slot.
-    let reaches_boot = |start: &str| {
-        let mut seen: BTreeSet<String> = BTreeSet::from([start.to_string()]);
-        let mut stack = vec![start.to_string()];
-        while let Some(node) = stack.pop() {
-            if node == *boot_node {
-                return true;
-            }
-            if let Some(to) = world.edges.get(&node) {
-                for next in to {
-                    if reduced(&node, next) && seen.insert(next.clone()) {
-                        stack.push(next.clone());
-                    }
-                }
-            }
-        }
-        false
-    };
-    let mut dependents: BTreeSet<usize> = BTreeSet::new();
-    for (i, slot) in rows.iter().enumerate() {
-        if i != boot_pos && reaches_boot(&slot.node()) {
-            dependents.insert(i);
-        }
-    }
-    let shift = |i: usize| if i > boot_pos { i - 1 } else { i };
-    let dep_pos: BTreeSet<usize> = dependents.iter().map(|&i| shift(i)).collect();
-    let declared: Vec<String> = world
-        .planned_use
-        .get(boot_node)
-        .map(|use_set| {
-            let mut declared: Vec<String> = use_set.iter().cloned().collect();
-            declared.sort();
-            declared
-        })
-        .unwrap_or_default();
-    let boot_use = BootstrapUse {
-        reduced_flag: flag.clone(),
-        declared_use: declared,
-    };
-    let first = dep_pos.iter().copied().min().unwrap_or(shift(boot_pos));
-    let boot_at = first.min(shift(boot_pos));
-    let mut out: Vec<PlanRow<'a>> = Vec::with_capacity(rows.len() + 1);
-    for (i, slot) in rows.iter().enumerate() {
-        if i != boot_pos {
-            out.push(PlanRow {
-                slot,
-                bootstrap: None,
-            });
-        }
-    }
-    out.insert(
-        boot_at,
-        PlanRow {
-            slot: rows[boot_pos],
-            bootstrap: Some(boot_use),
-        },
-    );
-    let last_dep = dep_pos
-        .iter()
-        .copied()
-        .max()
-        .map(|p| if p >= boot_at { p + 1 } else { p });
-    let definitive_at = last_dep.map_or(out.len(), |p| p + 1).min(out.len());
-    out.insert(
-        definitive_at,
-        PlanRow {
-            slot: rows[boot_pos],
-            bootstrap: None,
-        },
-    );
-    out
 }
 
 /// Which plan `--plan-world` works out.
@@ -642,9 +479,9 @@ mod tests {
 
     /// Charter property 1: `--json` is the same plan as the text, row for
     /// row, in the `emerge --json` shape the health checker reads. An
-    /// acyclic plan builds every slot once: no second `built_twice` entry
-    /// and no repeated `merge_order` (charter 2a never fires here, so the
-    /// document is byte-identical with or without the 2a rule).
+    /// acyclic plan builds every slot once: no repeated `merge_order` (charter
+    /// 2a never fires here, so the document is byte-identical with or
+    /// without the 2a rule).
     #[test]
     fn json_rows_equal_text_rows_in_order() {
         let (rc, out) = mrg_on_fixtures(&["--plan-world", "--json", "--sort", "depend"], &[]);
@@ -654,10 +491,6 @@ mod tests {
             .find(|l| l.starts_with("{\"entries\":"))
             .expect(&out);
         let entries = line.split("],\"kept\":").next().unwrap();
-        assert!(
-            !entries.contains("\"built_twice\""),
-            "no second build on the acyclic fixtures:\n{out}"
-        );
         let json: Vec<String> = entries
             .split("{\"category\":")
             .skip(1)
@@ -1032,7 +865,6 @@ mod tests {
     /// markers. No new sort, no new tie-break anywhere.
     #[test]
     fn resolver_and_fast_plan_agree_on_the_bootstrap_rows() {
-        use super::{apply_bootstrap, select_bootstrap};
         use std::collections::{BTreeSet, HashMap};
         fn tree(root: &Path) {
             add_ebuild(
@@ -1058,24 +890,18 @@ mod tests {
         let (tmp, ..) =
             run_on_copy_keeping_tree(&["--plan-world", "--sort", "depend"], &atoms, &[], "", tree);
         let root = tmp.path().join("root");
-        // Fast plan, through the same `select_bootstrap`/`apply_bootstrap`
-        // `run()` uses.
+        // Fast plan, through the same `build_plan` `run()` uses.
         let mut opts = portage_world::Options::new(root.clone(), root.clone());
         opts.threads = 2;
         opts.rebuilds = true;
         opts.targets = atoms.iter().map(|s| s.to_string()).collect();
         let world = portage_world::analyse(&opts).expect("the fixture tree analyses");
-        let cycles = portage_world::build_time_cycles(&world.edges, &world.edge_kinds);
-        let bootstrap = select_bootstrap(&world, &cycles).expect("the pair bootstraps");
+        let boot = world.bootstrap.as_ref().expect("the pair bootstraps");
         assert_eq!(
-            bootstrap,
-            ("dev-libs/w749otherpkg:0".to_string(), "useboh".to_string())
+            (boot.node.as_str(), boot.flag.as_str()),
+            ("dev-libs/w749otherpkg:0", "useboh")
         );
-        let fast = apply_bootstrap(
-            &world,
-            &world.ordered(&portage_world::Order::Depend),
-            Some(&bootstrap),
-        );
+        let fast = world.build_plan(&portage_world::Order::Depend).rows;
         // Resolver rows over the same tree.
         let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
             config_root: &root,
@@ -1152,13 +978,91 @@ mod tests {
         }
     }
 
+    /// Both planners refuse a flag whose removal switches on a build-time
+    /// `!flag?` arm: the pair's first pick (`useboh` on otherpkg) would pull
+    /// a package the boot build cannot order, so both take `usefoo`.
+    #[test]
+    fn the_fast_plan_skips_a_flag_whose_removal_adds_a_build_dependency() {
+        fn tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w749pkgnew-1",
+                "0",
+                &[
+                    ("IUSE", "+usefoo +use3"),
+                    ("BDEPEND", "usefoo? ( dev-libs/w749otherpkg[useblah] )"),
+                ],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w749otherpkg-1",
+                "0",
+                &[
+                    ("IUSE", "+useboh +useblah"),
+                    (
+                        "BDEPEND",
+                        "useboh? ( dev-libs/w749pkgnew[use3] ) !useboh? ( dev-libs/w749extra )",
+                    ),
+                ],
+            );
+            add_ebuild(root, "dev-libs/w749extra-1", "0", &[]);
+        }
+        let atoms = ["dev-libs/w749pkgnew", "dev-libs/w749otherpkg"];
+        let (tmp, ..) =
+            run_on_copy_keeping_tree(&["--plan-world", "--sort", "depend"], &atoms, &[], "", tree);
+        let root = tmp.path().join("root");
+        let mut opts = portage_world::Options::new(root.clone(), root.clone());
+        opts.threads = 2;
+        opts.rebuilds = true;
+        opts.targets = atoms.iter().map(|s| s.to_string()).collect();
+        let world = portage_world::analyse(&opts).expect("the fixture tree analyses");
+        let boot = world.bootstrap.as_ref().expect("the pair bootstraps");
+        let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &root.join("repo"),
+            overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &std::collections::HashMap::new(),
+            eroot: &root,
+        })
+        .expect("the copied fixture config resolves");
+        let owned: Vec<String> = atoms.iter().map(|s| s.to_string()).collect();
+        let resolved = portage_repo::ResolveRequest::new(
+            &root,
+            &root,
+            &owned,
+            &config,
+            &root.join("distfiles"),
+        )
+        .resolve()
+        .expect("the pair resolves");
+        let resolver_boot = resolved
+            .entries
+            .iter()
+            .find_map(|e| {
+                e.bootstrap
+                    .as_ref()
+                    .map(|b| (e.package.clone(), b.reduced_flag.clone()))
+            })
+            .expect("the resolver bootstraps");
+        assert_eq!(
+            (boot.node.as_str(), boot.flag.as_str()),
+            ("dev-libs/w749pkgnew:0", "usefoo")
+        );
+        assert_eq!(
+            resolver_boot,
+            ("w749pkgnew".to_string(), "usefoo".to_string())
+        );
+    }
+
     /// Charter property 2 (backlog #749): the mixed `R/B/R` #745 shape is a
     /// runtime-closed cycle, not a genuine build-time one — every build
     /// atom is satisfied at start, so one row per slot and no finding at
     /// all. No report line either: the `prov -> base` half is `RDEPEND`,
     /// so the report reads nothing here.
     #[test]
-    fn a_runtime_cycle_needs_no_second_build() {
+    fn a_runtime_cycle_is_one_row_per_slot() {
         fn runtime_cycle_tree(root: &Path) {
             add_ebuild(
                 root,
@@ -1229,7 +1133,6 @@ mod tests {
             1,
             "{text}"
         );
-        assert!(!text.contains("\"built_twice\""), "{text}");
         let checker = health_checker();
         let report = assert_no_build_order(
             checker.to_str().expect("checker path"),
@@ -1329,7 +1232,7 @@ mod tests {
         std::fs::write(&plan, out.trim()).expect("plan file");
         let text = std::fs::read_to_string(&plan).expect("plan file");
         // One row per slot, locked in place: `prov` and `user` single,
-        // the virtual never a merge, and no second-build key anywhere.
+        // and the virtual never a merge.
         assert_eq!(
             text.match_indices("\"package\":\"w751prov\"").count(),
             1,
@@ -1340,7 +1243,6 @@ mod tests {
             1,
             "{text}"
         );
-        assert!(!text.contains("\"built_twice\""), "{text}");
         assert_eq!(
             text.match_indices("\"package\":\"w751virt\"").count(),
             1,
