@@ -666,38 +666,46 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 
 ### G. Shell backend
 
-- **Track B shipped (2026-09-14; re-pinned 2026-09-20).** Five `brush`
-  bugs found running real portage phases — here-tag tokenizer
-  corruption, `declare -f` here-document serialization (incl. quoted
-  tags), the pipeline-function deadlock, fatal-on-parse-error `source`,
-  and IFS-dependent brace expansion — are fixed on per-bug `fix/*`
-  branches, written up with `git format-patch` exports in
-  `docs/brush-pr/`. The re-pin moved the thin fork to upstream
-  `6bada559`: fixes 01–04 are carried (`4edb1f43`) and fix 05's
-  implementation was superseded by upstream's own IFS rework
+- **Track B shipped (2026-09-14; re-pinned 2026-09-20 and again
+  2026-11-15).** Five `brush` bugs found running real portage phases —
+  here-tag tokenizer corruption, `declare -f` here-document
+  serialization (incl. quoted tags), the pipeline-function deadlock,
+  fatal-on-parse-error `source`, and IFS-dependent brace expansion —
+  are fixed on per-bug `fix/*` branches, written up with
+  `git format-patch` exports in `docs/brush-pr/`. The 2026-11-15 re-pin
+  moved the thin fork to upstream `6a688f19`: the tokenizer fix
+  ([#1416](https://github.com/reubeno/brush/pull/1416)) and the
+  pipeline-stage fix
+  ([#1276](https://github.com/reubeno/brush/pull/1276)) landed upstream
+  and are no longer carried; fixes 02 and 04 stay (`59e9b380`), and fix
+  05's implementation was superseded by upstream's own IFS rework
   ([#988](https://github.com/reubeno/brush/pull/988)), so only its
   `IFS=` regression test remains. The compiled-ebuild smoke that
   motivated Track B is green (see `docs/brush-pin.md` "Current pin" and
-  `what-this-proves.md`'s Track-B section). **Open:** open the five
+  `what-this-proves.md`'s Track-B section). **Open:** open the three
   still-relevant upstream PRs (user's GitHub auth, B6), then drop the
   fork and revisit the `--shell` default.
 - the phase-execution default stays `bash`, not the embedded `brush`:
   flipping it back is a separate owner decision after the PRs land.
 - **Sixth brush incompatibility found 2026-09-20, fixed 2026-09-23
-  (backlog #94 DONE, Phase 6 S1–S4):** declaration builtins
+  (backlog #94 DONE, Phase 6 S1–S4); the `export` half landed upstream
+  2026-11-15.** Declaration builtins
   (`export`/`declare`/`local`) never assignment-expanded a non-literal
   name, so `export ${var}=value` was a silent no-op (upstream
   `reubeno/brush` main `6bada559` — the previous pin's base — still
-  affected). Real `toolchain-funcs.eclass::_tc-getPROG` sets the
-  compiler vars this way, so `--shell brush` failed `tc-check-openmp`
-  consumers in `pkg_pretend` (live: `media-gfx/gimp`). Upstream's open,
-  breaking [#1280](https://github.com/reubeno/brush/pull/1280)
+  affected; `export`'s half is upstream [#1564](https://github.com/reubeno/brush/pull/1564)
+  since the 2026-11-15 re-pin). Real
+  `toolchain-funcs.eclass::_tc-getPROG` sets the compiler vars this way,
+  so `--shell brush` failed `tc-check-openmp` consumers in `pkg_pretend`
+  (live: `media-gfx/gimp`). Upstream's open, breaking
+  [#1280](https://github.com/reubeno/brush/pull/1280)
   ("centralize assignment expansion + overhaul declaration builtins")
-  remains the long-term fix path and is not carried in the fork; the
-  fork carries the small builtin-local fix 06 instead (re-pinned
-  `4edb1f43` → `eb3b6c7b`, guarded by the `exportexpandpkg` fixture).
-  One of the two blockers to the default flip is gone (the other is
-  #5's now-five unopened PRs); details in `brush-pin.md` and
+  remains the long-term fix path for the `declare`/`local`/`readonly`/
+  `typeset` half, which the fork still carries (re-pinned 2026-09-23
+  `4edb1f43` → `eb3b6c7b`, now `59e9b380`, guarded by the
+  `exportexpandpkg` fixture). One of the two blockers to the default
+  flip is gone (the other is #5's now-three unopened PRs); details in
+  `brush-pin.md` and
   `docs/brush-pr/06-declaration-assignment-expansion.md`.
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).

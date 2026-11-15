@@ -521,23 +521,29 @@ Rust bash (`reubeno/brush`). Outcome:
   vs embedded `brush_core::Shell`). **The default is `bash`** — brush's
   `declare -f` used to corrupt real eclass functions with redirected
   here-docs (`toolchain-funcs`), breaking `emerge <atom>` for compiled
-  packages. The fixes are staged and in the pin (re-pinned 2026-09-20 to
-  upstream `6bada559`: fixes 01–04 carried, fix 05 superseded by
-  upstream #988 and kept as regression coverage only), but flipping the
-  default back to brush stays a separate owner decision until the
-  upstream PRs land and backlog #94's upstream fix
+  packages. The fixes are staged and in the pin (re-pinned 2026-11-15 to
+  upstream `6a688f19`: fixes 02 and 04 carried plus fix 05's regression
+  test, fixes 01 and 03 landed upstream as #1416/#1276 and 06's `export`
+  half as #1564, fix 05's implementation superseded by upstream #988),
+  but flipping the default back to brush stays a separate owner decision
+  until the upstream PRs land and backlog #94's remaining
+  `declare`/`local` half upstream
   ([#1280](https://github.com/reubeno/brush/pull/1280)) is in; brush
   remains opt-in and static-musl-friendly.
 - Upstream brush bugs found running real phases (all fixed on per-bug
   `fix/*` branches, staged for upstream, carried in the pin): brace-less
   function definitions — **merged** as
   [#1274](https://github.com/reubeno/brush/pull/1274); here-tag tokenizer
-  corruption; `declare -f` here-document serialization (incl. quoted
-  tags); a pipeline-function-stage deadlock; a `source` parse error
-  exiting the caller; and IFS-dependent brace expansion (whose
-  implementation upstream's own #988 superseded — only its regression
-  test is still carried). The pin is a **thin `vivo75/brush` fork** =
-  upstream `main` + the four still-cherry-picked fixes (`docs/brush-pr/`),
+  corruption — **merged** as
+  [#1416](https://github.com/reubeno/brush/pull/1416); `declare -f`
+  here-document serialization (incl. quoted tags, still carried);
+  a pipeline-function-stage deadlock — **merged** as
+  [#1276](https://github.com/reubeno/brush/pull/1276); a `source` parse
+  error exiting the caller (still carried, POSIX-aware); and
+  IFS-dependent brace expansion (whose implementation upstream's own #988
+  superseded — only its regression test is still carried). The pin is a
+  **thin `vivo75/brush` fork** =
+  upstream `main` + the three still-carried fixes (`docs/brush-pr/`),
   merged from upstream periodically; drop the fork once the PRs land.
 - `rusty_bash` was ruled out (not an embeddable library).
 

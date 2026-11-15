@@ -69,8 +69,8 @@ portage-versions = { path = "../portage-versions" }
 #     Draft, so the fork carries the small builtin-local fix instead.
 # See docs/brush-pin.md for the tracking record and the periodic re-pin
 # checklist (bump the rev to a newer `main`, re-run the suite).
-brush-core = { git = "https://github.com/vivo75/brush", rev = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33" }
+brush-core = { git = "https://github.com/vivo75/brush", rev = "59e9b3800b2611495dbfa365f510fb321ef1154a" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "59e9b3800b2611495dbfa365f510fb321ef1154a" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

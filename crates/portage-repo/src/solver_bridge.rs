@@ -840,6 +840,16 @@ fn version_row(
             iuse_defaults,
             deps: PackageDeps::new(d0, d1, d2, d3, d4),
             required_use: None,
+            // PMS table 8.6: an `||` / `^^` emptied by USE stripping still
+            // matches under EAPI 0-6 and does not from EAPI 7. This bridge
+            // does not carry the record's EAPI, so it keeps the vacuous-true
+            // shape the 0.8 crate had.
+            empty_any_of_matches: true,
+            // The bridge only ever offers candidates that already passed the
+            // caller's keyword/mask/licence filters, so no row is a widened
+            // (`--autounmask`) supply and none is a live ebuild.
+            needs_unmask: false,
+            live: false,
         },
     ))
 }
@@ -2875,7 +2885,7 @@ fn parent_use_reinstalls(
                 // Named-slot and version restrictions still bind: an atom
                 // the installed version does not match is an upgrade
                 // question, not a parent-USE reinstall.
-                if !atom.matches_cpv(&cpv, Some(inst.slot.as_str())) {
+                if !atom.matches_cpv(&cpv, portage_atom::Slot::parse(&inst.slot).ok().as_ref()) {
                     continue;
                 }
                 let (vdb_iuse, vdb_use) = installed_pkg_iuse_and_use(
@@ -3637,7 +3647,7 @@ fn or_branch_standing(
                 installed_blocking,
             };
         };
-        if !atom.matches_cpv(&cpv, Some(&slot)) {
+        if !atom.matches_cpv(&cpv, portage_atom::Slot::parse(&slot).ok().as_ref()) {
             return OrBranchStanding {
                 qualifies: false,
                 installed_blocking,

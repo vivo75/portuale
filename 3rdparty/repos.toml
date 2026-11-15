@@ -54,17 +54,17 @@ url = "https://github.com/vivo75/brush"
 kind = "cargo-git-dependency"
 checkout_path = "3rdparty/brush"
 ref = "main"
-commit = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33"
+commit = "59e9b3800b2611495dbfa365f510fb321ef1154a"
 pinned_in = "crates/portuale/Cargo.toml"
-pinned_at = "2026-09-23"
+pinned_at = "2026-11-15"
 tracking_doc = "docs/brush-pin.md"
 # Thin fork (since 2026-09-05): vivo75/brush `main` = upstream
-# reubeno/brush `main` (6bada559) + the four still-carried
-# docs/brush-pr/ fixes + fix 05's regression test (its implementation
-# is upstream now, reubeno/brush#988), nothing else; exact-commit
-# pinned (no released crates.io version carries them, nor
-# reubeno/brush#1274, which portuale's use of bin/eapi.sh needs). Drop
-# the fork once the PRs land. Cargo.toml fetches this via git; the
+# reubeno/brush `main` (6a688f19) + the three still-carried
+# docs/brush-pr/ fixes (02 `f3bf115c`, 04 `07a3723a`, 05's regression
+# test `868ff957`), nothing else; exact-commit pinned. Fixes 01, 03 and
+# 06's `export` half landed upstream as #1416, #1276 and #1564 and are
+# dropped from the fork; 06's `declare` half is still upstream's gap
+# (#1280 is a Draft) and stays. Cargo.toml fetches this via git; the
 # 3rdparty/brush checkout (origin = vivo75, upstream = reubeno) holds
 # the per-bug fix/* branches. Re-pin periodically -- see
 # docs/brush-pin.md's checklist.
@@ -76,8 +76,8 @@ url = "https://github.com/lu-zero/portage-cli"
 kind = "reference-checkout"
 checkout_path = "3rdparty/portage-cli"
 ref = "master"
-commit = "a0465cd9c34ee9ce6490f1ff09ac39597abc90ac"
-pinned_at = "2026-09-07"
+commit = "930d90d7ce45fb469857bd28ac5a069b31e00dc3"
+pinned_at = "2026-11-15"
 tracking_doc = "docs/history/solver-backends-analysis.md"
 
 [devmanual]
@@ -86,5 +86,5 @@ url = "https://codeberg.org/gentoo/devmanual.git"
 kind = "reference-checkout"
 checkout_path = "3rdparty/devmanual"
 ref = "master"
-commit = "d4be354314033c0910c18f1792f49043d396ba0a"
-pinned_at = "2026-10-10"
+commit = "8d0110a9c2a1306b4507e0886bb13bb903c760b3"
+pinned_at = "2026-11-15"

@@ -1,63 +1,53 @@
-From dfbca97c8979a54cdf2ca40fb8d0bfacab621a3f Mon Sep 17 00:00:00 2001
+From 07a3723a6ff2ede705b6e9bd15f6cd65ee80aba1 Mon Sep 17 00:00:00 2001
 From: Francesco Riosa <me@francesco-riosa.com>
-Date: Mon, 14 Sep 2026 10:02:47 +0200
+Date: Sun, 15 Nov 2026 16:36:41 +0000
 Subject: [PATCH] fix(core): don't exit the calling shell on a `source` parse
  error
 
-bash's `source` / `.` returns 2 when the sourced file fails to parse but
-leaves the calling shell running: `source bad.sh || echo caught` runs the
-`||` branch. brush marked every parse error fatal, so the resulting
-`ExecutionResult` asked for `ExitShell` and the enclosing script stopped
-at the `source` -- and a caller embedding the shell (see portuale's
-phase runner) saw exit code 2 with no further execution.
-
-`run_parsed_result` still displays the error and derives exit code 2
-(InvalidUsage); `source_file` now clears a fatal parse error's control
-flow at the `ScriptCallType::Source` boundary only. A parse error in a
-script executed on the command line stays fatal, as before; `eval` is
-out of scope and still fatal (bash leaves the caller running there too,
-but that is a separate divergence).
-
-Adds compat cases for `source` of a syntactically-broken file, both bare
-and on the left of `||`, asserting the status and that execution
-continues.
-
-Assisted-by: opencode:deepseek-v4.1-flash
+bash's `source`/`.` returns 2 and continues when the sourced file fails to
+parse, so a `source f || die` guard fires; only a parse error in a script
+run on the command line is fatal. brush marks every parse error fatal, so
+clear the requested shell exit at the `source` boundary -- except in POSIX
+mode, where a special builtin's error does end the shell.
 ---
- brush-core/src/shell/execution.rs             | 14 ++++++++++-
+ brush-core/src/shell/execution.rs             | 14 +++++++++++
  .../tests/cases/compat/builtins/dot.yaml      | 23 +++++++++++++++++++
- 2 files changed, 36 insertions(+), 1 deletion(-)
+ 2 files changed, 37 insertions(+)
 
 diff --git a/brush-core/src/shell/execution.rs b/brush-core/src/shell/execution.rs
-index bea89e39..4596b9a2 100644
+index 3fe01545..6336c032 100644
 --- a/brush-core/src/shell/execution.rs
 +++ b/brush-core/src/shell/execution.rs
-@@ -144,10 +144,22 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
-         self.call_stack
-             .push_script(call_type, source_info, script_positional_args);
- 
--        let result = self
+@@ -164,6 +164,7 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
+         parse_result: Result<P, brush_parser::ParseError>,
+         params: &ExecutionParameters,
+     ) -> Result<ExecutionResult, error::Error> {
 +        let parse_failed = parse_result.is_err();
-+        let mut result = self
+         let mut result = self
+             .enter_script(call_type, source_info, args.map(Into::into))
              .run_parsed_result(parse_result, source_info, params)
-             .await;
+@@ -178,6 +179,19 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
+             result.next_control_flow = ExecutionControlFlow::Normal;
+         }
  
 +        // A parse error in a sourced file is not fatal to the *calling* shell: bash's
 +        // `source`/`.` returns 2 and execution continues (so a `source f || die` guard fires,
 +        // and `set -e` still sees the status), where a parse error in a script run on the
 +        // command line does terminate the shell. `run_parsed_result` marks every parse error
-+        // fatal, so clear the requested shell exit at the `source` boundary.
-+        if parse_failed && matches!(call_type, callstack::ScriptCallType::Source) {
-+            if let Ok(result) = &mut result {
-+                result.next_control_flow = ExecutionControlFlow::Normal;
-+            }
++        // fatal, so clear the requested shell exit at the `source` boundary -- except in POSIX
++        // mode, where a special builtin's error ends the shell as bash does.
++        if parse_failed
++            && matches!(call_type, callstack::ScriptCallType::Source)
++            && !self.options().posix_mode
++        {
++            result.next_control_flow = ExecutionControlFlow::Normal;
 +        }
 +
-         self.call_stack.pop();
+         Ok(result)
+     }
  
-         result
 diff --git a/brush-shell/tests/cases/compat/builtins/dot.yaml b/brush-shell/tests/cases/compat/builtins/dot.yaml
-index d0c789c7..39f6c102 100644
+index edc96078..450577bc 100644
 --- a/brush-shell/tests/cases/compat/builtins/dot.yaml
 +++ b/brush-shell/tests/cases/compat/builtins/dot.yaml
 @@ -115,6 +115,29 @@ cases:
@@ -91,5 +81,5 @@ index d0c789c7..39f6c102 100644
      test_files:
        - path: "script.sh"
 -- 
-2.55.0
+2.56.0
 

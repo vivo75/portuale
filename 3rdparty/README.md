@@ -29,3 +29,18 @@ installed. See `bin/README.md`.
 
 Override the portage checkout location at runtime with
 `$PORTUALE_PORTAGE_CHECKOUT` (both the Rust and Python sides honour it).
+
+## Unpinned reference checkouts
+
+These live in the same gitignored directory but are **not** pinned in
+`repos.toml`; no build, test or oracle input depends on their exact
+commit, so they are refreshed ad hoc (`git -C 3rdparty/<dir> pull
+--ff-only`):
+
+| dir | what it is |
+|---|---|
+| `awk`, `coreutils`, `diffutils`, `findutils`, `grep`, `util-linux`, `rsync` | reference read of the uutils Rust rewrites (behaviour comparisons when a GNU tool's exact output matters) |
+| `graphviz` | the diagram experiments' reference tree |
+| `gentoo` | a partial copy of `gentoo.git` without `.git`; `proj/pms/` is the PMS LaTeX source |
+| `rootstock-os`, `ms-rust-skill`, `rust-skills`, `superpowers` | OS/skill references; `ms-rust-skill` carries local edits, so do not reset it blindly |
+| `portuale-distill` | scratch work dir (not a repository) |

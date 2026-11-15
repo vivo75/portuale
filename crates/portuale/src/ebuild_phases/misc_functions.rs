@@ -132,7 +132,10 @@ pub(crate) async fn run_misc_functions_brush(
     });
     // Drop shell before pump (see `open_log_file`): capture the outcome, then return.
     let outcome: Result<i32, String> = async {
-        shell
+        // The setup script only prepares the environment; its status is not the
+        // dynamic-phase's own (the same split as `run_phase`, which does check it
+        // because an ebuild must not run against a half-loaded environment).
+        let _ = shell
             .run_string(&setup, &brush_core::SourceInfo::default(), &params)
             .await
             .map_err(|e| format!("environment setup failed: {e}"))?;

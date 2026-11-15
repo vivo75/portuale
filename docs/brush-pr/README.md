@@ -2,68 +2,63 @@
 
 Six independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
 found while running real Gentoo `bin/*.sh` / eclasses through brush as portuale's
-bash backend. **Not yet submitted upstream** — review, then open PRs. (A fifth
-fix, 05, was superseded by upstream's own IFS rework, #988; see its row.)
+bash backend. **Three of them have landed upstream** (01 as #1416, 03 as
+#1276, 06's `export` half as #1564); **the rest are not yet submitted** —
+review, then open PRs. (A fifth fix, 05, was superseded by upstream's own
+IFS rework, #988; see its row.)
 
-In the local `3rdparty/brush` checkout (fixes rebased 2026-09-20 onto
-upstream `main` `6bada559`, `brush-v0.4.0-*`):
+In the local `3rdparty/brush` checkout (fixes rebased 2026-11-15 onto
+upstream `main` `6a688f19`):
 
 | # | branch | commit | Area | One-liner |
 |---|--------|--------|------|-----------|
-| [01](01-tokenizer-nested-construct-heredoc.md) | `fix/tokenizer-nested-construct-heredoc` | `995cfbf4` | `brush-parser` tokenizer | A `${…}` / `$(…)` / `$((…))` on a here-tag line has its sub-tokens stolen by the pending here-document, corrupting the enclosing word (and, for `<<${VAR}`, the tag). |
-| [02](02-ast-heredoc-serialization.md) | `fix/declare-f-heredoc-serialization` | `fa046cc5` | `brush-parser` AST `Display` | `declare -f` of a function with a here-document produces output that neither bash nor brush can re-parse (redirect ordering, body indentation, quoted terminators), + smaller mismatches that make `declare -f` non-idempotent. Also drops the now-unused `indenter` dep. |
-| [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `2173b730` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
-| [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `d0249524` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going. |
-| [05](05-brace-expansion-ifs.md) | ~~`fix/brace-expansion-ifs-independent`~~ | `4edb1f43` | `brush-core` expansion | **Superseded by upstream [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support" (`411b9a32`), which made brace expansion produce its fields independently of IFS.** No PR needed; only the `IFS=`/`IFS=:` regression case that rework missed remains on the fork (`4edb1f43`, test-only). |
-| [06](06-declaration-assignment-expansion.md) | `fix/declaration-assignment-expansion` | `eb3b6c7b` (squashed from S1 `dd016ba6` + S2 `38447d84`) | `brush-builtins` declaration builtins | Declaration builtins (`export` / `declare` / `local` / `readonly` / `typeset`) never assignment-expanded an expanded name (`export ${var}=value` was a silent no-op); re-examine the expanded string inside the builtins. Deliberately not upstream [#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a Draft); see the doc. |
+| [01](01-tokenizer-nested-construct-heredoc.md) | ~~`fix/tokenizer-nested-construct-heredoc`~~ | `995cfbf4` | `brush-parser` tokenizer | A `${…}` / `$(…)` / `$((…))` on a here-tag line has its sub-tokens stolen by the pending here-document, corrupting the enclosing word (and, for `<<${VAR}`, the tag). **MERGED upstream as [#1416](https://github.com/reubeno/brush/pull/1416) (`7dc43800`); no PR needed.** |
+| [02](02-ast-heredoc-serialization.md) | `fix/declare-f-heredoc-serialization` | `f3bf115c` | `brush-parser` AST `Display` | `declare -f` of a function with a here-document produces output that neither bash nor brush can re-parse (redirect ordering, body indentation, quoted terminators), + smaller mismatches that make `declare -f` non-idempotent. Also drops the now-unused `indenter` dep. Upstream's #1580 is still open. |
+| [03](03-pipeline-function-deadlock.md) | ~~`fix/function-pipeline-stage-deadlock`~~ | `2173b730` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. **MERGED upstream as [#1276](https://github.com/reubeno/brush/pull/1276) (`144f2938`); no PR needed.** |
+| [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `07a3723a` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going (POSIX mode still ends the shell). |
+| [05](05-brace-expansion-ifs.md) | `fix/brace-expansion-ifs-independent` | `868ff957` | `brush-core` expansion | **Superseded by upstream [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support" (`411b9a32`), which made brace expansion produce its fields independently of IFS.** No implementation PR needed; only the `IFS=`/`IFS=:` regression case that rework missed remains on the fork (`868ff957`, test-only). |
+| [06](06-declaration-assignment-expansion.md) | `fix/declaration-assignment-expansion` | `eb3b6c7b` (squashed from S1 `dd016ba6` + S2 `38447d84`) | `brush-builtins` declaration builtins | Declaration builtins (`export` / `declare` / `local` / `readonly` / `typeset`) never assignment-expanded an expanded name (`export ${var}=value` was a silent no-op). **`export`'s half landed upstream as [#1564](https://github.com/reubeno/brush/pull/1564) (`e59919d5`); the `declare`/`local`/`readonly`/`typeset` half stays on the fork.** |
 
-Each fix commit is exactly one commit on current upstream `main`. `vivo75/brush`'s
-`main` carries the five fixes plus 05's regression test (`995cfbf4` → `fa046cc5`
-→ `2173b730` → `d0249524` → `4edb1f43` → `eb3b6c7b`); **portuale is pinned to that main,
-`eb3b6c7b`** (re-pinned 2026-09-23 for fix 06, Phase 6 S4), so it already builds
-against these fixes. Fix 06's branch (`fix/declaration-assignment-expansion`,
-slice commits S1 `dd016ba6` + S2 `38447d84`) is what the `eb3b6c7b` squash came
-from — the portuale-side guard re-pinned past it.
+`vivo75/brush`'s `main` now carries fix 02, fix 04 and fix 05's regression test
+on top of upstream `6a688f19`; **portuale is pinned to that main, `59e9b380`**
+(re-pinned 2026-11-15), so it already builds against these fixes.
 See [`../brush-pin.md`](../brush-pin.md) "Current pin".
 
-The per-bug `fix/*` branches on `vivo75/brush` still point at their old
-`25bffd54`-based commits (`bc99e6c1`, `df830c59`, `962051c9`, `dfbca97c`,
-`2073877d`); rebase each onto current `upstream/main` before opening its PR
-(the rebased commits already exist on the fork's `main`).
+The three still-carried `fix/*` branches on `vivo75/brush` are rebased onto
+current `upstream/main` (`f3bf115c`, `07a3723a`, `868ff957`); the branches
+for the superseded fixes still point at their old commits (`bc99e6c1`,
+`962051c9`, `eb3b6c7b`) and need no PR.
 
 `patches/*.patch` are `git format-patch` exports of the branch commits (carry the
 full messages; `git am` them, or submit each branch as its own PR — still to do).
+02, 04 and 05 were regenerated on 2026-11-15 from the rebased branches; 01, 03
+and 06 are the original exports of the now-superseded branches (01 and 03 landed
+upstream, 06's `export` half landed as #1564) and are kept as history.
 
 ## Opening the PRs (user-owned; B6)
 
-Five PRs — fix 05 is superseded by #988 and needs none. Rebase each `fix/*`
-branch onto current `upstream/main` first (or push the already-rebased commits
-from the fork's `main` as the branch), then run from this repo root (or adjust
-`--body-file` paths):
+Two PRs are ready — fix 02 and fix 04. Fixes 01, 03 and 06's `export` half
+landed upstream (#1416, #1276, #1564) and need none; fix 05's implementation
+is superseded by #988 and needs none (its regression test could ride with 02
+or as its own tiny PR). The branches are already rebased onto current
+`upstream/main`, so run from this repo root (or adjust `--body-file` paths):
 
 ```sh
-gh pr create -R reubeno/brush --head vivo75:fix/tokenizer-nested-construct-heredoc \
-  --title "fix(parser): don't let a nested \${…}/\$(…) on a here-tag line steal the here-doc's tokens" \
-  --body-file docs/brush-pr/01-tokenizer-nested-construct-heredoc.md
 gh pr create -R reubeno/brush --head vivo75:fix/declare-f-heredoc-serialization \
   --title 'fix(parser): make `declare -f` of a here-document parseable and idempotent' \
   --body-file docs/brush-pr/02-ast-heredoc-serialization.md
-gh pr create -R reubeno/brush --head vivo75:fix/function-pipeline-stage-deadlock \
-  --title "fix(commands): run a function pipeline stage as a background task, not inline" \
-  --body-file docs/brush-pr/03-pipeline-function-deadlock.md
 gh pr create -R reubeno/brush --head vivo75:fix/dot-parse-error-status \
   --title "fix(core): don't exit the calling shell on a \`source\` parse error" \
   --body-file docs/brush-pr/04-dot-parse-error-status.md
-gh pr create -R reubeno/brush --head vivo75:fix/declaration-assignment-expansion \
-  --title "fix(builtins): assignment-expand declaration operands with an expanded name" \
-  --body-file docs/brush-pr/06-declaration-assignment-expansion.md
 ```
 
-Also decide [#1276](https://github.com/reubeno/brush/pull/1276) (the old,
-never-reviewed deadlock fix): the plan's recommendation (D1) is to close it as
-superseded by fix 03; the branch `fix/pipeline-function-stage-deadlock2` is
-still on `vivo75/brush` for reference. Record the resulting PR URLs here and
-in [`../brush-pin.md`](../brush-pin.md).
+Fix 06's `declare`/`local`/`readonly`/`typeset` half has no rebased branch
+yet: build one from the current `main`'s `brush-builtins/src/declaration.rs`
++ `declare.rs` change (the `export.rs` half is upstream's now) and reuse
+[`06-declaration-assignment-expansion.md`](06-declaration-assignment-expansion.md)
+for the body.
+
+Record the resulting PR URLs here and in [`../brush-pin.md`](../brush-pin.md).
 
 ## Verification (2026-09-20 re-pin, fixes 01–04 + 05's regression test)
 

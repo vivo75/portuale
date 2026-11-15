@@ -23,27 +23,33 @@ portage's own upstream base included) in sync too.
 > `reubeno/brush` `main` (the two fixes the fork carried were resolved).
 > **2026-09-05**: back on `vivo75/brush` — as a *thin* fork this time,
 > not a divergent one: its `main` is upstream `reubeno/brush` `main`
-> **plus the five [`brush-pr/`](brush-pr/) commits**, nothing else.
+> **plus the still-carried [`brush-pr/`](brush-pr/) fixes** (three of
+> six as of 2026-11-15), nothing else.
 > Merge upstream into it periodically; drop it again once the PRs
 > land.
 
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` (thin fork of `reubeno/brush`) |
-| Rev | `eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33` |
+| Rev | `59e9b3800b2611495dbfa365f510fb321ef1154a` |
 
-`eb3b6c7b` = `reubeno/brush@6bada559` + the five still-carried
-`brush-pr/` fixes, cherry-picked in order (`995cfbf4` fix 01, `fa046cc5`
-fix 02, `2173b730` fix 03, `d0249524` fix 04) + fix 05's regression
-coverage (`4edb1f43`) + fix 06 (`eb3b6c7b`, squashed from branch
-`fix/declaration-assignment-expansion` S1 `dd016ba6` + S2 `38447d84`).
-Fix 05's *implementation* is no longer carried:
+`59e9b380` = `reubeno/brush@6a688f19` + the three fixes still carried
+(fix 02 `f3bf115c`, fix 04 `07a3723a`) plus fix 05's regression
+coverage (`868ff957`). Fix 05's *implementation* is not carried:
 upstream's own IFS rework (`411b9a32`,
 [#988](https://github.com/reubeno/brush/pull/988) "improve IFS
 support") superseded it, and the fork keeps only the `IFS=`/`IFS=:`
-regression case that rework did not cover. Frozen in `Cargo.lock` too
-(`brush-core` 0.5.0 / `brush-builtins` / `brush-parser`, three
-`git+https://github.com/vivo75/brush?rev=eb3b6c7b…` source lines).
+regression case that rework did not cover. Three fixes landed upstream
+since the previous pin and are no longer carried: 01 tokenizer
+([#1416](https://github.com/reubeno/brush/pull/1416), `7dc43800`), 03
+function pipeline stage ([#1276](https://github.com/reubeno/brush/pull/1276),
+`144f2938`) and 06 declaration assignment expansion for `export`
+([#1564](https://github.com/reubeno/brush/pull/1564), `e59919d5`); fix
+06's `declare`/`local`/`readonly`/`typeset` half is still upstream's
+gap (#1280 remains a Draft), so that half stays on the fork. Frozen in
+`Cargo.lock` too (`brush-core` 0.5.0 / `brush-builtins` /
+`brush-parser`, three
+`git+https://github.com/vivo75/brush?rev=59e9b380…` source lines).
 
 Re-pinned 2026-09-14 (Tier 1, Track B): upstream `main` moved `812336dd`
 → `25bffd54` (reedline 0.51; MSRV 1.95 for the interactive crates only)
@@ -99,20 +105,42 @@ suite diffed by name against the pre-slice baseline (see the S4 commit).
 The five staged fixes (01–04, 06) are still unmerged upstream, so the
 thin fork stays.
 
+Re-pinned 2026-11-15 (recurring, `backlog-tasks.md` #6): upstream `main`
+moved `6bada559` → `6a688f19` (230 commits: #1416 here-doc tokenizer
+rework, #1276 function pipeline stage, #1564 `export` assignment and
+name check, #1552 `ExecutionResult` `must_use`, byte-offset source
+locations, many builtin and parser fixes), and fork `main` moved
+`eb3b6c7b` → `59e9b380` (merge of `upstream/main`). Three carried
+fixes had landed upstream and are dropped from the fork: 01 tokenizer
+(#1416), 03 function pipeline stage (#1276) and 06's `export` half
+(#1564); 06's `declare`/`local`/`readonly`/`typeset` half stays. Fix
+02 is unchanged upstream (#1580 still open, #1706 is its known-failure
+case, now passing on the fork and unmarked); fix 04 keeps its shape but
+is POSIX-aware, because upstream's `run_parsed_result` still marks every
+parse error fatal and a POSIX shell must end on a special builtin's
+error. Verified on the new pin: brush's own `brush-compat-tests` 3629
+ran, 2777 succeeded / **0 unexpected failures** / 852 known-fail / 41
+skipped; `cargo test --release --workspace` in the brush checkout green;
+`cargo fmt --check` and `cargo clippy --workspace --all-targets` clean;
+portuale `cargo fmt --check`, `cargo clippy --release --all-targets`
+(zero warnings) and `cargo test --release -p portuale` (1403 passed)
+green. The upstream `ExecutionResult` `must_use` change surfaced one
+ignored setup-script status in `ebuild_phases::misc_functions`, now
+explicitly discarded with the reason.
+
 > The gitignored **`3rdparty/brush/` working checkout** tracks the same
-> `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`), plus
-> the per-bug branches
-> `fix/tokenizer-nested-construct-heredoc` /
-> `fix/declare-f-heredoc-serialization` /
-> `fix/function-pipeline-stage-deadlock` /
-> `fix/dot-parse-error-status` /
-> `fix/brace-expansion-ifs-independent` /
-> `fix/declaration-assignment-expansion` (fix 06, branched 2026-09-23 —
-> joins `main` squashed at the next re-pin, Phase 6 S4) staged for
-> upstream submission.
-> Their tips still sit on the old `25bffd54` base — rebase each onto
-> current `upstream/main` before opening its PR. Fix 05 is superseded by
-> #988 and no longer needs one.
+> `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`). The
+> three still-carried fixes are rebased onto `upstream/main` `6a688f19`
+> and live on
+> `fix/declare-f-heredoc-serialization` (`f3bf115c`),
+> `fix/dot-parse-error-status` (`07a3723a`) and
+> `fix/brace-expansion-ifs-independent` (`868ff957`, test-only), staged
+> for upstream submission. The branches for the three superseded fixes
+> (`fix/tokenizer-nested-construct-heredoc`,
+> `fix/function-pipeline-stage-deadlock`,
+> `fix/declaration-assignment-expansion`) still hold their old commits
+> and need no PR. Fix 05's implementation is superseded by #988 and no
+> longer needs one.
 
 ## The two fixes the fork used to carry
 
@@ -222,23 +250,26 @@ Bash`; `brush` stays available via `--shell brush`). See
 
 **Root-caused + fixed 2026-09-05** against `reubeno/brush` `main`
 (`a250b84e`) — really *four* bugs there, later **five** per-bug branches
-after the 2026-09-14 Track-B pass. Each is one commit on its own branch
+after the 2026-09-14 Track-B pass. Each was one commit on its own branch
 in the `3rdparty/brush` checkout, staged for upstream submission
 (`git format-patch` exports + write-ups in [`brush-pr/`](brush-pr/),
-**PRs not yet opened**; every branch was rebased onto upstream
-`25bffd54` on 2026-09-14):
-`fix/tokenizer-nested-construct-heredoc` (`bc99e6c1`),
-`fix/declare-f-heredoc-serialization` (`df830c59`),
-`fix/function-pipeline-stage-deadlock` (`962051c9`),
-`fix/dot-parse-error-status` (`dfbca97c`),
-`fix/brace-expansion-ifs-independent` (`2073877d`). All five are
-**in the pin** (first in `vivo75/brush@5af3f6c1` / portuale `8184c11`;
-carried forward into every later pin, see "Current pin" above).
+**three PRs still not opened**; the branches are rebased onto upstream
+`6a688f19` on 2026-11-15):
+`fix/declare-f-heredoc-serialization` (`f3bf115c`),
+`fix/dot-parse-error-status` (`07a3723a`) and
+`fix/brace-expansion-ifs-independent` (`868ff957`, test-only). The
+tokenizer fix (#1416) and the pipeline-stage fix (#1276) landed upstream
+and are no longer carried; their old branch tips (`bc99e6c1`,
+`962051c9`) need no PR. The carried fixes are **in the pin** (first in
+`vivo75/brush@5af3f6c1` / portuale `8184c11`; carried forward into every
+later pin, see "Current pin" above).
 
 1. **tokenizer** — a `${…}` / `$(…)` / `$((…))` on a here-tag line has its
    sub-tokens stolen by the pending here-doc, so `"${base}.c"` tokenizes as
    `base` + `"${}.c"` (and `<<${VAR}`'s tag becomes `VAR`). An *execution*
-   bug, not just serialization.
+   bug, not just serialization. **MERGED upstream** as
+   [#1416](https://github.com/reubeno/brush/pull/1416) (`7dc43800`); the
+   regression snapshots stay in the fork's parser tests.
 2. **AST `Display`** — the here-doc body is emitted inline (indented by the
    enclosing block, and before any later redirect on the same command)
    instead of deferred to column 0 after the line. Plus: multi-line words
@@ -251,15 +282,16 @@ carried forward into every later pin, see "Current pin" above).
    form.
 3. **command exec** — a function used as a non-last pipeline stage runs
    inline to completion before the next stage is spawned → deadlocks past
-   one pipe buffer (re-do of the never-merged #1276).
+   one pipe buffer. **MERGED upstream** as
+   [#1276](https://github.com/reubeno/brush/pull/1276) (`144f2938`).
 4. **`source` status** — a parse error inside a *sourced* file was marked
    fatal, so the `ExecutionResult` asked for `ExitShell` and the whole
    calling script stopped there (an embedded caller saw exit code 2 and no
    further execution). bash's `source`/`.` returns 2 and execution
    continues, so real `source "${T}/environment" || die` fires; brush now
    clears the fatal parse error's control flow at the `source` boundary
-   only (a top-level/`-c` parse error stays fatal; `eval` is still a
-   known separate divergence).
+   only (a top-level/`-c` parse error stays fatal, and so does a POSIX
+   shell; `eval` is still a known separate divergence).
 5. **brace expansion vs IFS** — brace expansion built one space-joined
    string and relied on field splitting to separate its alternatives, so
    under `IFS=`/`IFS=:` (e.g. after `local IFS`) `{A..C}` stayed a single
@@ -281,10 +313,11 @@ failures among 1407 functions, 41 eclasses never parsed); `cargo test
 --release -p portuale` green against the new pin (incl. the
 `install_does_not_deadlock…` guard and the new B2/B3 regressions).
 
-**Still to do:** open the five upstream PRs (fix 05 is superseded by
-#988 and no longer needs one); once merged, re-pin to `reubeno/brush`
-directly (dropping the thin fork) and reconsider flipping the `--shell`
-default back to `brush` — which also waits on #94's upstream fix
+**Still to do:** open the three upstream PRs (02, 04 and 05's regression
+test; 01, 03 and 06's `export` half already landed as #1416, #1276 and
+#1564); once merged, re-pin to `reubeno/brush` directly (dropping the
+thin fork) and reconsider flipping the `--shell` default back to `brush`
+— which also waits on #94's remaining `declare`/`local` half upstream
 ([#1280](https://github.com/reubeno/brush/pull/1280), open, still a
 Draft; the fork carries the small builtin-local fix 06 meanwhile).
 
@@ -304,12 +337,14 @@ Fix: re-examine the expanded string inside the builtins (split on the
 first `=`, honour `+=`, route valid scalar names through the existing
 assignment path) — deliberately not upstream
 [#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a
-Draft with breaking changes). Staged: branch
-`fix/declaration-assignment-expansion`, write-up + patch in
-[`brush-pr/06-declaration-assignment-expansion.md`](brush-pr/06-declaration-assignment-expansion.md),
-compat case + 13 unmarked known-failures on the branch. Removes one of
-the two blockers to revisiting the `--shell` default (the other is #5,
-now five unopened PRs).
+Draft with breaking changes). **`export`'s half landed upstream 2026-11**
+as [#1564](https://github.com/reubeno/brush/pull/1564) (`e59919d5`, with
+the name check); the `declare`/`local`/`readonly`/`typeset` half stays
+on the fork's `main` (the `brush-builtins/src/declaration.rs` module,
+`fix/declaration-assignment-expansion`). Write-up + patch in
+[`brush-pr/06-declaration-assignment-expansion.md`](brush-pr/06-declaration-assignment-expansion.md).
+Removes one of the two blockers to revisiting the `--shell` default (the
+other is #5, now three unopened PRs).
 
 ## What is *not* tracked here
 
@@ -340,7 +375,10 @@ construct, `brush strategy #2` style — and get recorded here.
 
 - **2026-09-20 — declaration builtins never assignment-expand an expanded
   name (`export ${var}=value`). STAGED as fix 06 2026-09-23 (backlog #94,
-  moved to the tracked set above).** Upstream's open, breaking
+  moved to the tracked set above).** 2026-11-15: `export`'s half landed
+  upstream as [#1564](https://github.com/reubeno/brush/pull/1564); the
+  `declare`/`local`/`readonly`/`typeset` half stays on the fork.
+  Upstream's open, breaking
   [#1280](https://github.com/reubeno/brush/pull/1280) remains the
   long-term fix path and is deliberately not carried in the fork; the
   fork carries the small builtin-local fix instead. Detail:
