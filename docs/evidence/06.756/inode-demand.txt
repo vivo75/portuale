@@ -1,0 +1,11 @@
+# inode demand, measured 2026-11-15 on this host
+
+df -i:
+Filesystem          Inodes   IUsed       IFree IUse% Mounted on
+tmpfs              1048576   88632      959944    9% /tmp
+tmp-portage    10737418240 3621566 10733796674    1% /var/tmp
+
+a full suite run's basetemp (/var/tmp/pytest-parallel, 8 workers, 4967 nodes):
+1804465
+
+the failing run's peak (/tmp/opencode/p753 before cleanup, gate.sh serial pytest under /tmp): 962145
