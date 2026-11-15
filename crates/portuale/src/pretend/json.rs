@@ -547,6 +547,7 @@ pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) autounmask_license_changes: &'a [portage_repo::AutounmaskChange],
     pub(crate) autounmask_mask_changes: &'a [portage_repo::AutounmaskChange],
     pub(crate) abi_rebuilds: &'a [(String, String)],
+    pub(crate) stale_pin_refusals: &'a [portage_repo::StalePinRefusal],
     pub(crate) outcome: &'a portage_repo::ResolveOutcome,
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
     pub(crate) verbose: bool,
@@ -577,6 +578,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         autounmask_license_changes,
         autounmask_mask_changes,
         abi_rebuilds,
+        stale_pin_refusals,
         outcome,
         top_level_pkgs,
         verbose,
@@ -621,6 +623,24 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
             )
         })
         .collect();
+    // `stale-bindings` rides along only when a binding is left unrepaired, so
+    // every other document stays byte-identical.
+    let stale_json = if stale_pin_refusals.is_empty() {
+        String::new()
+    } else {
+        let rows: Vec<String> = stale_pin_refusals
+            .iter()
+            .map(|r| {
+                format!(
+                    "{{\"consumer\":{},\"atom\":{},\"provider\":{}}}",
+                    json_string(&r.consumer),
+                    json_string(&r.atom),
+                    json_string(&r.provider)
+                )
+            })
+            .collect();
+        format!(",\"stale-bindings\":[{}]", rows.join(","))
+    };
     // On an abort the caller passes the partial display list, so a `--json`
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
@@ -637,7 +657,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         String::new()
     };
     println!(
-        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}{}}}",
+        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}]{},\"aborted\":{}{}}}",
         entries_json.join(","),
         backtrack_restarts,
         backtrack_max,
@@ -648,6 +668,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         autounmask_license_json.join(","),
         autounmask_mask_json.join(","),
         abi_rebuilds_json.join(","),
+        stale_json,
         aborted_json,
         kept_json
     );

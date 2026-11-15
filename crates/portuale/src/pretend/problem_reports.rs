@@ -258,6 +258,31 @@ pub(crate) fn show_held_back_no_route(quiet: bool, debug: bool, result: &GraphRe
     }
 }
 
+/// Installed packages whose recorded slot-operator binding is stale but whose
+/// recorded versioned dependency forbids the new provider, so the plan leaves
+/// them as they are. A note: the exit code stays 0, and `--quiet` hides it
+/// like the notes above.
+pub(crate) fn show_stale_pin_refusals(quiet: bool, debug: bool, result: &GraphResult) {
+    if (quiet && !debug) || result.stale_pin_refusals.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:"
+    );
+    println!();
+    for r in &result.stale_pin_refusals {
+        println!(
+            "  {}: its dependency {} is not satisfied by {}",
+            r.consumer, r.atom, r.provider
+        );
+    }
+    println!();
+    println!(
+        "  Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused."
+    );
+}
+
 /// The ` in '<root>'` an installed package's description carries, empty at `/`.
 // Portage: Package.py, __str__
 fn installed_in_root(root: &Path) -> String {
@@ -704,30 +729,31 @@ pub(crate) struct ConflictFlags {
     pub(crate) conflict_is_unspecific: bool,
 }
 
-/// A surviving conflict instance's merge-row kind: Portage's `str(Package)`
-/// reads "binary scheduled for merge" for a binary instance, and the
-/// merge list renders that same entry `[binary ...]`, so the block must
-/// agree with the row (charter property 5).
-// Portage: resolver/slot_collision.py, _prepare_conflict_msg_and_check_for_specificity
+/// A surviving conflict instance's merge-row kind: the block must agree with
+/// the `[binary`/`[ebuild` merge-list row (charter property 5).
 fn conflict_instance_kind(
     entries: &[GraphEntry],
     category: &str,
     package: &str,
     version: &str,
 ) -> &'static str {
-    let binary = entries.iter().any(|e| {
-        e.category == category
-            && e.package == package
-            && e.source == portage_repo::CandidateSource::Binary
-            && match &e.outcome {
-                portage_repo::PretendOutcome::New { version: v }
-                | portage_repo::PretendOutcome::Reinstall { version: v, .. } => v == version,
-                portage_repo::PretendOutcome::Upgrade { to, .. }
-                | portage_repo::PretendOutcome::Downgrade { to, .. } => to == version,
-                _ => false,
-            }
-    });
-    if binary {
+    scheduled_kind(portage_repo::parent_source_for(
+        entries, category, package, version,
+    ))
+}
+
+/// A merge-bound conflict parent's kind, read from the settled entries
+/// through its `category/package-version:slot/sub::repo` display string.
+fn parent_source_of(entries: &[GraphEntry], parent_cpv: &str) -> portage_repo::CandidateSource {
+    let cpv = parent_cpv.split(':').next().unwrap_or_default();
+    portage_repo::split_cpv(cpv).map_or(portage_repo::CandidateSource::Ebuild, |(c, p, v)| {
+        portage_repo::parent_source_for(entries, &c, &p, &v)
+    })
+}
+
+/// `binary` or `ebuild` followed by what Portage's `str(Package)` says.
+fn scheduled_kind(source: portage_repo::CandidateSource) -> &'static str {
+    if source == portage_repo::CandidateSource::Binary {
         "binary scheduled for merge"
     } else {
         "ebuild scheduled for merge"
@@ -849,7 +875,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             atom_str: &p.atom,
             atom,
             reasons,
-            parent_source: p.parent_source,
+            parent_source: parent_source_of(entries, &p.parent_cpv),
             use_unconditional,
             use_display: &p.use_display,
         });
@@ -1029,7 +1055,7 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
     selected
 }
 
-/// Print the selected parents of a conflict instance, unconditional USE dependencies first.
+/// The values [`show_selected_parents`] reads from its caller.
 pub(crate) struct ShowSelectedParentsArgs<'a> {
     pub(crate) selected: &'a mut Vec<usize>,
     pub(crate) classified: &'a [ClassifiedParent<'a>],
@@ -1039,6 +1065,7 @@ pub(crate) struct ShowSelectedParentsArgs<'a> {
     pub(crate) had_parents: bool,
 }
 
+/// Print the selected parents of a conflict instance, unconditional USE dependencies first.
 pub(crate) fn show_selected_parents(args: ShowSelectedParentsArgs<'_>) {
     let ShowSelectedParentsArgs {
         selected,
@@ -1093,10 +1120,8 @@ pub(crate) fn show_selected_parents(args: ShowSelectedParentsArgs<'_>) {
         }
         let parent_pos = if classified_installed[m] {
             format!("{}, installed{}", p.parent_cpv, installed_in_root(root))
-        } else if p.parent_source == portage_repo::CandidateSource::Binary {
-            format!("{}, binary scheduled for merge", p.parent_cpv)
         } else {
-            format!("{}, ebuild scheduled for merge", p.parent_cpv)
+            format!("{}, {}", p.parent_cpv, scheduled_kind(p.parent_source))
         };
         let cur_line = format!(
             "{} required by ({}) {}\n",

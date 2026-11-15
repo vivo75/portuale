@@ -10,19 +10,7 @@ pub(crate) struct SlotOpRebuildScan {
     pub(crate) scheduled: BTreeSet<(String, String)>,
     pub(crate) abi_rebuilds: Vec<(String, String)>,
     pub(crate) masked: BTreeSet<BinaryMask>,
-    /// Read by tests; the resolver files nothing for a refusal (a refused
-    /// consumer is simply not scheduled).
-    #[allow(dead_code)]
-    pub(crate) refused: Vec<SlotOpRefused>,
-}
-
-/// A stale-pin binding the scan does not repair: the kept consumer, the
-/// recorded atom that forbids the repair, and the final provider version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SlotOpRefused {
-    pub(crate) consumer: (String, String),
-    pub(crate) atom: String,
-    pub(crate) provider: Option<String>,
+    pub(crate) refused: Vec<StalePinRefusal>,
 }
 
 /// Arguments of [`slot_operator_rebuild_scan`].
@@ -172,7 +160,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     }
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
-    let mut refused: Vec<SlotOpRefused> = Vec::new();
+    let mut refused: Vec<StalePinRefusal> = Vec::new();
     // Every cp this pass actually walked (any outcome). Only consumers
     // the walk reached can fire through build-time keys; `RDEPEND` /
     // `PDEPEND` / `IDEPEND` keep the wider `reachable` gate.
@@ -208,6 +196,25 @@ pub(crate) fn slot_operator_rebuild_scan(
     // both maps empty; pre-check `want_update` here so plain resolves skip
     // the vdb loop as before.
     let want_probe = update || !top_level_cps.is_empty();
+    let stale_ctx = StalePinCtx {
+        root,
+        entries,
+        reachable,
+        scope,
+        walked_installed,
+        walked: &walked,
+        update,
+        with_bdeps,
+        usepkg,
+        empty,
+        config,
+        gate,
+        new_slot: &new_slot,
+        new_slot_fresh: &new_slot_fresh,
+        moved: &moved,
+        installed_by_cp: &installed_by_cp,
+        probe_parents: &probe_parents,
+    };
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() || want_probe {
         for pkg in installed.iter() {
             let cp = (pkg.category.clone(), pkg.package.clone());
@@ -346,30 +353,16 @@ pub(crate) fn slot_operator_rebuild_scan(
             // unscoped): scheduling stays scoped, naming does not.
             if !survived || merge_bound_consumer {
                 if (stale_scope || scheduled.contains(&cp)) && !merge_bound_consumer {
-                    stale_pin_for_consumer(StalePinConsumerArgs {
-                        root,
-                        entries,
-                        reachable,
-                        scope,
-                        walked_installed,
-                        update,
-                        config,
-                        gate,
-                        new_slot: &new_slot,
-                        new_slot_fresh: &new_slot_fresh,
-                        moved: &moved,
-                        installed_by_cp: &installed_by_cp,
-                        probe_parents: &probe_parents,
-                        scheduled: &mut scheduled,
-                        abi_rebuilds: &mut abi_rebuilds,
-                        refused: &mut refused,
+                    stale_pin_for_consumer(
+                        &stale_ctx,
                         pkg,
-                        walked: &walked,
-                        with_bdeps,
-                        usepkg,
-                        cp: &cp,
-                        empty,
-                    });
+                        &cp,
+                        &mut StalePinOut {
+                            scheduled: &mut scheduled,
+                            abi_rebuilds: &mut abi_rebuilds,
+                            refused: &mut refused,
+                        },
+                    );
                 }
                 continue;
             }
@@ -404,117 +397,71 @@ pub(crate) fn slot_operator_rebuild_scan(
     }
 }
 
-/// Arguments of [`stale_pin_for_consumer`].
-struct StalePinConsumerArgs<'a> {
+/// A provider's `(version, slot, sub-slot)` after this run's move.
+type ProviderMove = (String, String, String);
+
+/// What one pass of the scan knows, shared by every stale-pin check.
+struct StalePinCtx<'a> {
     root: &'a Path,
     entries: &'a [GraphEntry],
     reachable: &'a HashSet<(String, String)>,
     scope: Option<&'a HashSet<(String, String)>>,
     walked_installed: &'a HashSet<(String, String)>,
+    walked: &'a HashSet<(String, String)>,
     update: bool,
+    with_bdeps: bool,
+    usepkg: bool,
+    empty: bool,
     config: &'a portage_profile::Config,
     gate: CategoryGate<'a>,
-    new_slot: &'a HashMap<(String, String), (String, String, String)>,
-    new_slot_fresh: &'a HashMap<(String, String), (String, String, String)>,
+    new_slot: &'a HashMap<(String, String), ProviderMove>,
+    new_slot_fresh: &'a HashMap<(String, String), ProviderMove>,
     moved: &'a HashSet<(String, String)>,
     installed_by_cp: &'a HashMap<(String, String), Vec<(String, String)>>,
     probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
-    scheduled: &'a mut BTreeSet<(String, String)>,
-    abi_rebuilds: &'a mut Vec<(String, String)>,
-    refused: &'a mut Vec<SlotOpRefused>,
-    pkg: &'a InstalledPackage,
-    walked: &'a HashSet<(String, String)>,
-    with_bdeps: bool,
-    usepkg: bool,
-    cp: &'a (String, String),
-    /// `--emptytree`: Portage files no slot-operator rebuild there
-    /// (`depgraph.py:7917-7925`), so the stale-pin arm stays out.
-    empty: bool,
 }
 
-/// The stale-pin arm for one installed consumer: a kept consumer whose
-/// recorded `:slot/sub-slot=` no longer matches the provider version the run
-/// leaves behind is scheduled for a rebuild. The final version is the move
-/// this run makes, else the installed one, so an already-stale binding fires
-/// without any provider entry. Without `--update` only a consumer outside the
-/// walk whose provider moves fires (the #744 shape).
-///
-/// Gates: a visible replacement for the consumer; the §2.3 hold-back
-/// check on the recorded atoms (refused by name); then per stale provider --
-/// the consumer's own atoms accept that provider's final version, some
-/// replacement parent names and accepts it, the tree still names it, and no
-/// veto parent refuses it. The consumer is scheduled when any pin survives;
-/// each surviving pin earns its own display pair. A consumer with no visible
-/// tree candidate, or one every gate skips, stays out silently; a recorded
-/// versioned pin that forbids the final version is refused by name.
-fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
-    let StalePinConsumerArgs {
-        root,
-        entries,
-        reachable,
-        scope,
-        walked_installed,
-        update,
-        config,
-        gate,
-        new_slot,
-        new_slot_fresh,
-        moved,
-        installed_by_cp,
-        probe_parents,
-        scheduled,
-        abi_rebuilds,
-        refused,
-        pkg,
-        walked,
-        with_bdeps,
-        usepkg,
-        cp,
-        empty,
-    } = args;
-    // `--emptytree` files no slot-operator rebuild: every reached slot
-    // merges anyway, and Portage has no installed parent or child to file
-    // (`assemble_result` drops the pairs there by the same rule).
-    if empty {
-        return;
+/// What the stale-pin arm files for the consumers it judges.
+struct StalePinOut<'a> {
+    scheduled: &'a mut BTreeSet<(String, String)>,
+    abi_rebuilds: &'a mut Vec<(String, String)>,
+    refused: &'a mut Vec<StalePinRefusal>,
+}
+
+/// One stale pin that can still be repaired: the provider, the fresh
+/// candidate string, and the version and slot the run leaves behind.
+struct StaleEdge {
+    provider_cp: (String, String),
+    cand: String,
+    final_version: String,
+    final_slot: String,
+}
+
+impl StalePinCtx<'_> {
+    /// The move this run makes for `cp`, whether it replaces a slot or fills a fresh one.
+    fn run_move(&self, cp: &(String, String)) -> Option<&ProviderMove> {
+        self.new_slot
+            .get(cp)
+            .or_else(|| self.new_slot_fresh.get(cp))
     }
-    // Without --update the consumer must sit outside the walk to be
-    // scheduled; re-emitting the pair for an already-scheduled consumer is
-    // scope-free (scheduling stays scoped, naming does not).
-    if !update
-        && (walked_installed.contains(cp) || scope.unwrap_or(reachable).contains(cp))
-        && !scheduled.contains(cp)
-    {
-        return;
+
+    /// The installed instance of `provider_cp` in `slot` as a move: what a
+    /// stale pin binds against when the run makes none for it.
+    fn installed_final(&self, provider_cp: &(String, String), slot: &str) -> Option<ProviderMove> {
+        let old = self
+            .installed_by_cp
+            .get(provider_cp)?
+            .iter()
+            .find(|(_, s)| s == slot)?;
+        let (_, sub) = read_vdb_slot(self.root, &provider_cp.0, &provider_cp.1, &old.0);
+        Some((old.0.clone(), slot.to_string(), sub))
     }
-    let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
-    // The selected recorded atoms per key: the arm the merge would take, as
-    // the replacement gates read them. Runtime keys always; build-time keys
-    // for a walked consumer when build-time deps are on or a source build
-    // can happen anyway. Portage registers a built parent's slot-operator
-    // dep only when the walk reaches it non-optionally (an unreached
-    // consumer's build-time pin never fires -- the oneshot-argument half of
-    // the with-bdeps oracle shape); `--usepkg` alone, with binaries instead
-    // of source builds, keeps the arm to runtime keys everywhere (the
-    // `--usepkg` half). On this host `-uDN --getbinpkg=n` builds from
-    // source, so walked BDEPEND-only consumers (the 23 `go` holders) do
-    // fire; under `--usepkg` they stay out.
-    let mut stale_keys: Vec<&str> = vec!["RDEPEND", "PDEPEND", "IDEPEND"];
-    if walked.contains(cp) && (with_bdeps || !usepkg) {
-        stale_keys.extend(["DEPEND", "BDEPEND"]);
-    }
-    let mut keyed: Vec<Vec<String>> = Vec::new();
-    for key in &stale_keys {
-        let text = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
-        keyed.push(selected_parent_atoms(&text, root, entries, &use_flags));
-    }
-    // Every stale pin: a recorded `=`-operated atom whose slot the final
-    // version keeps with another sub-slot. A moved slot stays with the
-    // new-slot arm. Every stale provider is collected: a two-provider
-    // consumer is scheduled when any of its pins survives the gates below.
-    let mut edges: Vec<((String, String), String, String, String)> = Vec::new();
-    for toks in &keyed {
-        for tok in toks {
+
+    /// Every stale pin: a recorded `:slot/sub=` atom whose slot the final
+    /// version keeps with another sub-slot, one edge per provider.
+    fn stale_edges(&self, keyed: &[Vec<String>]) -> Vec<StaleEdge> {
+        let mut edges: Vec<StaleEdge> = Vec::new();
+        for tok in keyed.iter().flatten() {
             let Some(atom) = parse_dep_atom(tok, "rebuild_scan_stale") else {
                 continue;
             };
@@ -530,21 +477,21 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
                 continue;
             }
             let provider_cp = (atom.category.clone(), atom.package.clone());
-            let Some((final_version, final_slot, final_sub)) = new_slot
-                .get(&provider_cp)
-                .or_else(|| new_slot_fresh.get(&provider_cp))
+            let Some((final_version, final_slot, final_sub)) = self
+                .run_move(&provider_cp)
                 .cloned()
-                .or_else(|| stale_installed_final(installed_by_cp, root, &provider_cp, slot))
+                .or_else(|| self.installed_final(&provider_cp, slot))
             else {
                 continue;
             };
             if final_slot != slot || final_sub == sub {
                 continue;
             }
-            // Without --update the provider must move this run: a
-            // same-version reinstall keeps the sub-slot, so it moves
-            // nothing (the unsatisfied-oneshot oracle).
-            if !update && !moved.contains(&provider_cp) {
+            // Without --update the provider must move this run.
+            if !self.update && !self.moved.contains(&provider_cp) {
+                continue;
+            }
+            if edges.iter().any(|e| e.provider_cp == provider_cp) {
                 continue;
             }
             let cand = format!(
@@ -552,28 +499,21 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
                 "{}/{}-{final_version}:{final_slot}/{final_sub}",
                 atom.category, atom.package
             );
-            if !edges.iter().any(|(cp, _, _, _)| cp == &provider_cp) {
-                edges.push((provider_cp, cand, final_version, final_slot));
-            }
+            edges.push(StaleEdge {
+                provider_cp,
+                cand,
+                final_version,
+                final_slot,
+            });
         }
+        edges
     }
-    if edges.is_empty() {
-        return;
-    }
-    // A visible replacement for the consumer.
-    if gate
-        .repo_candidates(&pkg.category, &pkg.package)
-        .ok()
-        .is_none_or(|cands| cands.is_empty())
-    {
-        return;
-    }
-    // No rebuild may hold a package back: every recorded non-`:=` atom
-    // naming a provider this run moves must match the final version there.
-    // A `:=` trigger is judged by the sub-slot compare only: the matcher
-    // enforces recorded-sub equality, so it would refuse every stale binding.
-    for toks in &keyed {
-        for tok in toks {
+
+    /// The first recorded non-`:=` atom naming a provider this run moves
+    /// that the final version does not match: a rebuild may not hold a
+    /// package back. A `:=` atom is judged by the sub-slot compare alone.
+    fn held_back(&self, pkg: &InstalledPackage, keyed: &[Vec<String>]) -> Option<StalePinRefusal> {
+        for tok in keyed.iter().flatten() {
             let Some(atom) = parse_dep_atom(tok, "rebuild_scan_holdback") else {
                 continue;
             };
@@ -583,13 +523,9 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
                 continue;
             }
             let atom_cp = (atom.category.clone(), atom.package.clone());
-            if !(new_slot.contains_key(&atom_cp) || new_slot_fresh.contains_key(&atom_cp)) {
+            let Some((final_version, final_slot, final_sub)) = self.run_move(&atom_cp) else {
                 continue;
-            }
-            let (final_version, final_slot, final_sub) = new_slot
-                .get(&atom_cp)
-                .or_else(|| new_slot_fresh.get(&atom_cp))
-                .expect("provider moves this run");
+            };
             let final_cand = format!(
                 // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{final_version}:{final_slot}/{final_sub}",
@@ -599,111 +535,166 @@ fn stale_pin_for_consumer(args: StalePinConsumerArgs<'_>) {
             if portage_dep::match_from_list(&stripped, &[final_cand.as_str()])
                 .is_none_or(|m| m.is_empty())
             {
-                refused.push(SlotOpRefused {
-                    consumer: cp.clone(),
-                    atom: (*tok).clone(),
-                    provider: Some(format!(
-                        "{}/{}-{final_version}",
-                        atom.category, atom.package
-                    )),
+                return Some(StalePinRefusal {
+                    consumer: pkg.cpv(),
+                    atom: tok.clone(),
+                    provider: format!("{}/{}-{final_version}", atom.category, atom.package),
                 });
-                return;
+            }
+        }
+        None
+    }
+
+    /// Whether the replacement's own atoms, some replacement parent, the
+    /// tree and every veto parent all let the stale pin on `edge` be repaired.
+    fn repairable(
+        &self,
+        pkg: &InstalledPackage,
+        stale_keys: &[&str],
+        edge: &StaleEdge,
+        scheduled: &BTreeSet<(String, String)>,
+    ) -> bool {
+        let consumer = (&pkg.category[..], &pkg.package[..], &pkg.slot[..]);
+        let cp = (pkg.category.clone(), pkg.package.clone());
+        replacement_accepts(ReplacementAcceptsArgs {
+            root: self.root,
+            config: self.config,
+            pkg,
+            dep_keys: stale_keys,
+            provider_cp: &edge.provider_cp,
+            cand: &edge.cand,
+            gate: self.gate,
+            entries: self.entries,
+        }) && replacement_parent_accepts(ReplacementParentAcceptsArgs {
+            config: self.config,
+            consumer,
+            dep_keys: stale_keys,
+            provider: (&edge.provider_cp.0, &edge.provider_cp.1),
+            candidate: &edge.cand,
+            gate: self.gate,
+        }) && replacement_names_provider(ReplacementNamesProviderArgs {
+            gate: self.gate,
+            config: self.config,
+            root: self.root,
+            entries: self.entries,
+            consumer,
+            dep_keys: stale_keys,
+            provider_cp: &edge.provider_cp,
+        }) && !probe_refused(
+            self.probe_parents,
+            scheduled,
+            &edge.provider_cp,
+            &edge.cand,
+            &cp,
+        )
+    }
+
+    /// Display pairs for the surviving pins that change version: the provider
+    /// whose move caused the rebuild, against the consumer version the plan
+    /// installs. An already-stale binding whose provider stays put gets none.
+    fn file_pairs(
+        &self,
+        pkg: &InstalledPackage,
+        cp: &(String, String),
+        surviving: &[&StaleEdge],
+        abi_rebuilds: &mut Vec<(String, String)>,
+    ) {
+        let consumer_cpv = self
+            .entries
+            .iter()
+            .find(|e| {
+                e.category == cp.0
+                    && e.package == cp.1
+                    && e.slot.as_deref() == Some(pkg.slot.as_str())
+            })
+            .and_then(|e| merge_bound_version(&e.outcome))
+            .map_or_else(
+                || pkg.cpv(),
+                |version| format!("{}/{}-{version}", cp.0, cp.1),
+            );
+        for edge in surviving {
+            let installed_version = self
+                .installed_by_cp
+                .get(&edge.provider_cp)
+                .and_then(|insts| {
+                    insts
+                        .iter()
+                        .find(|(_, s)| *s == edge.final_slot)
+                        .map(|(v, _)| v)
+                });
+            if installed_version != Some(&edge.final_version) {
+                let display = format!(
+                    "{}/{}-{}",
+                    edge.provider_cp.0, edge.provider_cp.1, edge.final_version
+                );
+                abi_rebuilds.push((display, consumer_cpv.clone()));
             }
         }
     }
-    // Per stale provider: the replacement's own atoms accept the final
-    // version, some replacement parent names the provider and accepts it,
-    // and the consumer's tree still names the provider (a rebuild
-    // re-records the live dependencies, so a tree that dropped the dep has
-    // nothing stale to repair). The consumer is scheduled when any pin
-    // survives; each surviving pin earns its display pair below.
-    let mut surviving: Vec<(&(String, String), &str, &str, &str)> = Vec::new();
-    for (provider_cp, cand, final_version, final_slot) in &edges {
-        if !replacement_accepts(ReplacementAcceptsArgs {
-            root,
-            config,
-            pkg,
-            dep_keys: &stale_keys,
-            provider_cp,
-            cand,
-            gate,
-            entries,
-        }) {
-            continue;
-        }
-        if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
-            config,
-            consumer: (&pkg.category, &pkg.package, &pkg.slot),
-            dep_keys: &stale_keys,
-            provider: (&provider_cp.0, &provider_cp.1),
-            candidate: cand,
-            gate,
-        }) {
-            continue;
-        }
-        // A rebuild re-records the consumer's live dependencies, so a tree
-        // that no longer names the provider has nothing stale to repair:
-        // the consumer stays out (its recorded pin dies with the dependency
-        // itself, and Portage's probe never fires for it either).
-        if !replacement_names_provider(ReplacementNamesProviderArgs {
-            gate,
-            config,
-            root,
-            entries,
-            consumer: (&pkg.category, &pkg.package, &pkg.slot),
-            dep_keys: &stale_keys,
-            provider_cp,
-        }) {
-            continue;
-        }
-        if probe_refused(probe_parents, scheduled, provider_cp, cand, cp) {
-            continue;
-        }
-        surviving.push((
-            provider_cp,
-            cand.as_str(),
-            final_version.as_str(),
-            final_slot.as_str(),
-        ));
+}
+
+/// The stale-pin arm for one installed consumer: a kept consumer whose
+/// recorded `:slot/sub-slot=` no longer matches the provider version the run
+/// leaves behind is scheduled for a rebuild, unless a recorded versioned pin
+/// forbids that version (refused by name).
+fn stale_pin_for_consumer(
+    ctx: &StalePinCtx<'_>,
+    pkg: &InstalledPackage,
+    cp: &(String, String),
+    out: &mut StalePinOut<'_>,
+) {
+    // `--emptytree` files no slot-operator rebuild.
+    if ctx.empty {
+        return;
     }
+    // Without --update only a consumer outside the walk fires; re-emitting
+    // the pair for an already-scheduled consumer is scope-free.
+    if !ctx.update
+        && (ctx.walked_installed.contains(cp) || ctx.scope.unwrap_or(ctx.reachable).contains(cp))
+        && !out.scheduled.contains(cp)
+    {
+        return;
+    }
+    let root = ctx.root;
+    let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+    // Build-time keys count only for a walked consumer that can build from source.
+    let mut stale_keys: Vec<&str> = vec!["RDEPEND", "PDEPEND", "IDEPEND"];
+    if ctx.walked.contains(cp) && (ctx.with_bdeps || !ctx.usepkg) {
+        stale_keys.extend(["DEPEND", "BDEPEND"]);
+    }
+    let keyed: Vec<Vec<String>> = stale_keys
+        .iter()
+        .map(|key| {
+            let text = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            selected_parent_atoms(&text, root, ctx.entries, &use_flags)
+        })
+        .collect();
+    let edges = ctx.stale_edges(&keyed);
+    if edges.is_empty() {
+        return;
+    }
+    // A consumer with no visible tree candidate stays out silently.
+    if ctx
+        .gate
+        .repo_candidates(&pkg.category, &pkg.package)
+        .ok()
+        .is_none_or(|cands| cands.is_empty())
+    {
+        return;
+    }
+    if let Some(refusal) = ctx.held_back(pkg, &keyed) {
+        out.refused.push(refusal);
+        return;
+    }
+    let surviving: Vec<&StaleEdge> = edges
+        .iter()
+        .filter(|edge| ctx.repairable(pkg, &stale_keys, edge, out.scheduled))
+        .collect();
     if surviving.is_empty() {
         return;
     }
-    // The display pair names the provider whose move caused the rebuild,
-    // like the same-slot arm: without it the filed entry joins the walk as
-    // a parentless root (`assemble_result` names it from the pair). Only a
-    // genuine version change gets one: for an already-stale binding the
-    // provider stays put, and Portage prints no block for that shape (the
-    // unsatisfied-oneshot oracle pins the bare row). The consumer side names
-    // the version the plan installs for it (the entry's, when the settling
-    // pass already filed it -- version selection may upgrade a forced
-    // reinstall past the installed version), else the installed one. Pairs
-    // are re-emitted on every pass even for an already-scheduled consumer
-    // (only the settling pass's pairs survive to the plan, since the fold
-    // path files the schedule but drops the pair).
-    let consumer_cpv = entries
-        .iter()
-        .find(|e| {
-            e.category == cp.0 && e.package == cp.1 && e.slot.as_deref() == Some(pkg.slot.as_str())
-        })
-        .and_then(|e| merge_bound_version(&e.outcome))
-        .map_or_else(
-            || pkg.cpv(),
-            |version| format!("{}/{}-{version}", cp.0, cp.1),
-        );
-    for (provider_cp, _cand, final_version, final_slot) in &surviving {
-        let installed_version = installed_by_cp.get(*provider_cp).and_then(|insts| {
-            insts
-                .iter()
-                .find(|(_, s)| s == final_slot)
-                .map(|(v, _)| v.clone())
-        });
-        if installed_version.as_deref() != Some(*final_version) {
-            let display = format!("{}/{}-{final_version}", provider_cp.0, provider_cp.1);
-            abi_rebuilds.push((display, consumer_cpv.clone()));
-        }
-    }
-    scheduled.insert(cp.clone());
+    ctx.file_pairs(pkg, cp, &surviving, out.abi_rebuilds);
+    out.scheduled.insert(cp.clone());
 }
 
 /// Whether any replacement ebuild for the consumer names the provider in an
@@ -777,23 +768,6 @@ struct ReplacementNamesProviderArgs<'a> {
     consumer: (&'a str, &'a str, &'a str),
     dep_keys: &'a [&'a str],
     provider_cp: &'a (String, String),
-}
-
-/// The final provider version a stale pin binds against when the run makes
-/// no move for it: the installed instance in `slot`. `None` when the
-/// provider has no instance there.
-fn stale_installed_final(
-    installed_by_cp: &HashMap<(String, String), Vec<(String, String)>>,
-    root: &Path,
-    provider_cp: &(String, String),
-    slot: &str,
-) -> Option<(String, String, String)> {
-    let old = installed_by_cp
-        .get(provider_cp)?
-        .iter()
-        .find(|(_, s)| s == slot)?;
-    let (_, sub) = read_vdb_slot(root, &provider_cp.0, &provider_cp.1, &old.0);
-    Some((old.0.clone(), slot.to_string(), sub))
 }
 
 /// Borrowed inputs of [`slot_op_edge_for_atom`].

@@ -43,3 +43,6 @@ Fail-fast replay of the best pass.
 
 ## gate threading (#571)
 - Replay lookups use `ctx.repo_candidates`.
+
+## fn replay_slot_conflicts (#761)
+- The parent entry's `source` is no longer copied into the conflict record (`SlotConflictParent::parent_source` was removed); the renderer reads the kind from the settled entries (Portage: `resolver/slot_collision.py`, `_prepare_conflict_msg_and_check_for_specificity`).

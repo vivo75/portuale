@@ -457,7 +457,6 @@ fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot
         root: &base,
         refile_singletons: true,
         gate: crate::test_gate(&repos),
-        entries: &[],
     });
     let installed = out[0].instances.iter().find(|i| i.installed).unwrap();
     assert_eq!(
@@ -467,107 +466,19 @@ fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot
     );
 }
 
-/// #752: a finish-time parent whose puller tuple resolves from the pool
-/// carries the binary kind, through both the refile and the singleton
-/// passthrough arms (the S0 shape: `binslotconnew-1.0` merges `[binary`
-/// under `--usepkg` and pulls the 2.0 instance of `binslottarget:0`).
+/// The merge-row kind of a conflict parent is read from the settled entries:
+/// a pool-settled puller reads binary, anything unsettled or argument-level
+/// reads ebuild.
 #[test]
-fn slot_conflict_parent_carries_binary_source() {
-    let base = slotundo_temp_dir("752-parent-kind");
-    let repo = base.join("repo");
-    let dir = repo.join("dev-libs/target");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("target-2.0.ebuild"),
-        "EAPI=8\nDESCRIPTION=\"752\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
-    )
-    .unwrap();
-    let repos = vec![RepoConfig {
-        name: "testrepo".to_string(),
-        location: repo.clone(),
-        priority: 0,
-        is_main: true,
-        masters: vec![],
-        profile_formats: vec![],
-        cache_formats: vec![],
-        aliases: vec![],
-        sync_type: None,
-        sync_uri: None,
-        volatile: false,
-        module_specific_options: vec![],
-    }];
-    let inst = |version: &str| SlotConflictInstance {
-        version: version.to_string(),
-        sub_slot: "0".to_string(),
-        repo_name: "testrepo".to_string(),
-        use_display: Vec::new(),
-        parents: Vec::new(),
-        installed: false,
-    };
-    // The mid-pass parent `build_slot_conflict` would have filed: same
-    // atom, same regenerated `parent_cpv`, still the ebuild default kind.
-    let mid_pass_parent = || SlotConflictParent {
-        parent_cpv: "dev-libs/connew-1.0:/::".to_string(),
-        atom: ">=dev-libs/target-2.0".to_string(),
-        use_display: Vec::new(),
-        installed: false,
-        parent_source: CandidateSource::Ebuild,
-    };
-    let conflict = SlotConflict {
-        category: "dev-libs".to_string(),
-        package: "target".to_string(),
-        slot: "0".to_string(),
-        resolved_version: "1.0".to_string(),
-        conflicting_atom: ">=dev-libs/target-2.0".to_string(),
-        instances: vec![
-            inst("1.0"),
-            SlotConflictInstance {
-                parents: vec![mid_pass_parent()],
-                ..inst("2.0")
-            },
-        ],
-    };
-    let mut pullers: SlotPullers = HashMap::new();
-    pullers.insert(
-        ("dev-libs".to_string(), "target".to_string()),
-        vec![(
-            "dev-libs".to_string(),
-            "connew".to_string(),
-            "1.0".to_string(),
-            ">=dev-libs/target-2.0".to_string(),
-        )],
-    );
-    // The S0 puller tuple, settled from the pool.
-    let mut binary_parent = graph_entry("dev-libs", "connew", "1.0");
-    binary_parent.source = CandidateSource::Binary;
-    let entries = vec![binary_parent];
-    let run = |refile_singletons: bool| {
-        merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
-            conflicts: std::slice::from_ref(&conflict),
-            pullers: &pullers,
-            config: &test_config(),
-            root: &base,
-            refile_singletons,
-            gate: crate::test_gate(&repos),
-            entries: &entries,
-        })
-    };
-    for refile_singletons in [true, false] {
-        let out = run(refile_singletons);
-
-        let inst2 = out[0]
-            .instances
-            .iter()
-            .find(|i| i.version == "2.0")
-            .unwrap();
-        assert_eq!(inst2.parents.len(), 1);
-        assert_eq!(
-            inst2.parents[0].parent_source,
-            CandidateSource::Binary,
-            "refile_singletons={refile_singletons}: the pool-settled puller reads binary"
-        );
-    }
-    let _ = fs::remove_dir_all(&base);
+fn parent_source_for_reads_the_settled_entry() {
+    let mut binary = graph_entry("dev-libs", "connew", "1.0");
+    binary.source = CandidateSource::Binary;
+    let entries = vec![binary, graph_entry("dev-libs", "other", "1.0")];
+    let kind = |c: &str, p: &str, v: &str| parent_source_for(&entries, c, p, v);
+    assert_eq!(kind("dev-libs", "connew", "1.0"), CandidateSource::Binary);
+    assert_eq!(kind("dev-libs", "other", "1.0"), CandidateSource::Ebuild);
+    assert_eq!(kind("dev-libs", "connew", "2.0"), CandidateSource::Ebuild);
+    assert_eq!(kind("", "", ""), CandidateSource::Ebuild);
 }
 
 /// #601: the slot-conflict ABI step must file **both** sides Portage's
@@ -656,7 +567,6 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
         atom: atom.to_string(),
         use_display: Vec::new(),
         installed,
-        parent_source: CandidateSource::Ebuild,
     };
     let conflict = SlotConflict {
         category: "dev-libs".to_string(),

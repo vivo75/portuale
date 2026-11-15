@@ -269,3 +269,6 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn drop_unrequired_pins
 
 #736: the holder pass withholds a provider with a `=cat/pkg-ver` request. Its entry is kept when something in the plan depends on it (it then has a parent) and when the user named the package; otherwise it would be an `already_installed` row nobody asked for, which the output invariants flag.
+
+## fn LazyRepo::build_relaxed (#761)
+- `LazyRepo::build` (the test-only wrapper that fixed the default pool options; #755 removed its last production caller, the resolvo backend) is gone: `Self::build_relaxed` is the one constructor, and the tests build through their own `lazy_closure` helper. The old `Self::build` doc said the closure is rebuilt per relax level, which now sits on `build_relaxed`.

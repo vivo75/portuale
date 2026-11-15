@@ -54,6 +54,7 @@ pub(crate) fn assemble_pass_result(
         use_change_overlay: state.use_change_overlay,
         use_broke: state.use_broke,
         abi_rebuilds: None,
+        stale_pin_refusals: Vec::new(),
         parent_atoms: state.parent_atoms,
         installed_walked: state.installed_walked,
     };

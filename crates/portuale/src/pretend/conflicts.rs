@@ -26,10 +26,9 @@ pub(crate) struct ClassifiedParent<'a> {
     pub(crate) atom_str: &'a str,
     pub(crate) atom: Atom,
     pub(crate) reasons: Vec<SlotConflictReason>,
-    /// The parent's own merge-row kind, recorded on `SlotConflictParent`
-    /// at the finish-time build sites (never parsed from `parent_cpv`):
-    /// a binary parent reads `binary scheduled for merge` like its merge
-    /// list row (charter property 5).
+    /// The parent's own merge-row kind, read from the settled entries: a
+    /// binary parent reads `binary scheduled for merge` like its merge list
+    /// row (charter property 5).
     pub(crate) parent_source: portage_repo::CandidateSource,
     /// Portage's `unconditional_use_deps`: at least one `("use", flag)`
     /// reason came from a flag missing from the other's IUSE -- such

@@ -281,6 +281,9 @@ pub struct GraphResult {
     /// Updates withheld because an installed holder has no route to follow them
     /// (see [`HeldBackNoRoute`]); a note the renderer prints, rc untouched.
     pub held_back_no_route: Vec<HeldBackNoRoute>,
+    /// Stale slot-operator bindings the plan leaves unrepaired (see
+    /// [`StalePinRefusal`]); a note the renderer prints, rc untouched.
+    pub stale_pin_refusals: Vec<StalePinRefusal>,
     /// Unresolved blocker rows whose owner has no display entry (scan-collected,
     /// absent from the graph). The renderer prints them in the trailing blocker group,
     /// counts them in `Conflict:`, and fails the run (Portage's n1b/n6b shape).

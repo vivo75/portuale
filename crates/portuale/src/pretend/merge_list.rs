@@ -812,6 +812,7 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
             autounmask_license_changes: &result.autounmask_license_changes,
             autounmask_mask_changes: &result.autounmask_mask_changes,
             abi_rebuilds: &result.abi_rebuilds,
+            stale_pin_refusals: &result.stale_pin_refusals,
             outcome: &result.outcome,
             top_level_pkgs,
             verbose,

@@ -30,6 +30,7 @@ pub(crate) fn assemble_result(
     // `--rebuild-if-*` args (`__auto_rebuild__`) are unaffected.
     // Portage: depgraph.py, _gen_reinstall_sets / _compute_abi_rebuild_info
     let slot_op_pairs = !ctx.empty;
+    let mut stale_pin_refusals = std::mem::take(&mut pass.stale_pin_refusals);
     let mut abi_rebuilds = match pass.abi_rebuilds.take() {
         _ if !slot_op_pairs => Vec::new(),
         Some(pairs) => pairs,
@@ -45,7 +46,7 @@ pub(crate) fn assemble_result(
                 0 => HashSet::new(),
                 _ => installed_walked_cps(&pass.installed_walked),
             };
-            slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 effective: Some(ctx.effective_deps()),
                 root: ctx.root,
                 entries: &pass.entries,
@@ -63,8 +64,9 @@ pub(crate) fn assemble_result(
                 gate: ctx.gate(),
                 empty: ctx.empty,
                 usepkg: ctx.usepkg,
-            })
-            .abi_rebuilds
+            });
+            stale_pin_refusals = scan.refused;
+            scan.abi_rebuilds
         }
     };
     // Continuity pairs for conflict-fired rebuilds (the firing pass
@@ -379,6 +381,7 @@ pub(crate) fn assemble_result(
         skipped_missing_dep_full,
         held_back_use,
         held_back_no_route: Vec::new(),
+        stale_pin_refusals,
         installed_masked,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,

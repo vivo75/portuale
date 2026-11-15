@@ -605,6 +605,7 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
     show_skipped_missing_deps(opts.quiet, opts.debug, result, &color, root);
     show_held_back_use(opts.quiet, opts.debug, result, root);
     show_held_back_no_route(opts.quiet, opts.debug, result, root);
+    show_stale_pin_refusals(opts.quiet, opts.debug, result);
 
     show_missing_args_and_aborts(ShowMissingArgsAndAbortsArgs {
         result,

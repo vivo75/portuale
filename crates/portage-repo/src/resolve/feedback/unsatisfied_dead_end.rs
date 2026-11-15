@@ -61,6 +61,7 @@ pub(crate) fn step_unsatisfied_dead_end(
         // The update probe's forcing half, for a child the walk left installed.
         let mut scheduled = scan.scheduled;
         let abi_rebuilds = scan.abi_rebuilds;
+        pass.stale_pin_refusals = scan.refused;
         let masked_binaries = scan.masked;
         let force_reachable = ctx.force_scan_reachable();
         let (force_consumers, forced) =

@@ -48,6 +48,8 @@ pub(crate) struct PassResult {
     /// pass.
     // Portage: _forced_rebuilds
     pub(crate) abi_rebuilds: Option<Vec<(String, String)>>,
+    /// The stale bindings that same scan refused to repair, stashed with it.
+    pub(crate) stale_pin_refusals: Vec<StalePinRefusal>,
     /// See `PassState::suppressed_nvc`.
     pub(crate) suppressed_nvc: bool,
     /// The walk's per-instance `Parent Dep:` rows, rendered by `resolver_trace`.

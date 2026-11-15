@@ -42,3 +42,6 @@ Slot-conflict text helpers. Context moved out of the code comments (#336 Phase 7
 
 ## fn slot_conflict_explanation (#597)
 - Port of `get_explanation` (`resolver/slot_collision.py:728-784`). Returns `None` for a version or slot conflict, `None` without solutions, the `--newuse and --update` text for an unspecific conflict unless both options are set (that text needs no solution). The header line counts solutions while the body prints the minimised changes (quirk Q22). Flags print red for `+` and blue for `-` (`colorize("red"/"blue")`).
+
+## struct ClassifiedParent (#761)
+- `parent_source` was recorded on `SlotConflictParent` at the finish-time build sites; it is now read from the settled entries by `parent_source_of` in `problem_reports.rs`.

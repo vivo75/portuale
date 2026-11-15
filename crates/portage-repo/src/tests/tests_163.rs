@@ -2599,6 +2599,7 @@ fn pass_163() -> PassResult {
         use_change_overlay: Vec::new(),
         use_broke: false,
         abi_rebuilds: None,
+        stale_pin_refusals: Vec::new(),
         suppressed_nvc: false,
         parent_atoms: Vec::new(),
         installed_walked: HashMap::new(),

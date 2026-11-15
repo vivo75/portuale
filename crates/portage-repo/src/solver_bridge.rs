@@ -216,7 +216,7 @@ struct LazyRepo {
     ignore_built_slot_operator_deps: bool,
     /// Portage's `settings.categories` for this resolve, shared with the
     /// default walk when the request carries the run's set (built once in
-    /// [`LazyRepo::build`]): every ebuild lookup below gates on it, like
+    /// [`LazyRepo::build_relaxed`]): every ebuild lookup below gates on it, like
     /// the default walk's [`CategoryGate`](crate::CategoryGate).
     categories: std::rc::Rc<super::Categories>,
     /// The config root the unlisted-category `!!!` line's path renders from.
@@ -243,33 +243,13 @@ struct LazyRepo {
 
 impl LazyRepo {
     /// Build the closure from `seeds` (target CPNs, fully expanded) and `shallow`
-    /// (installed CPNs: loaded but not expanded): BFS over parsed dep trees.
+    /// (installed CPNs: loaded but not expanded): BFS over parsed dep trees,
+    /// over the pool relaxed to `opts.relax` (the closure follows the relaxed
+    /// versions' deps too, so it is rebuilt per level).
     ///
     /// `seeds_first` queues the expanding seeds above the shallow installed
     /// entries, so `Vec::pop` drains the whole target cone before any installed
-    /// CPN loads shallow. The pubgrub path drives [`Self::build_relaxed`]
-    /// directly, so this wrapper (which fixes the default pool options) is
-    /// test-only since #755 removed the resolvo backend, its last
-    /// production caller.
-    #[cfg(test)]
-    fn build(
-        req: &ResolveRequest,
-        repos: Vec<RepoConfig>,
-        seeds: &[String],
-        shallow: &[String],
-        seeds_first: bool,
-    ) -> Result<Self, super::Error> {
-        Self::build_relaxed(
-            req,
-            repos,
-            (seeds, shallow),
-            seeds_first,
-            &PoolOpts::default(),
-        )
-    }
-
-    /// [`Self::build`] over the pool relaxed to `relax` (the closure follows
-    /// the relaxed versions' deps too, so it is rebuilt per level).
+    /// CPN loads shallow.
     fn build_relaxed(
         req: &ResolveRequest,
         repos: Vec<RepoConfig>,
@@ -979,6 +959,7 @@ fn graph_result_from_order(
         skipped_missing_dep_full: Vec::new(),
         held_back_use: Vec::new(),
         held_back_no_route: Vec::new(),
+        stale_pin_refusals: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         installed_masked: Vec::new(),
@@ -5914,6 +5895,23 @@ mod tests {
     use super::super::{SolverKind, active_resolver_for};
     use portage_util::TempDir;
 
+    /// The closure of `seeds` and `shallow` over the default pool, seeds first.
+    fn lazy_closure(
+        req: &super::ResolveRequest,
+        repos: Vec<super::RepoConfig>,
+        seeds: &[String],
+        shallow: &[String],
+    ) -> super::LazyRepo {
+        super::LazyRepo::build_relaxed(
+            req,
+            repos,
+            (seeds, shallow),
+            true,
+            &super::PoolOpts::default(),
+        )
+        .expect("closure builds")
+    }
+
     #[test]
     fn solver_kind_parses_the_two_accepted_values() {
         assert_eq!(SolverKind::parse("portage"), Some(SolverKind::Portage));
@@ -6088,8 +6086,7 @@ mod tests {
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         assert!(seeds.contains(&"dev-libs/newpkg".to_string()));
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let closure: std::collections::HashSet<String> = lazy
             .closure_cpns()
             .into_iter()
@@ -6105,8 +6102,7 @@ mod tests {
         let req = fixture_request(&["dev-libs/diamond"]);
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let closure: std::collections::HashSet<String> = lazy
             .closure_cpns()
             .into_iter()
@@ -6137,8 +6133,7 @@ mod tests {
         let req = fixture_request(&["dev-libs/maskedpkg"]);
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         assert!(
             lazy.load_versions("dev-libs/maskedpkg")
                 .expect("loads maskedpkg")
@@ -6170,8 +6165,7 @@ mod tests {
             req.usepkg = usepkg;
             let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
             let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
-                .expect("closure builds");
+            let lazy = lazy_closure(&req, repos, &seeds, &shallow);
             lazy.load_versions("dev-libs/newpkg").expect("loads newpkg")
         };
         let ebuilds = pool_of(false);
@@ -6204,8 +6198,7 @@ mod tests {
             req.usepkgonly = true;
             let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
             let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
-                .expect("closure builds");
+            let lazy = lazy_closure(&req, repos, &seeds, &shallow);
             lazy.load_versions("dev-libs/newpkg").expect("loads newpkg")
         };
         assert!(
@@ -6240,8 +6233,7 @@ mod tests {
             req.with_bdeps = with_bdeps;
             let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
             let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
-                .expect("closure builds");
+            let lazy = lazy_closure(&req, repos, &seeds, &shallow);
             lazy.load_versions("dev-libs/newpkg")
                 .expect("loads newpkg")
                 .into_iter()
@@ -6608,8 +6600,7 @@ mod tests {
         req.with_bdeps = true;
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         (req, lazy, installed)
     }
@@ -6905,8 +6896,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(kept.deep, "the S3 request counts as deep");
@@ -6935,8 +6925,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(!kept.deep, "no --deep in this request");
@@ -6964,8 +6953,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         let bridge = super::BridgeRepo {
@@ -9081,7 +9069,7 @@ mod tests {
         }
     }
 
-    /// `LazyRepo::build` never admits a vdb-referenced cp without a repo
+    /// `LazyRepo::build_relaxed` never admits a vdb-referenced cp without a repo
     /// dir: the push gate needs both novelty and resolvability, so a
     /// removed package cannot enter `closure` (and the pop dedups the
     /// rest).
@@ -9095,8 +9083,7 @@ mod tests {
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         assert!(shallow.contains(&"dev-libs/pg34-g2phant".to_string()));
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let closure: std::collections::HashSet<String> = lazy
             .closure_cpns()
             .into_iter()
@@ -9244,8 +9231,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(kept.deep, "the S3 request counts as deep");
@@ -9279,8 +9265,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let branch = DepEntry::parse("dev-libs/pg34-ulib[x]")
             .expect("parses")
@@ -9338,8 +9323,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let branch = DepEntry::parse("dev-libs/pg34-ulib[x]")
             .expect("parses")
@@ -9408,8 +9392,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         // Deep, kept, never rebuilt: the vdb supplies the classes.
         let kept = s6_kept(&["dev-libs/pg34-ulib-1"], &[], true);
@@ -9445,8 +9428,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(
@@ -9559,8 +9541,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let mut kept = s6_kept(
             &["dev-libs/pg34-g2p-1", "dev-libs/pg34-ulib-1"],
@@ -9597,8 +9578,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
         // Rebuild member: the repo `clib[f]` atom pressures the
@@ -9643,8 +9623,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         // `capp-99` has no repo record: nothing expands from it.
         let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "99")], &[]);
@@ -9691,8 +9670,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         // Solved `1` matches `ulib-1`, whose staged vdb strings point at
         // `pg34-cdep` (no USE deps): nothing is pressured even though a
@@ -9735,8 +9713,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         // Solved `2` is not installed (only `1` is): the pass reads the
         // `2` strings, whose `clib[f]` atom pressures the flag-less
@@ -9772,8 +9749,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p2", "1")], &[]);
         let mut kept = s6_kept(
@@ -9804,8 +9780,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p3", "1")], &[]);
         let mut kept = s6_kept(
@@ -9835,8 +9810,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
         let mut kept = s6_kept(
@@ -9869,8 +9843,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p", "1")], &[]);
         let mut kept = s6_kept(
@@ -10113,8 +10086,7 @@ mod tests {
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         req.root = root.path().to_path_buf();
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let all = s6_all_installed_cps(&root);
         let has = |with_bdeps, live: &std::collections::HashSet<(String, String)>| {
             super::has_installed_parent(
@@ -10148,8 +10120,7 @@ mod tests {
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         let mut req = req;
         req.root = root.path().to_path_buf();
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         // The only edge onto `pg34-cdep` is the `!` block: no parent.
         assert!(
             !super::has_installed_parent(
@@ -10172,8 +10143,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         // Same package, another category, merged: the replacement row stands.
         let entries = vec![s6_test_entry(
             "sys-libs",
@@ -10456,8 +10426,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let slots = super::target_slots(
             &lazy,
             "dev-libs/pg34-g2tie",
@@ -10482,8 +10451,7 @@ mod tests {
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let slots = super::target_slots(
             &lazy,
             "dev-libs/pg359-gsblk",
@@ -10505,8 +10473,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let slots = super::target_slots(
             &lazy,
             "dev-libs/pg34-g2max",
@@ -10538,8 +10505,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(
@@ -10566,8 +10532,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let kept = s6_kept(&[], &[], false);
         // Round 1: the engine takes first-listed `x`; `y` rides in via `b`.
         let order = vec![
@@ -10651,8 +10616,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let kept = s6_kept(&[], &[], false);
         // Round 1: the engine takes first-listed `x`; `y` arrives three
         // edges later through `x` itself.
@@ -10735,8 +10699,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let kept = s6_kept(&[], &[], false);
         let order = vec![
             ("dev-libs/pg366o-tb".to_string(), "1".to_string()),
@@ -10816,8 +10779,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let installed = super::super::all_installed_packages(&req.root);
         let kept = s6_kept(&[], &[], false);
         // Neither branch is selected anywhere: no desired pick, while the
@@ -10873,8 +10835,7 @@ mod tests {
         let dir = extra.location.parent().expect("repo parent").to_path_buf();
         repos.push(extra);
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let lazy = lazy_closure(&req, repos, &seeds, &shallow);
         let kept = s6_kept(&[], &[], false);
         let order = vec![("dev-libs/pg34-g2cond".to_string(), "1".to_string())];
         let parents = std::collections::HashMap::new();

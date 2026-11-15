@@ -52,7 +52,7 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 ## fn show_selected_parents
 - `(parent_cpv, atom, display, installed)` selected-line rendering.
 - Portage shows `unconditional_use_deps` first (its own set order is nondeterministic; portuale keeps the stable classified order within each half).
-- #752: a merge-bound parent reads its `binary scheduled for merge` / `ebuild scheduled for merge` label from the recorded `parent_source` (threaded through `ClassifiedParent`), agreeing with its own merge-list row (charter property 5); the installed arm is untouched. The kind is never parsed out of `parent_cpv`.
+- #752 / #761: a merge-bound parent reads its `binary scheduled for merge` / `ebuild scheduled for merge` label from the settled entries (`parent_source_of`: `parent_cpv` through `split_cpv` into `portage_repo::parent_source_for`), agreeing with its own merge-list row (charter property 5); the installed arm is untouched. `conflict_instance_kind` uses the same lookup, so an instance and a parent of one cpv cannot disagree.
 
 ## fn show_cycle_redisplay
 - The circular-dependency block shown again after the merge list.
@@ -75,3 +75,7 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 
 ## fn show_held_back_no_route
 - Backlog #703: the note for an update withheld because an installed holder has no visible version that accepts it (`GraphResult::held_back_no_route`), on both solvers. Printed right after the #699 USE note, with the same `--quiet`-unless-`--debug` gate; rc untouched, `--json` returns before it. One group per provider slot, one `not merged:` line and one closing sentence per route-less holder; it gives no command, since the right advice (wait for the holder's ebuild, or remove the holder) depends on what the user wants. Wording is the plan's default (`helpers/2026-11-11-backlog-700-705/B-703-702-holder-note-and-resolvo.md`); only the pinned strings in pmtest `test_698_a_holder_without_a_route_still_withholds_the_upgrade` move if it changes.
+
+## fn show_stale_pin_refusals
+- #761 (charter property 5): `SlotOpRebuildScan.refused` was read only by tests, so a consumer whose recorded versioned pin (`=dev-libs/prov-5.42*`) forbids the provider version the plan installs stayed stale and the user was told nothing. The scan's refusals reach `GraphResult::stale_pin_refusals` (the settling pass's scan, in `unsatisfied_dead_end` or `assemble_result`) and print as a NOTE after the held-back notes: consumer cpv, the atom that forbids the repair, the provider version, and what to do. Exit code untouched; `--quiet` hides it like its neighbours; `--json` carries `stale-bindings` only when non-empty so other documents stay byte-identical. The wording follows the fast plan's `plan-world` refusal (`portage-world` `RefusedBinding`, `plan_world.rs` `refused_line`), which names the same refusal. The pubgrub bridge (`--solver=pubgrub`) files none: it never runs this scan. A consumer with no visible tree candidate stays silent here although the fast plan reports it (`no visible ebuild`); a follow-up if wanted.
+- Pin: `test_761_a_stale_binding_the_plan_cannot_repair_is_named` (pmtest) over the committed `p569virt`/`p569prov` fixtures.
