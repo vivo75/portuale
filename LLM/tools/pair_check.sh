@@ -32,8 +32,11 @@ warn() { echo "pair-check: WARN $1"; }
 
 # The branch this project integrates into: PAIR_INTEGRATION when set, else
 # `opencode` if the repo has it, else `main`. Prints a full ref name.
-integration_ref() { # repo
+integration_ref() { # repo [branch]
     name=${PAIR_INTEGRATION:-opencode}
+    # On the integration branch itself its own tip is an empty range: anchor
+    # at `main` instead (#762).
+    [ "${2:-}" = "$name" ] && name=main
     if git -C "$1" rev-parse -q --verify "refs/heads/$name" >/dev/null 2>&1; then
         printf 'refs/heads/%s\n' "$name"
     elif git -C "$1" rev-parse -q --verify "refs/remotes/origin/$name" >/dev/null 2>&1; then
@@ -55,7 +58,7 @@ base_of() { # repo branch
         git -C "$1" rev-parse -q --verify HEAD^1 2>/dev/null
         return
     fi
-    ref=$(integration_ref "$1")
+    ref=$(integration_ref "$1" "$2")
     case $ref in
         refs/heads/*)
             fp=$(git -C "$1" merge-base --fork-point "$ref" HEAD 2>/dev/null)
@@ -72,7 +75,14 @@ base_of() { # repo branch
 # stripped: `rev-parse --abbrev-ref` yields `heads/<name>` whenever the same
 # branch also exists as a remote-tracking ref, which would make the evidence
 # file below `merge-gate-heads-<name>.md` and fail the documented convention.
-short_branch() { git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null | sed 's#^heads/##; s#^remotes/[^/]*/##'; }
+# A detached HEAD has no symbolic ref: name it from the local branch that
+# contains it (`name-rev`, with `~N`/`^N` stripped).
+short_branch() {
+    b=$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null)
+    [ -n "$b" ] || b=$(git -C "$1" name-rev --name-only --no-undefined --refs='refs/heads/*' HEAD 2>/dev/null |
+        sed 's#[~^].*$##')
+    printf '%s\n' "$b" | sed 's#^heads/##; s#^remotes/[^/]*/##'
+}
 pbranch=$(short_branch .)
 tbranch=$(short_branch "$PMTEST_DIR") || {
     echo "pair-check: cannot read pmtest at $PMTEST_DIR"; exit 2; }
@@ -92,8 +102,8 @@ BASE=${BASE:-$(base_of . "$pbranch")}
 PMTEST_BASE=${PMTEST_BASE:-$(base_of "$PMTEST_DIR" "$tbranch")}
 # The range a reader cannot see is how this checker over-reported for two
 # slices: name each base and its anchor.
-echo "pair-check: base ${BASE} (portuale, anchor $(integration_ref .))"
-echo "pair-check: base ${PMTEST_BASE} (pmtest, anchor $(integration_ref "$PMTEST_DIR"))"
+echo "pair-check: base ${BASE} (portuale, anchor $(integration_ref . "$pbranch"))"
+echo "pair-check: base ${PMTEST_BASE} (pmtest, anchor $(integration_ref "$PMTEST_DIR" "$tbranch"))"
 
 # (b) merge-path diff needs LLM/evidence/merge-gate-<branch with / -> ->.md
 if [ -n "$BASE" ]; then

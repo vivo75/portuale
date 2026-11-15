@@ -92,7 +92,8 @@ def make_integration_pair(tmp_path, pbranch="feat", tbranch="feat"):
         else:
             git(repo, "checkout", "-q", "-b", "opencode")
             commit(repo, "fixtures/integration", "fixture")
-        git(repo, "checkout", "-q", "-b", br)
+        if br != "opencode":
+            git(repo, "checkout", "-q", "-b", br)
     return por, pmt
 
 
@@ -214,3 +215,31 @@ def test_d_missing_pmtest_sha_warns_only(tmp_path):
     rc, out = run(por, pmt, BASE=base)
     assert rc == 0, out
     assert "WARN" in out, out
+
+
+def test_762_on_the_integration_branch_the_base_is_main(tmp_path):
+    """On `opencode` itself the old base was its own HEAD (an empty range), so
+    a merge-path change merged there was checked against nothing."""
+    por, pmt = make_integration_pair(tmp_path, "opencode", "opencode")
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 1 and "merge-gate-opencode.md" in out, out
+    assert "anchor refs/heads/main" in out, out
+
+
+def test_762_a_detached_head_takes_its_branch_from_name_rev(tmp_path):
+    """A detached HEAD used to read as branch "" and mismatch pmtest's."""
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, "docs/note.md", "docs only")
+    commit(pmt, "fixtures/a", "fixture; portuale docs only")
+    git(por, "checkout", "-q", "--detach")
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 0 and "branch mismatch" not in out, out
+
+
+def test_762_both_detached_still_name_their_branch(tmp_path):
+    por, pmt = make_integration_pair(tmp_path)
+    commit(por, MERGE_FILE, "the slice itself touches the merge path")
+    for repo in (por, pmt):
+        git(repo, "checkout", "-q", "--detach")
+    rc, out = run(por, pmt, BASE="")
+    assert rc == 1 and "merge-gate-feat.md" in out, out

@@ -5,6 +5,12 @@
 # suite tail + failing names. Never run it while a bed run is active.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
+# An empty $1 would resolve OUT to $PWD (and the refusal path below would
+# delete it): refuse it before anything else (#762).
+if [ $# -ge 1 ] && [ -z "$1" ]; then
+    echo "gate: the output directory argument is empty; pass a path or none" >&2
+    exit 2
+fi
 if [ $# -ge 1 ]; then
     OUT=$1
     if [ -e "$OUT" ]; then out_created=; else out_created=1; fi
@@ -14,11 +20,16 @@ else
 fi
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 
-# Backlog #756: this directory's basetemp ($OUT/pytest) needs ~1.8 M inodes for
-# a complete run, and the byte check cannot see that. Refuse before any work --
+# Space preflight, once (backlog #756, #762): a full contract-suite run leaves
+# ~11 GB and ~1.8 M inodes in $OUT/pytest, and a nearly full mount fails the
+# suite with ENOSPC, not with a real test failure. Refuse before any work --
 # and before the doc checks write into $OUT, so a refusal leaves nothing behind
 # (and only ever removes a directory gate.sh itself created).
-if ! sh LLM/tools/check-work-space.sh --require-inodes "$OUT"; then
+sh LLM/tools/check-work-space.sh --basetemp "$OUT" >"$OUT/work_space.txt" 2>&1
+rc=$?
+echo "work-space rc=$rc"; sed 's/^/  /' "$OUT/work_space.txt"
+if [ $rc -ne 0 ]; then
+    echo "gate: free space on /tmp and /var/tmp first (see above); logs: $OUT"
     [ -n "${out_created:-}" ] && rm -rf "$OUT"
     exit 2
 fi
@@ -40,14 +51,6 @@ echo "cut-registry rc=$?"; sed 's/^/  /' "$OUT/cut_registry.txt" | grep -v ': OK
 # Pairing / merge-path gate evidence (plan 02.493 Task 4).
 sh LLM/tools/pair_check.sh >"$OUT/pair_check.txt" 2>&1
 echo "pair-check rc=$?"; sed 's/^/  /' "$OUT/pair_check.txt" | grep -v ': OK$'
-
-# Space preflight: a full contract-suite run leaves ~11 GB and ~1.8 M inodes in
-# /var/tmp, so a nearly full mount fails the suite with ENOSPC, not with a real
-# test failure. Space and the inode sanity floor here; the basetemp's own
-# inode demand was already checked above (backlog #756).
-sh LLM/tools/check-work-space.sh >"$OUT/work_space.txt" 2>&1
-rc=$?; echo "work-space rc=$rc"; sed 's/^/  /' "$OUT/work_space.txt"
-[ $rc -eq 0 ] || { echo "gate: free space on /tmp and /var/tmp first (see above); logs: $OUT"; exit 2; }
 
 cargo fmt --check >"$OUT/fmt.txt" 2>&1; echo "fmt rc=$?"
 cargo clippy --release --all-targets >"$OUT/clippy.txt" 2>&1
