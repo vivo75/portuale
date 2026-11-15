@@ -112,8 +112,13 @@ already answers exactly. A job started through `scoperun.sh` is one scope, so
 
 A job that writes a lot (a parallel suite, a bed, a corpus run) also needs
 `sh LLM/tools/check-work-space.sh` first: `/tmp` and `/var/tmp` each at least
-50% free. One full contract-suite run leaves ~11 GB in its basetemp under
-`/var/tmp`, so stale runs are what fill the mount.
+50% free and 200 000 free inodes. One full contract-suite run leaves ~11 GB
+and ~1.8 M inodes in its basetemp under `/var/tmp`, so stale runs are what
+fill the mount — and a basetemp under `/tmp` cannot complete at all (1 M
+inodes in total; backlog #756). `pytest-parallel.sh` and `gate.sh` refuse such
+a basetemp themselves, with `PMTEST_MIN_BASETEMP_INODES` (a positive integer)
+as the documented override for a deliberate small run. `PMTEST_MIN_FREE_INODES`
+is a different knob: `conftest.py`'s per-tmp-dir guard (default 20 000).
 
 ## Brief template
 

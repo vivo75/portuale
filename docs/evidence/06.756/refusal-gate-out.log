@@ -1,0 +1,3 @@
+check-work-space: '/tmp/gate756' is on a filesystem with only 959939 free inodes (need 2500000)
+  a complete suite run needs ~1.8 M inodes (backlog #756); a 1 M-inode tmpfs like /tmp cannot hold one
+  point the basetemp at a bigger filesystem, or lower the floor deliberately: PMTEST_MIN_FREE_INODES=<n>
