@@ -30,8 +30,13 @@ base_of() { # repo branch
     fi
 }
 
-pbranch=$(git rev-parse --abbrev-ref HEAD)
-tbranch=$(git -C "$PMTEST_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || {
+# The short branch name, with the refs/heads/ (or remotes/<remote>/) prefix
+# stripped: `rev-parse --abbrev-ref` yields `heads/<name>` whenever the same
+# branch also exists as a remote-tracking ref, which would make the evidence
+# file below `merge-gate-heads-<name>.md` and fail the documented convention.
+short_branch() { git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null | sed 's#^heads/##; s#^remotes/[^/]*/##'; }
+pbranch=$(short_branch .)
+tbranch=$(short_branch "$PMTEST_DIR") || {
     echo "pair-check: cannot read pmtest at $PMTEST_DIR"; exit 2; }
 
 # (a) same branch name
