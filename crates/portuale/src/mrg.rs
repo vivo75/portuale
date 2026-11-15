@@ -3104,11 +3104,24 @@ pkg_postinst() {
             let socket = Path::new(ipc.strip_prefix("ipc=").unwrap());
             assert!(socket.is_absolute(), "PORTUALE_VDB_IPC exported: {ipc}");
             // Under TMPDIR when the path fits in a socket address
-            // (`<TMPDIR>/portuale-vdb-ipc-<pid>-<nanos>/s`), else `/tmp`.
-            if sock.as_os_str().len() <= 55 {
-                assert!(socket.starts_with(&sock), "{ipc}");
-            } else {
+            // (`<TMPDIR>/portuale-vdb-ipc-<pid>-<nanos>/s`), else `/tmp`
+            // (`vdb_ipc::MAX_SOCKET_PATH`: `sun_path` holds 108 bytes with
+            // the NUL). Judge the full path, not the parent's length: a long
+            // TMPDIR such as `/var/tmp` still fits when the child name is
+            // short enough, so a proxy on the parent would call correct
+            // behaviour a bug. The pid/nanos digits are unknown here, so the
+            // fallback is legitimate only when even the shortest possible
+            // child name (`/portuale-vdb-ipc-0-0/s`, 24 bytes) overflows.
+            assert!(
+                socket.as_os_str().len() <= 107,
+                "socket path fits in sun_path: {ipc}"
+            );
+            if !socket.starts_with(&sock) {
                 assert!(socket.starts_with("/tmp"), "{ipc}");
+                assert!(
+                    sock.as_os_str().len() + 24 > 107,
+                    "TMPDIR was skipped although the path fits: {ipc}"
+                );
             }
             assert!(!socket.exists(), "socket removed after the run: {ipc}");
             assert!(
