@@ -1,0 +1,1 @@
+emerge: --solver: "sat" is not "portage", "pubgrub" or "resolvo"

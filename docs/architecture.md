@@ -56,7 +56,7 @@ arguments, and hands them to `pretend::run`, the function the `emerge`
 applet also runs. So resolution, merge order and display are shared with
 `emerge` for now. It adds these options:
 
-- `--solver=portage|pubgrub|resolvo` chooses the dependency solver
+- `--solver=portage|pubgrub` chooses the dependency solver
   (default `portage`, the built-in resolver).
 - `--check-world` lists the `@world` slots no visible ebuild satisfies and
   the atoms no ebuild matches (exit 1 if there are any). It uses the

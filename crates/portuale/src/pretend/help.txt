@@ -114,7 +114,7 @@ Output:
 Portuale extensions (not Portage emerge options):
       --json                dump the resolved graph as one JSON line instead of the display
       --shell <bash|brush>  which real shell runs a merge / unmerge / --config phase chain (default bash)
-      --solver <solver>     which dependency solver resolves the graph: portage (default), pubgrub or resolvo
+      --solver <solver>     which dependency solver resolves the graph: portage (default) or pubgrub
 
 emerge --sync is a permanent non-goal: it prints
 "Functionality has moved to `emaint sync`." and exits 1.

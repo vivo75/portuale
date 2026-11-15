@@ -1,8 +1,8 @@
-//! Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
+//! Alternate `--solver=` backend: PubGrub over the same repo facts.
 //!
 //! Portuale-only (Portage's `emerge` has no `--solver`): [`super::SolverKind`]'s
-//! `PubGrub`/`Resolvo` variants land here. Both backends drive lu-zero's
-//! `portage-atom-pubgrub` / `portage-atom-resolvo` bridges instead of the
+//! `PubGrub` variant lands here. The backend drives lu-zero's
+//! `portage-atom-pubgrub` bridge instead of the
 //! backtracking walk -- the same md5-cache facts in, a [`super::GraphResult`]
 //! out, so `pretend.rs` never knows which algorithm resolved the graph.
 //!
@@ -247,9 +247,11 @@ impl LazyRepo {
     ///
     /// `seeds_first` queues the expanding seeds above the shallow installed
     /// entries, so `Vec::pop` drains the whole target cone before any installed
-    /// CPN loads shallow. Pubgrub only (#34 S2: an installed target must expand,
-    /// else its deps never enter `closure`); resolvo keeps the old order so its
-    /// pool -- and its output -- does not move.
+    /// CPN loads shallow. The pubgrub path drives [`Self::build_relaxed`]
+    /// directly, so this wrapper (which fixes the default pool options) is
+    /// test-only since #755 removed the resolvo backend, its last
+    /// production caller.
+    #[cfg(test)]
     fn build(
         req: &ResolveRequest,
         repos: Vec<RepoConfig>,
@@ -312,8 +314,8 @@ impl LazyRepo {
         };
         // Under deep, an installed cpv's own vdb deps decide what it reaches
         // (#34 S3) -- including versions gone from the repo -- so installed
-        // CPNs expand from the vdb here. Pubgrub only, like `seeds_first`:
-        // resolvo keeps the old order so its pool does not move.
+        // CPNs expand from the vdb here. Only when `seeds_first`: without it
+        // the installed cone stays shallow and never enters `closure`.
         let vdb_expand = seeds_first && (!matches!(req.deep, Deep::NotRequested) || req.empty);
         // `(cp, expand)`: targets expand, installed only load. Seeds queue last
         // when `seeds_first`, so LIFO `pop` expands the target cone first: a CPN
@@ -885,8 +887,8 @@ fn newest_installed(versions: &[String]) -> &str {
 /// merge order.
 ///
 /// `kept` is the pubgrub bridge's kept/rebuild set: a same-slot same-version pick
-/// in `kept.rebuild` is a `Reinstall` (Portage's bare, reasonless `[ebuild R]`),
-/// resolvo passes `None` and its output does not move.
+/// in `kept.rebuild` is a `Reinstall` (Portage's bare, reasonless `[ebuild R]`);
+/// `None` skips the reinstall scan and the output does not move.
 // Six inputs ride an explicit allow instead of a one-use args struct.
 #[allow(clippy::too_many_arguments)]
 fn graph_result_from_order(
@@ -1210,7 +1212,7 @@ fn bridge_use_columns(
     // #34 S4: an `R` row diffs against the vdb USE like the walk's own
     // display (`InstalledUseState`, `USE` intersected with `IUSE`), so a
     // drifted flag renders `x*`; anything else keeps no markers. Gated
-    // on the outcome, so resolvo (which never yields `Reinstall`) and
+    // on the outcome, so a solution with no `Reinstall` and
     // every non-`R` row do not move.
     let installed_state =
         super::use_display::display_versions(outcome, &req.root, &record.category, &record.package)
@@ -1336,8 +1338,8 @@ fn bridge_entry_for(
     // #34 S3: an installed-only pick has no repo record; map it from the
     // vdb instead of dropping it (its entry renders `AlreadyInstalled`,
     // hidden like any other kept package). Gated on the deep bridge: the
-    // stub path never offers these versions without deep, and resolvo
-    // (`kept: None`) keeps its skip.
+    // stub path never offers these versions without deep, and a bridge
+    // without a kept set (`kept: None`) keeps its skip.
     let record = repo.record(cp, version).or_else(|| {
         if kept.is_some_and(|kept| kept.deep) {
             let (category, package) = cp.split_once('/')?;
@@ -1502,8 +1504,8 @@ fn file_bridge_blocker_conflicts(
     // closure (blocker_retry_seed_atoms + request atoms + system, over
     // installed deps) instead of an empty set, so a blocked installed
     // package the world/system cone still needs stays unresolved like
-    // Portage's. Resolvo (`kept: None`) keeps the empty set: its output must
-    // not move. A satisfied uninstall with an installed parent in the
+    // Portage's. A bridge without a kept set (`kept: None`) keeps the empty
+    // set: its output must not move. A satisfied uninstall with an installed parent in the
     // expanded cone flips to unresolved next (Portage's digraph-parents
     // veto, which the solution-member-only entries cannot see).
     let mut seeds = req.config.blocker_retry_seed_atoms.clone();
@@ -3114,9 +3116,7 @@ struct OrGroupOrder {
 
 /// Per-solve `||` overrides for the pubgrub facts: which `||` groups read
 /// in a different branch order (or without a branch) than the ebuild lists
-/// them. Pubgrub-only: [`BridgeRepo::versions_for`] applies them, and the
-/// resolvo backend reads `record.deps` straight from [`LazyRepo` and never
-/// sees them, so the default/resolvo output does not move.
+/// them. Pubgrub-only: [`BridgeRepo::versions_for`] applies them.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct OrChoiceOverrides {
     groups: HashMap<OrGroupKey, OrGroupOrder>,
@@ -4109,8 +4109,8 @@ struct BridgeRepo {
     lazy: LazyRepo,
     kept: KeptInstalled,
     /// Installed cpvs for the G3 self-cycle rule (an alternative an installed
-    /// instance satisfies is kept). Pubgrub only: resolvo reads
-    /// `record.deps` straight from `LazyRepo` and never sees this.
+    /// instance satisfies is kept). Pubgrub only: the backtracking walk
+    /// never sees this.
     installed: Vec<super::InstalledPackage>,
     /// #34 S5 G5/G6: the current `||` reorder/drop pass. Pubgrub only, for
     /// the same reason as `installed`.
@@ -5899,169 +5899,16 @@ fn record_relaxed_changes(
     }
 }
 
-// --- resolvo backend -------------------------------------------------------
-
-/// `portage-atom-resolvo` over portuale's facts: the [`super::Resolver`]
-/// behind [`super::SolverKind::Resolvo`].
-pub struct ResolvoResolver;
-
-impl PortualeResolver for ResolvoResolver {
-    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, super::Error> {
-        resolve_resolvo(req).map_err(super::Error::Detail)
-    }
-}
-
-fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
-    use portage_atom_resolvo::{
-        InMemoryRepository, InstalledPolicy, InstalledSet, PackageDeps as RvDeps, PackageMetadata,
-        PortageDependencyProvider, UseConfig as RvUseConfig,
-    };
-    let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
-    let (seeds, shallow) = closure_seeds(req)?;
-    // Old queue order: S2's seeds-first reorder stays behind the pubgrub path,
-    // so the resolvo pool -- and its output -- does not move.
-    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, false)
-        .map_err(|e| format!("reading repo facts: {e}"))?;
-    // The pool is inherently whole-input, so the input is the closure.
-    let mut repo = InMemoryRepository::new();
-    for cp in lazy.closure_cpns() {
-        let cp_text = format!("{cp}");
-        let versions = lazy
-            .load_versions(&cp_text)
-            .map_err(|e| format!("reading repo facts: {e}"))?;
-        for record in &versions {
-            let Ok(cpv) = portage_solver::Cpv::parse(&record.cpv()) else {
-                continue;
-            };
-            let iuse: Vec<_> = parse_iuse(&record.iuse)
-                .into_iter()
-                .map(|flag| interned(&flag))
-                .collect();
-            let use_flags: HashSet<_> = lazy
-                .use_of(record)
-                .into_iter()
-                .map(|f| interned(&f))
-                .collect();
-            repo.add(PackageMetadata {
-                cpv,
-                slot: if record.slot.is_empty() {
-                    None
-                } else {
-                    Some(interned(&record.slot))
-                },
-                subslot: if record.sub_slot.is_empty() || record.sub_slot == record.slot {
-                    None
-                } else {
-                    Some(interned(&record.sub_slot))
-                },
-                iuse,
-                use_flags,
-                repo: Some(interned(&record.repo_name)),
-                dependencies: RvDeps {
-                    depend: record.deps[0].clone(),
-                    rdepend: record.deps[1].clone(),
-                    bdepend: record.deps[2].clone(),
-                    pdepend: record.deps[3].clone(),
-                    idepend: record.deps[4].clone(),
-                },
-            });
-        }
-    }
-    let mut installed = InstalledSet::new();
-    for inst in all_installed_packages(&req.root).iter() {
-        let Ok(cpv) = portage_solver::Cpv::parse(&format!(
-            "{}/{}-{}",
-            inst.category, inst.package, inst.version
-        )) else {
-            continue;
-        };
-        installed.add(
-            PackageMetadata {
-                cpv,
-                slot: if inst.slot.is_empty() {
-                    None
-                } else {
-                    Some(interned(&inst.slot))
-                },
-                subslot: None,
-                iuse: Vec::new(),
-                use_flags: HashSet::new(),
-                repo: None,
-                dependencies: RvDeps::default(),
-            },
-            InstalledPolicy::Favored,
-        );
-    }
-    // Per-version USE rides in each metadata; the provider config stays default.
-    let use_config = RvUseConfig::default();
-    let mut provider = PortageDependencyProvider::with_installed(&repo, &use_config, &installed);
-    let mut reqs = Vec::new();
-    for atom in &req.atoms {
-        let dep = portage_solver::Dep::parse(atom)
-            .map_err(|e| format!("invalid atom {atom:?}: {e:?}"))?;
-        if dep.blocker.is_some() {
-            continue;
-        }
-        reqs.push(provider.intern_requirement(&dep));
-    }
-    let problem = resolvo::Problem::new().requirements(reqs);
-    let mut solver = resolvo::Solver::new(provider);
-    // Engine-native failure text naming the packages, never the internals dump.
-    let solution = match solver.solve(problem) {
-        Ok(solution) => solution,
-        Err(resolvo::UnsolvableOrCancelled::Unsolvable(conflict)) => {
-            return Err(format!("{}", conflict.display_user_friendly(&solver)));
-        }
-        Err(resolvo::UnsolvableOrCancelled::Cancelled(_)) => {
-            return Err("dependency resolution was cancelled".to_string());
-        }
-    };
-    // Items are references, so copy explicitly.
-    #[allow(clippy::iter_cloned_collect)]
-    let ids: Vec<resolvo::SolvableId> = solution.iter().copied().collect();
-    let provider = solver.provider();
-    let ordered = provider
-        .install_order(&ids)
-        .map_err(|left| format!("dependency cycle left unorderable: {left:?}"))?;
-    let mut order = Vec::new();
-    for sid in &ordered {
-        let meta = provider.package_metadata(*sid);
-        order.push((format!("{}", meta.cpv.cpn), format!("{}", meta.cpv.version)));
-    }
-    let mut parents: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for edge in provider.dependency_graph(&ids) {
-        let from = provider.package_metadata(edge.from);
-        let to = provider.package_metadata(edge.to);
-        let (from_cat, from_pkg) = match format!("{}", from.cpv.cpn).split_once('/') {
-            Some(pair) => (pair.0.to_string(), pair.1.to_string()),
-            None => continue,
-        };
-        parents
-            .entry(format!("{}", to.cpv))
-            .or_default()
-            .push((from_cat, from_pkg));
-    }
-    // Resolvo has no kept/rebuild set: its output does not move.
-    Ok(graph_result_from_order(
-        req,
-        &lazy.repos,
-        &lazy,
-        &order,
-        &parents,
-        None,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{SolverKind, active_resolver_for};
     use portage_util::TempDir;
 
     #[test]
-    fn solver_kind_parses_the_three_accepted_values() {
+    fn solver_kind_parses_the_two_accepted_values() {
         assert_eq!(SolverKind::parse("portage"), Some(SolverKind::Portage));
         assert_eq!(SolverKind::parse("pubgrub"), Some(SolverKind::PubGrub));
-        assert_eq!(SolverKind::parse("resolvo"), Some(SolverKind::Resolvo));
+        assert_eq!(SolverKind::parse("resolvo"), None);
         assert_eq!(SolverKind::parse(""), None);
         assert_eq!(SolverKind::parse("PORTAGE"), None);
         assert_eq!(SolverKind::parse("sat"), None);
@@ -6071,17 +5918,15 @@ mod tests {
     fn solver_kind_round_trips_through_display() {
         assert_eq!(SolverKind::Portage.as_str(), "portage");
         assert_eq!(SolverKind::PubGrub.as_str(), "pubgrub");
-        assert_eq!(SolverKind::Resolvo.as_str(), "resolvo");
-        assert_eq!(format!("{}", SolverKind::Resolvo), "resolvo");
+        assert_eq!(format!("{}", SolverKind::PubGrub), "pubgrub");
         assert_eq!(SolverKind::default(), SolverKind::Portage);
     }
 
     #[test]
-    fn active_resolver_for_selects_all_three_backends() {
+    fn active_resolver_for_selects_both_backends() {
         // Every kind yields a resolver; behaviour is pinned elsewhere.
         let _portage = active_resolver_for(SolverKind::Portage);
         let _pubgrub = active_resolver_for(SolverKind::PubGrub);
-        let _resolvo = active_resolver_for(SolverKind::Resolvo);
     }
 
     fn fixture_request(atoms: &[&str]) -> super::super::ResolveRequest {
@@ -6402,27 +6247,6 @@ mod tests {
         assert_eq!(on.raw_deps[2], "dev-libs/buildtool");
     }
 
-    /// Unsatisfiable targets render the engine-native conflict naming the
-    /// packages, never the internals dump.
-    #[test]
-    fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
-        use super::super::active_resolver_for;
-        let mut req = fixture_request(&[">=dev-libs/newpkg-99.0"]);
-        req.solver = super::super::SolverKind::Resolvo;
-        let err = active_resolver_for(super::super::SolverKind::Resolvo)
-            .resolve(&req)
-            .expect_err("nothing provides newpkg-99.0");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("dev-libs/newpkg"),
-            "names the conflicted package: {msg}"
-        );
-        assert!(
-            !msg.contains("ClauseId") && !msg.contains("Unsolvable("),
-            "no engine-internals debug dump leaks out: {msg}"
-        );
-    }
-
     /// Bridge entries report matched blockers through the shared walk-path helper,
     /// in the walk's own shapes.
     #[test]
@@ -6453,38 +6277,34 @@ mod tests {
             }]
         );
 
-        for kind in [
-            super::super::SolverKind::PubGrub,
-            super::super::SolverKind::Resolvo,
-        ] {
-            let mut req = fixture_request(&["dev-libs/blockerpkg"]);
-            req.solver = kind;
-            let result = active_resolver_for(kind)
-                .resolve(&req)
-                .expect("blockerpkg solves");
-            let entry = result
-                .entries
-                .iter()
-                .find(|e| e.package == "blockerpkg")
-                .expect("blockerpkg entry");
-            assert_eq!(
-                entry.blockers,
-                vec![super::super::BlockerConflict {
-                    atom_str: "!!dev-libs/samepkg".to_string(),
-                    strong: true,
-                    matched_category: "dev-libs".to_string(),
-                    matched_package: "samepkg".to_string(),
-                    matched_version: "1.0".to_string(),
-                    // Not walked graph nodes, so Portage uninstalls the match.
-                    unsolvable: false,
-                    satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
-                        cpv: "dev-libs/samepkg-1.0".to_string(),
-                        anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
-                    }),
-                    tree_scheduled_uninstall: false,
-                }]
-            );
-        }
+        let kind = super::super::SolverKind::PubGrub;
+        let mut req = fixture_request(&["dev-libs/blockerpkg"]);
+        req.solver = kind;
+        let result = active_resolver_for(kind)
+            .resolve(&req)
+            .expect("blockerpkg solves");
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == "blockerpkg")
+            .expect("blockerpkg entry");
+        assert_eq!(
+            entry.blockers,
+            vec![super::super::BlockerConflict {
+                atom_str: "!!dev-libs/samepkg".to_string(),
+                strong: true,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "samepkg".to_string(),
+                matched_version: "1.0".to_string(),
+                // Not walked graph nodes, so Portage uninstalls the match.
+                unsolvable: false,
+                satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
+                    cpv: "dev-libs/samepkg-1.0".to_string(),
+                    anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
+                }),
+                tree_scheduled_uninstall: false,
+            }]
+        );
     }
 
     /// Plans moving a slot's sub-slot reinstall stale `:=` consumers via the
@@ -6584,69 +6404,61 @@ mod tests {
     /// engine install order -- decides the display order.
     #[test]
     fn bridge_entries_carry_merge_order_dep_edges() {
-        for kind in [
-            super::super::SolverKind::PubGrub,
-            super::super::SolverKind::Resolvo,
-        ] {
-            let mut req = fixture_request(&["dev-libs/diamond"]);
-            req.solver = kind;
-            let result = active_resolver_for(kind)
-                .resolve(&req)
-                .expect("diamond resolves");
-            assert_eq!(result.entries.len(), 4);
-            let diamond = result
-                .entries
-                .iter()
-                .find(|e| e.package == "diamond")
-                .expect("diamond entry");
-            let mut dep_pkgs: Vec<&str> = diamond.deps.iter().map(|d| d.package.as_str()).collect();
-            dep_pkgs.sort();
-            dep_pkgs.dedup();
-            assert_eq!(dep_pkgs, vec!["shared-a", "shared-b"]);
-        }
+        let kind = super::super::SolverKind::PubGrub;
+        let mut req = fixture_request(&["dev-libs/diamond"]);
+        req.solver = kind;
+        let result = active_resolver_for(kind)
+            .resolve(&req)
+            .expect("diamond resolves");
+        assert_eq!(result.entries.len(), 4);
+        let diamond = result
+            .entries
+            .iter()
+            .find(|e| e.package == "diamond")
+            .expect("diamond entry");
+        let mut dep_pkgs: Vec<&str> = diamond.deps.iter().map(|d| d.package.as_str()).collect();
+        dep_pkgs.sort();
+        dep_pkgs.dedup();
+        assert_eq!(dep_pkgs, vec!["shared-a", "shared-b"]);
     }
 
-    /// Both backends render the walk's forced/masked `( )` wraps (same fixture
+    /// The pubgrub bridge renders the walk's forced/masked `( )` wraps (same fixture
     /// package the walk-path contract pins).
     #[test]
     fn bridge_use_display_wraps_forced_and_masked_flags() {
-        for kind in [
-            super::super::SolverKind::PubGrub,
-            super::super::SolverKind::Resolvo,
-        ] {
-            let mut req = fixture_request(&["dev-libs/pkgusemaskforcepkg"]);
-            req.solver = kind;
-            // One synthetic repo level forcing `forceflag` and masking `maskflag`.
-            req.config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
-                package_use_force: vec![(
-                    "dev-libs/pkgusemaskforcepkg".to_string(),
-                    vec!["forceflag".to_string()],
-                )],
-                package_use_mask: vec![(
-                    "dev-libs/pkgusemaskforcepkg".to_string(),
-                    vec!["maskflag".to_string()],
-                )],
-                ..Default::default()
-            }];
-            let result = active_resolver_for(kind)
-                .resolve(&req)
-                .expect("pkgusemaskforcepkg resolves");
-            assert_eq!(result.entries.len(), 1);
-            let body: String = result.entries[0]
-                .use_expand_display
-                .iter()
-                .map(|(_, text)| text.clone())
-                .collect::<Vec<_>>()
-                .join(" ");
-            assert!(
-                body.contains("(forceflag)"),
-                "forced flag unwrapped ({kind:?}): {body}"
-            );
-            assert!(
-                body.contains("(-maskflag)"),
-                "masked flag unwrapped ({kind:?}): {body}"
-            );
-        }
+        let kind = super::super::SolverKind::PubGrub;
+        let mut req = fixture_request(&["dev-libs/pkgusemaskforcepkg"]);
+        req.solver = kind;
+        // One synthetic repo level forcing `forceflag` and masking `maskflag`.
+        req.config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+            package_use_force: vec![(
+                "dev-libs/pkgusemaskforcepkg".to_string(),
+                vec!["forceflag".to_string()],
+            )],
+            package_use_mask: vec![(
+                "dev-libs/pkgusemaskforcepkg".to_string(),
+                vec!["maskflag".to_string()],
+            )],
+            ..Default::default()
+        }];
+        let result = active_resolver_for(kind)
+            .resolve(&req)
+            .expect("pkgusemaskforcepkg resolves");
+        assert_eq!(result.entries.len(), 1);
+        let body: String = result.entries[0]
+            .use_expand_display
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            body.contains("(forceflag)"),
+            "forced flag unwrapped ({kind:?}): {body}"
+        );
+        assert!(
+            body.contains("(-maskflag)"),
+            "masked flag unwrapped ({kind:?}): {body}"
+        );
     }
 
     /// #714: an upgrade row is diffed against the installed package it replaces, like the
@@ -6687,7 +6499,7 @@ mod tests {
     }
 
     /// The bridge reports the unbreakable build-time cycle through the walk's own
-    /// map; resolvo cannot order a cyclic closure and errors first.
+    /// map.
     #[test]
     fn bridge_plan_reports_the_unbreakable_build_time_cycle() {
         let mut req = fixture_request(&["dev-libs/hardcyclea"]);
@@ -6701,15 +6513,6 @@ mod tests {
             cycle.contains(&"dev-libs/hardcyclea-1.0".to_string())
                 && cycle.contains(&"dev-libs/hardcycleb-1.0".to_string()),
             "unexpected cycle: {cycle:?}"
-        );
-
-        let mut req = fixture_request(&["dev-libs/hardcyclea"]);
-        req.solver = super::super::SolverKind::Resolvo;
-        assert!(
-            active_resolver_for(super::super::SolverKind::Resolvo)
-                .resolve(&req)
-                .is_err(),
-            "resolvo still cannot order a cyclic closure (Tier-4 item)"
         );
     }
 
@@ -9266,33 +9069,6 @@ mod tests {
             deep_allowed: None,
             with_bdeps: false,
         }
-    }
-
-    /// `LazyRepo::build` keeps the resolvo order (`seeds_first = false`)
-    /// free of vdb expansion: without deep the installed cone never
-    /// enters `closure` on that path (S2 `seeds_first`, S3 `vdb_expand`).
-    #[test]
-    fn s6_closure_skips_vdb_expansion_for_resolvo_order() {
-        use super::super::{Deep, find_repos};
-        let mut req = fixture_request(&["dev-libs/newpkg"]);
-        req.deep = Deep::Unlimited;
-        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
-        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        assert!(shallow.contains(&"dev-libs/pg34-gone".to_string()));
-        let lazy =
-            super::LazyRepo::build(&req, repos, &seeds, &shallow, false).expect("closure builds");
-        let closure: std::collections::HashSet<String> = lazy
-            .closure_cpns()
-            .into_iter()
-            .map(|cpn| format!("{cpn}"))
-            .collect();
-        // Installed `pg34-gone-1` points at `pg34-gextra` from its vdb,
-        // which nothing else reaches: expanding it would pull the extra
-        // package into the pool.
-        assert!(
-            !closure.contains("dev-libs/pg34-gextra"),
-            "resolvo-order closure leaves vdb deps unexpanded: {closure:?}"
-        );
     }
 
     /// `LazyRepo::build` never admits a vdb-referenced cp without a repo

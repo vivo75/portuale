@@ -1,0 +1,19 @@
+S0 baseline (plan 04.755, branch backlog/755-remove-resolvo, HEAD 8df4c43c, no code changes).
+- Inventory: docs/evidence/04.755/inventory.txt (STOP-0/STOP-3 greps, both clean).
+- Suite: scripts/pytest-parallel.sh -n8 (JOBS default), PMTEST_BASETEMP=/var/tmp/pytest-755c,
+  log /var/tmp/755-base3.log, junit /var/tmp/755-base3.xml.
+  Result: 1 failed, 4959 passed, 2 skipped, 2 xfailed in 380.86s (total 4964 nodes).
+  The single failure is test_check_world_mutants.py::test_a_mutation_that_changes_nothing_is_an_error_not_a_kill,
+  which passes solo (2.37s) and with its whole file (5 passed, 13.26s): a parallelism flake,
+  pre-existing (no product-code change exists at this point), unrelated to resolvo
+  (check-world/mrg shape). Runs #1/#2 died early from operator error (see below), each also
+  showing exactly one F mid-run at different positions, consistent with the same flake.
+- Operator error, runs #1/#2: scoperun.sh was launched in a foreground shell call, but
+  systemd-run --scope BLOCKS until the suite finishes, so the tool timeout SIGTERMed the
+  launcher and destroyed the scope mid-run (run #1 at 98%, run #2 at 63%). Run #3 was
+  launched with background:true and ran to completion. Lesson recorded for future runs.
+- Probe fingerprints: before/probe-fingerprints.txt (13 argv, default + --solver=pubgrub
+  over fixtures; sha256 of stdout/stderr + rc). The L0 container bed's real-tree atom list
+  is NOT included: it needs podman + a pinned Gentoo tree (AGENTS.md: the bed is periodic,
+  not per-slice; this slice deletes one backend arm without touching pubgrub/default paths,
+  and D4's byte-identity check on the fixture probes is the operative gate).

@@ -1,0 +1,1 @@
+      --solver <solver>     which dependency solver resolves the graph: portage (default) or pubgrub

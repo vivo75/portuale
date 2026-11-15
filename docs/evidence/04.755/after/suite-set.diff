@@ -1,0 +1,10 @@
+1c1
+< FAILED pytests-contract-suite.test_check_world_mutants::test_a_mutation_that_changes_nothing_is_an_error_not_a_kill
+---
+> FAILED pytests-contract-suite.test_emerge_pretend_contract::test_733_tree_does_not_nest_a_row_under_a_hidden_leaf[pubgrub]
+1579a1580
+> passed pytests-contract-suite.test_check_world_mutants::test_a_mutation_that_changes_nothing_is_an_error_not_a_kill
+1808d1808
+< passed pytests-contract-suite.test_emerge_pretend_contract::test_702_resolvo_does_not_upgrade_installed_packages_so_there_is_no_co_upgrade
+1828d1827
+< passed pytests-contract-suite.test_emerge_pretend_contract::test_733_tree_does_not_nest_a_row_under_a_hidden_leaf[pubgrub]

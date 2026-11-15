@@ -137,7 +137,7 @@ The `mrg` director component contracts: traits, their filesystem-backed implemen
 
 ## struct Director
 - Portage: `actions.py::action_build` builds the depgraph from `create_depgraph_params(...)` (`actions.py:268`), resolves it, and hands the merge list to `_emerge/Scheduler.py` (`actions.py:679`), which walks it (fetch -> build -> merge per `MergeListItem`, `--keep-going` resume on failure). A different solver, database/cache backend, or merge method is one constructor argument, never a call-site change.
-- The director is that orchestration shape with every algorithm behind a trait: a different solver (`portage_solver`, `pubgrub`, `resolvo`), a different database or cache backend, or a different merge method is one constructor argument, never a call-site change.
+- The director is that orchestration shape with every algorithm behind a trait: a different solver (`portage_solver`, `pubgrub`), a different database or cache backend, or a different merge method is one constructor argument, never a call-site change.
 - V1 narrowness: `emerge_getbinpkg::run_merge_plan` executes each entry's `MergeUnit` via its engine; `pretend.rs::run_check_news` reads each repo's unread ids via its news selector. The `mrg` applet still calls `pretend::run` directly until a second algorithm lands in one of the remaining read slots.
 
 ## mod tests

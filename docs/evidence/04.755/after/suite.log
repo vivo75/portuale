@@ -1,0 +1,252 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+........................................................................ [ 13%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+........................................................................ [ 21%]
+........................................................................ [ 23%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 27%]
+........................................................................ [ 29%]
+........................................................................ [ 30%]
+........................................................................ [ 31%]
+.......................................................s................ [ 33%]
+........................................................................ [ 34%]
+........................................................................ [ 36%]
+........................................................................ [ 37%]
+........................................................................ [ 39%]
+........................................................................ [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 43%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 47%]
+........................................................................ [ 49%]
+........................................................................ [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+........................................................................ [ 56%]
+........................................................................ [ 58%]
+........................................................................ [ 59%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 66%]
+...................................................................x.... [ 68%]
+.....x.................................................................. [ 69%]
+........................................................................ [ 71%]
+........................................................................ [ 72%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................s............................................... [ 88%]
+........................F............................................... [ 89%]
+........................................................................ [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 95%]
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+...................................................................      [100%]
+=================================== FAILURES ===================================
+________ test_733_tree_does_not_nest_a_row_under_a_hidden_leaf[pubgrub] ________
+[gw4] linux -- Python 3.14.10 /var/tmp/pxvenv/bin/python
+
+emerge_binary = PosixPath('/var/tmp/pytest-755d/popen-gw4/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'COLORTERM': 'truecolor', 'REA_KUNA_COMMAND': '/home/vivo/.local/bin/kuna', 'XDG_CONFIG_DIRS': '/etc/xdg', ...}
+tmp_path = PosixPath('/var/tmp/pytest-755d/popen-gw4/test_733_tree_does_not_nest_a_1')
+solver = 'pubgrub'
+
+    @pytest.mark.parametrize("solver", ["portage", "pubgrub"])
+    def test_733_tree_does_not_nest_a_row_under_a_hidden_leaf(
+        emerge_binary, fixture_env, tmp_path, solver
+    ):
+        """Backlog #733, charter property 5 (the display tells the truth; the output invariant is
+        that a row at depth 1 has a parent row). `p733top` has `PDEPEND=p733dep` and the installed
+        `p733dep` has `RDEPEND=p733top`, the shape of `dev-build/ninja` and `app-alternatives/ninja`
+        (`reference? ( >=dev-build/ninja )`). Without `--deep` the installed `p733dep` is a leaf, its
+        dependencies are not part of the plan, so `--tree` prints the requested reinstall at depth 0.
+        `--solver=pubgrub` gave the leaf entry the dependency edge back to `p733top`, so the tree
+        put `p733top` under a parent that is not displayed (bed `l0-20261112T032148Z`, `dev-build/ninja`:
+        `R    ]  dev-build/ninja` with two spaces). Expected text: the default solver's."""
+>       env = _698_root(
+            fixture_env,
+            tmp_path,
+            [],
+            [("dev-libs/p733top-1", ""), ("dev-libs/p733dep-1", "dev-libs/p733top")],
+        )
+
+pytests-contract-suite/test_emerge_pretend_contract.py:40311: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+pytests-contract-suite/test_emerge_pretend_contract.py:39886: in _698_root
+    shutil.copytree(Path(fixture_env["ROOT"]) / "var", root / "var", symlinks=True)
+/usr/lib/python3.14/shutil.py:654: in copytree
+    return _copytree(entries=entries, src=src, dst=dst, symlinks=symlinks,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+entries = [<DirEntry 'db'>, <DirEntry 'lib'>, <DirEntry 'cache'>]
+src = PosixPath('/home/vivo/repo/PORTUALE/pmtest/fixtures/var')
+dst = PosixPath('/var/tmp/pytest-755d/popen-gw4/test_733_tree_does_not_nest_a_1/root/var')
+symlinks = True, ignore = None
+copy_function = <function copy2 at 0x7fa84168b530>
+ignore_dangling_symlinks = False, dirs_exist_ok = False
+
+    def _copytree(entries, src, dst, symlinks, ignore, copy_function,
+                  ignore_dangling_symlinks, dirs_exist_ok=False):
+        if ignore is not None:
+            ignored_names = ignore(os.fspath(src), [x.name for x in entries])
+        else:
+            ignored_names = ()
+    
+        os.makedirs(dst, exist_ok=dirs_exist_ok)
+        errors = []
+        use_srcentry = copy_function is copy2 or copy_function is copy
+    
+        for srcentry in entries:
+            if srcentry.name in ignored_names:
+                continue
+            srcname = os.path.join(src, srcentry.name)
+            dstname = os.path.join(dst, srcentry.name)
+            srcobj = srcentry if use_srcentry else srcname
+            try:
+                is_symlink = srcentry.is_symlink()
+                if is_symlink and os.name == 'nt':
+                    # Special check for directory junctions, which appear as
+                    # symlinks but we want to recurse.
+                    lstat = srcentry.stat(follow_symlinks=False)
+                    if lstat.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT:
+                        is_symlink = False
+                if is_symlink:
+                    linkto = os.readlink(srcname)
+                    if symlinks:
+                        # We can't just leave it to `copy_function` because legacy
+                        # code with a custom `copy_function` may rely on copytree
+                        # doing the right thing.
+                        os.symlink(linkto, dstname)
+                        copystat(srcobj, dstname, follow_symlinks=not symlinks)
+                    else:
+                        # ignore dangling symlink if the flag is on
+                        if not os.path.exists(linkto) and ignore_dangling_symlinks:
+                            continue
+                        # otherwise let the copy occur. copy2 will raise an error
+                        if srcentry.is_dir():
+                            copytree(srcobj, dstname, symlinks, ignore,
+                                     copy_function, ignore_dangling_symlinks,
+                                     dirs_exist_ok)
+                        else:
+                            copy_function(srcobj, dstname)
+                elif srcentry.is_dir():
+                    copytree(srcobj, dstname, symlinks, ignore, copy_function,
+                             ignore_dangling_symlinks, dirs_exist_ok)
+                else:
+                    # Will raise a SpecialFileError for unsupported file types
+                    copy_function(srcobj, dstname)
+            # catch the Error from the recursive copytree so that we can
+            # continue with other files
+            except Error as err:
+                errors.extend(err.args[0])
+            except OSError as why:
+                errors.append((srcname, dstname, str(why)))
+        try:
+            copystat(src, dst)
+        except OSError as why:
+            # Copying file access times may fail on Windows
+            if getattr(why, 'winerror', None) is None:
+                errors.append((src, dst, str(why)))
+        if errors:
+>           raise Error(errors)
+E           shutil.Error: [('/home/vivo/repo/PORTUALE/pmtest/fixtures/var/db/.pkg.portage_lockfile', '/var/tmp/pytest-755d/popen-gw4/test_733_tree_does_not_nest_a_1/root/var/db/.pkg.portage_lockfile', "[Errno 2] No such file or directory: '/home/vivo/repo/PORTUALE/pmtest/fixtures/var/db/.pkg.portage_lockfile'")]
+
+/usr/lib/python3.14/shutil.py:608: Error
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+pytests-contract-suite/test_cast_tools.py::test_record_with_answers_types_the_reply_at_the_prompt
+pytests-contract-suite/test_cast_tools.py::test_record_with_answers_times_out_when_the_prompt_never_comes
+  /usr/lib/python3.14/pty.py:66: DeprecationWarning: This process (pid=3962849) is multi-threaded, use of forkpty() may lead to deadlocks in the child.
+    pid, fd = os.forkpty()
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--solver rejects an unknown solver]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--solver rejects an unknown solver]#0: stderr changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--solver with no argument is a usage error]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--solver with no argument is a usage error]#0: stderr changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help is now implemented, not rejected]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help is now implemented, not rejected]#0: stdout changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-h short alias is now implemented, not rejected]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-h short alias is now implemented, not rejected]#0: stdout changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help wins over any other flag present, valid or not]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help wins over any other flag present, valid or not]#0: stdout changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-h bundled with other short flags still wins]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-h bundled with other short flags still wins]#0: stdout changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help wins even without --pretend at all]
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--help wins even without --pretend at all]#0: stdout changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_emerge_pretend_contract.py::test_solver_portage_matches_the_default_resolution
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:3450: CorpusDrift: tests/test_emerge_pretend_contract.py::test_solver_portage_matches_the_default_resolution#2: stderr changed
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+
+pytests-contract-suite/test_harvested_corpus.py::test_drift_is_detected_for_a_slash_param_id_from_the_suite_dir
+  /home/vivo/repo/PORTUALE/pmtest/pytests-contract-suite/test_harvested_corpus.py:138: CorpusDrift: pytests-contract-suite/t.py::test_x[y/n]#0: stdout changed
+    key, message = corpus.check_contract_call(["--pretend", "a/b"], {}, R())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_emerge_pretend_contract.py::test_733_tree_does_not_nest_a_row_under_a_hidden_leaf[pubgrub]
+1 failed, 4958 passed, 2 skipped, 2 xfailed, 29 warnings in 393.10s (0:06:33)

@@ -55,7 +55,7 @@ real tree in the differential bed). At a capability level:
   both `||`-preference feedback paths); the full `resolver/output.py`
   bracket layout + colour + counters + `--tree` / `--columns`; bare
   command-line names; `--json` provenance trace; `--pretend --debug`
-  resolver trace; alternate `--solver=pubgrub|resolvo` backends (see §J).
+  resolver trace; alternate `--solver=pubgrub` backend (see §J).
 - **Real ebuild phase execution** — the full `pkg_pretend → … → install`
   chain via an embedded `brush` (default `bash`) over unmodified
   `bin/*.sh`; real eclass `inherit()`; real `SRC_URI` fetch (Manifest
@@ -779,15 +779,15 @@ DONE):
 - **DONE 2026-09-26 — L4** — `mrg` remote merge over SSH (`remote-merge.md` §6). Bed shipped: `differential-test-bed/run/l31-remote-merge.sh` (loopback sshd + container ROOT); candidate `l31-20260926T061556Z`, control green; classes filed as #169–#172.
 - **DONE 2026-09-26 — L5** — lifecycle & failure injection: `-C` / `--depclean` diffs, soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after SIGKILL, disk-full / corrupt-archive / binhost-500 fault injection. Bed shipped: `differential-test-bed/run/l32-lifecycle.sh` (life-cycle C1–C4 + fault F1–F3); classes filed as #167/#168 and #173–#175.
 
-### J. Alternate `--solver=` backends (pubgrub / resolvo)
+### J. Alternate `--solver=` backend (pubgrub)
 
-Selected at runtime; drive lu-zero's `portage-atom-pubgrub` /
-`portage-atom-resolvo` bridges over the same repo facts
+Selected at runtime; drives lu-zero's `portage-atom-pubgrub`
+bridge over the same facts
 (`portage-repo/src/solver_bridge.rs`). Plumbing is well-tested against
-tiny synthetic fixtures (`test_portuale.py`), but **both break at
-real-tree scale** (smoke-tested 2026-09-10, not fixed):
+tiny synthetic fixtures (`test_portuale.py`); it broke at
+real-tree scale (smoke-tested 2026-09-10, not fixed then):
 
-- **`--solver=resolvo` is effectively non-functional on real targets** —
+- **`--solver=resolvo` is effectively non-functional on real targets** (CLOSED in #755 with the backend; #33) —
   the bridge's `install_order` cannot linearise any closure containing a
   toolchain cycle (glibc↔gcc↔perl — nearly every real target), and
   `solver_bridge.rs` surfaces the raw `Debug` of the leftover ids

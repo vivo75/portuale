@@ -1,0 +1,1 @@
+/tmp/opencode/755bin/emerge --pretend --solver=resolvo --update --deep dev-libs/p698upg

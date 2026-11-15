@@ -1,0 +1,46 @@
+=== grep -rn ResolvoResolver crates ===
+crates/portage-repo/src/solver_bridge.rs:5906:pub struct ResolvoResolver;
+crates/portage-repo/src/solver_bridge.rs:5908:impl PortualeResolver for ResolvoResolver {
+crates/portage-repo/src/resolve/resolver.rs:81:        SolverKind::Resolvo => Box::new(solver_bridge::ResolvoResolver),
+
+=== negative half: ResolvoResolver outside solver_bridge.rs ===
+crates/portage-repo/src/resolve/resolver.rs:81:        SolverKind::Resolvo => Box::new(solver_bridge::ResolvoResolver),
+(exit 0)
+
+=== negative half: resolvo in rs/txt excluding known files ===
+(exit 1)
+
+=== pmtest test_portuale.py resolvo sites ===
+268:    exactly portage/pubgrub/resolvo and forwards `--solver=<value>` to the
+271:    for solver in ("portage", "pubgrub", "resolvo"):
+301:    """The PubGrub/resolvo bridges resolve from the same visibility-filtered
+306:    for solver in ("portage", "pubgrub", "resolvo"):
+329:    `--solver=resolvo` renders resolvo's own conflict explanation
+336:    resolvo = subprocess.run(
+337:        [str(emerge_binary), "--pretend", "--solver=resolvo", "dev-libs/slotconfgroup"],
+343:    assert resolvo.returncode == 1
+344:    assert "The following packages are incompatible" in resolvo.stderr
+345:    assert "dev-libs/slotconflicttarget" in resolvo.stderr
+346:    assert "ClauseId(" not in resolvo.stderr
+347:    assert "Unsolvable(" not in resolvo.stderr
+378:    2026-09-16). Resolvo reads weak blockers as hard conflicts and
+403:    for solver in ("portage", "pubgrub", "resolvo"):
+427:    for solver in ("pubgrub", "resolvo"):
+479:    The fresh (`:2/9=`) consumer is never rebuilt. Resolvo favors the
+512:    resolvo = subprocess.run(
+513:        [str(emerge_binary), "--pretend", "--solver=resolvo", "dev-libs/slotbindtarget"],
+519:    assert resolvo.returncode == 0
+529:    for solver in ("portage", "pubgrub", "resolvo"):
+559:    for solver in ("portage", "pubgrub", "resolvo"):
+577:    contract pins. Resolvo is excluded: its `install_order` still cannot
+578:    linearise any cyclic closure (Tier-4 `--solver=resolvo` item). Since
+
+=== pmtest test_emerge_pretend_contract.py resolvo sites ===
+16973:    assert bad_rust.stderr == 'emerge: --solver: "sat" is not "portage", "pubgrub" or "resolvo"\n'
+18272:      --solver <solver>     which dependency solver resolves the graph: portage (default), pubgrub or resolvo
+26747:    (`resolvo` does not resolve the direct upgrade arg at all here --
+39995:def test_702_resolvo_does_not_upgrade_installed_packages_so_there_is_no_co_upgrade(
+39998:    """Backlog #702, a documented cut (CUT-12): `--solver=resolvo` keeps every installed package as
+40003:    as possible) is the part resolvo does not serve. Source: the capture of 2026-11-11 (the three
+40004:    commands below), not Portage. If resolvo learns to upgrade installed packages this pin goes
+40014:        out = _run([str(emerge_binary)], ["--pretend", "--solver=resolvo", *args], env)
