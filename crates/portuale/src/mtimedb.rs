@@ -52,12 +52,18 @@ pub struct ResumeOpts {
 /// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
 pub type ResumeList = (Vec<String>, Vec<ResumeCpv>, ResumeOpts);
 
+/// Charter 2a bootstrap marks of a resume list: `<cat>/<pf>` -> the flag the
+/// first mergelist row of that cpv is built without. Stored as the nested
+/// `"bootstrap"` key of `resume`; Portage ignores it.
+pub type BootMarks = BTreeMap<String, String>;
+
 /// One resume section's data (`resume` and `resume_backup` share the shape).
 #[derive(Clone)]
 struct Section {
     favorites: Vec<String>,
     mergelist: Vec<ResumeCpv>,
     opts: ResumeOpts,
+    bootstrap: BootMarks,
 }
 
 /// `<root>/var/cache/edb/mtimedb`.
@@ -340,8 +346,19 @@ fn format_section_body(root: &Path, section: &Section) -> String {
     } else {
         format!("{{\n{}\n\t\t}}", opt_pairs.join(",\n"))
     };
+    // `bootstrap` sorts before `favorites`; absent when no row is a boot row.
+    let bootstrap = if section.bootstrap.is_empty() {
+        String::new()
+    } else {
+        let pairs: Vec<String> = section
+            .bootstrap
+            .iter()
+            .map(|(cpv, flag)| format!("\t\t\t{}: {}", json_str(cpv), json_str(flag)))
+            .collect();
+        format!("\t\t\"bootstrap\": {{\n{}\n\t\t}},\n", pairs.join(",\n"))
+    };
     format!(
-        "\t\t\"favorites\": [\n{}\n\t\t],\n\t\t\"mergelist\": [\n{}\n\t\t],\n\t\t\"myopts\": {myopts}",
+        "{bootstrap}\t\t\"favorites\": [\n{}\n\t\t],\n\t\t\"mergelist\": [\n{}\n\t\t],\n\t\t\"myopts\": {myopts}",
         favs.join(",\n"),
         merges.join(",\n")
     )
@@ -658,10 +675,24 @@ fn parse_section(object: &str) -> Option<Section> {
         merge_wait_scope: parse_merge_wait_scope(myopts_block),
     };
 
+    let bootstrap = extract_object(object, "bootstrap")
+        .map(|block| {
+            Regex::new(r#""([^"]+)"\s*:\s*"([^"]*)""#)
+                .into_iter()
+                .flat_map(|re| {
+                    re.captures_iter(block)
+                        .map(|c| (c[1].to_string(), c[2].to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(Section {
         favorites,
         mergelist,
         opts,
+        bootstrap,
     })
 }
 
@@ -806,10 +837,28 @@ pub fn write_resume_list(
     mergelist: &[ResumeCpv],
     opts: &ResumeOpts,
 ) -> Result<(), String> {
+    write_resume_list_marked(root, favorites, mergelist, opts, &BootMarks::new())
+}
+
+/// [`write_resume_list`] plus the plan's charter 2a boot marks, written as
+/// the nested `"bootstrap"` key of `resume` so `--resume` can rebuild the
+/// boot row with its reduced USE.
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
+pub fn write_resume_list_marked(
+    root: &Path,
+    favorites: &[&str],
+    mergelist: &[ResumeCpv],
+    opts: &ResumeOpts,
+    bootstrap: &BootMarks,
+) -> Result<(), String> {
     let resume = Section {
         favorites: favorites.iter().map(|s| s.to_string()).collect(),
         mergelist: mergelist.to_vec(),
         opts: *opts,
+        bootstrap: bootstrap.clone(),
     };
     let object = render_resume_object(root, &resume);
     mutate_result(root, |state| {
@@ -833,6 +882,12 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
             return;
         };
         resume.mergelist.remove(pos);
+        // The mark stays until the definitive row (the last row of the
+        // cpv) merged; removing the boot row leaves the definitive one.
+        let (_, cat, pkg, ver) = entry;
+        if !resume.mergelist.contains(entry) {
+            resume.bootstrap.remove(&format!("{cat}/{pkg}-{ver}"));
+        }
         state.resume_raw = if resume.mergelist.is_empty() {
             None
         } else {
@@ -878,6 +933,17 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
         state.resume_backup_raw = None;
     });
     Some((parsed.favorites, parsed.mergelist, parsed.opts))
+}
+
+/// The boot marks of `mtimedb["resume"]` (empty when there are none or no
+/// resume list). Call after [`read_resume_list`], which promotes a backup.
+pub fn read_resume_bootstrap(root: &Path) -> BootMarks {
+    silent_load(root)
+        .resume_raw
+        .as_deref()
+        .and_then(parse_section)
+        .map(|s| s.bootstrap)
+        .unwrap_or_default()
 }
 
 /// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
@@ -1800,5 +1866,62 @@ mod tests {
         // A read before any load silently loads: the later load is quiet.
         assert!(read_updates_mtimes(&other).is_empty());
         assert!(load_mtimedb(&other).warnings.is_empty());
+    }
+    fn boot_cpv(pkg: &str) -> ResumeCpv {
+        (
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            pkg.to_string(),
+            "1".to_string(),
+        )
+    }
+
+    /// The nested `bootstrap` key sits inside `resume` only (the top level
+    /// keeps Portage's keys), is sorted before `favorites`, round-trips,
+    /// and a list without a boot row writes no key at all.
+    #[test]
+    fn a_boot_mark_is_one_nested_key_inside_resume() {
+        let root = tmproot();
+        let list = [boot_cpv("p"), boot_cpv("m"), boot_cpv("p")];
+        let marks = BootMarks::from([("dev-libs/p-1".to_string(), "useboh".to_string())]);
+        write_resume_list_marked(&root, &[], &list, &ResumeOpts::default(), &marks).unwrap();
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(
+            text.contains(
+                "\"resume\": {\n\t\t\"bootstrap\": {\n\t\t\t\"dev-libs/p-1\": \"useboh\"\n\t\t},\n\t\t\"favorites\""
+            ),
+            "{text}"
+        );
+        assert_eq!(read_resume_bootstrap(&root), marks);
+        assert_eq!(read_resume_list(&root).unwrap().1, list);
+        write_resume_list_marked(&root, &[], &list, &ResumeOpts::default(), &BootMarks::new())
+            .unwrap();
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(!text.contains("bootstrap"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The mark outlives the boot row and goes only with the definitive row:
+    /// the boot row's removal leaves it, the definitive row's removal drops
+    /// it while other rows remain.
+    #[test]
+    fn the_boot_mark_stays_until_the_definitive_row_merges() {
+        let root = tmproot();
+        let list = [boot_cpv("p"), boot_cpv("p"), boot_cpv("x")];
+        let marks = BootMarks::from([("dev-libs/p-1".to_string(), "useboh".to_string())]);
+        write_resume_list_marked(&root, &[], &list, &ResumeOpts::default(), &marks).unwrap();
+        remove_merged_entry(&root, &list[0]);
+        assert_eq!(read_resume_list(&root).unwrap().1, list[1..]);
+        assert_eq!(
+            read_resume_bootstrap(&root),
+            marks,
+            "boot merged: mark stays"
+        );
+        remove_merged_entry(&root, &list[1]);
+        assert_eq!(read_resume_list(&root).unwrap().1, list[2..]);
+        assert!(read_resume_bootstrap(&root).is_empty());
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(!text.contains("bootstrap"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

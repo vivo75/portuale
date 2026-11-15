@@ -210,3 +210,158 @@ fn an_interrupted_bootstrap_names_the_reduced_install_and_its_restore_command() 
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// The plan's boot row is saved as one nested mark, and the resume list
+/// rebuilt from the saved text marks the first row of that cpv only: the
+/// resumed boot row executes with the reduced USE, the definitive row does
+/// not carry the marker.
+#[test]
+fn a_resumed_boot_row_keeps_its_marker_and_runs_with_the_reduced_use() {
+    let root = tempdir();
+    let distdir = tempdir();
+    let portage_tmpdir = tempdir();
+    let (entries, repos) = bootstrap_plan(&root);
+    let list: Vec<_> = entries.iter().filter_map(resume_cpv).collect();
+    let marks = boot_marks(&entries);
+    assert_eq!(
+        marks.iter().collect::<Vec<_>>(),
+        vec![(
+            &"dev-libs/w753otherpkg-1".to_string(),
+            &"useboh".to_string()
+        )]
+    );
+    crate::mtimedb::write_resume_list_marked(
+        root.path(),
+        &[],
+        &list,
+        &crate::mtimedb::ResumeOpts::default(),
+        &marks,
+    )
+    .unwrap();
+    let (_, saved, _) = crate::mtimedb::read_resume_list(root.path()).unwrap();
+    let mut resumed: Vec<GraphEntry> = saved
+        .iter()
+        .map(|(_, c, p, v)| {
+            resume_entry(ResumeEntryArgs {
+                category: c,
+                package: p,
+                version: v,
+                source: CandidateSource::Ebuild,
+                repos: &repos,
+                binary_repo: None,
+            })
+        })
+        .collect();
+    apply_boot_marks(
+        &mut resumed,
+        &crate::mtimedb::read_resume_bootstrap(root.path()),
+    );
+    assert_eq!(
+        resumed
+            .iter()
+            .map(|e| e.bootstrap.as_ref().map(|b| b.reduced_flag.as_str()))
+            .collect::<Vec<_>>(),
+        vec![Some("useboh"), None, None]
+    );
+    do_merge(&root, &distdir, &portage_tmpdir, &resumed[0..1], &repos, 1);
+    let boot_use = read_use(&root, "usr/share/w753/w753otherpkg-boot-use.txt");
+    assert!(
+        boot_use.contains("USE=") && !use_flags(&boot_use).contains("useboh"),
+        "the resumed boot row ran with the reduced USE, got {boot_use:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// After the boot row merged, the definitive row of the same cpv is still
+/// unmerged (the installed USE lacks the reduced flag); the boot row is not.
+/// Once the definitive build lands nothing is left.
+#[test]
+fn the_definitive_row_is_not_merged_just_because_the_boot_row_was() {
+    let root = tempdir();
+    let distdir = tempdir();
+    let portage_tmpdir = tempdir();
+    let (entries, repos) = bootstrap_plan(&root);
+    let names = |root: &TempDir| -> Vec<String> {
+        crate::pretend::entries_not_merged(root.path(), &entries)
+            .into_iter()
+            .map(|(_, _, p, _)| p)
+            .collect()
+    };
+    let save = |root: &TempDir| {
+        crate::pretend::unmerged_for_resume_save(
+            root.path(),
+            &entries,
+            &boot_marks(&entries),
+            &MergePassReport::default(),
+        )
+    };
+    assert_eq!(names(&root).len(), 3, "nothing merged yet");
+    assert_eq!(
+        save(&root).boot.len(),
+        1,
+        "the failure re-save keeps the mark"
+    );
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[0..1], &repos, 1);
+    assert_eq!(names(&root), vec!["w753pkgnew", "w753otherpkg"]);
+    let after_boot = save(&root);
+    assert_eq!(after_boot.mergelist.len(), 2);
+    assert_eq!(
+        after_boot.boot.len(),
+        1,
+        "the definitive row still owes its mark"
+    );
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[1..], &repos, 1);
+    assert!(names(&root).is_empty(), "{:?}", names(&root));
+    assert!(save(&root).boot.is_empty(), "definitive landed: no mark");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// A resumed list `[middle, P]` whose boot row already merged: the single P
+/// row is the definitive build still pending. Applying the saved mark puts
+/// no boot marker on it, a failure at the middle row re-saves P together
+/// with the mark, and once the definitive build lands P is merged and the
+/// mark is not carried on.
+#[test]
+fn a_resume_after_the_boot_row_still_owes_the_definitive_build() {
+    let root = tempdir();
+    let distdir = tempdir();
+    let portage_tmpdir = tempdir();
+    let (entries, repos) = bootstrap_plan(&root);
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[0..1], &repos, 1);
+    let marks = boot_marks(&entries);
+    let mut resumed: Vec<GraphEntry> = entries[1..].to_vec();
+    for e in &mut resumed {
+        e.bootstrap = None;
+    }
+    apply_boot_marks(&mut resumed, &marks);
+    assert!(resumed.iter().all(|e| e.bootstrap.is_none()));
+    let save = crate::pretend::unmerged_for_resume_save(
+        root.path(),
+        &resumed,
+        &marks,
+        &MergePassReport::default(),
+    );
+    assert_eq!(
+        save.mergelist.len(),
+        2,
+        "P still unmerged: {:?}",
+        save.mergelist
+    );
+    assert_eq!(save.boot, marks, "the mark stays with the pending P");
+    do_merge(&root, &distdir, &portage_tmpdir, &entries[1..], &repos, 1);
+    let save = crate::pretend::unmerged_for_resume_save(
+        root.path(),
+        &resumed,
+        &marks,
+        &MergePassReport::default(),
+    );
+    assert!(
+        save.mergelist.is_empty() && save.boot.is_empty(),
+        "{:?}",
+        save.mergelist
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}

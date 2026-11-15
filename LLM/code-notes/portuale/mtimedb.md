@@ -118,3 +118,7 @@
 
 ## tests: warning_printed_once_per_root_per_run
 - First load per root reports the warning; later loads, and the `read_*`/`write_*` calls between them, stay silent -- including a read before any load (`lib/_emerge/actions.py:3380-3391`, one `MtimeDB` per root).
+
+## type BootMarks
+- Backlog #759 (charter 2a, owner decision A): the boot row of a 2-package cycle has the same cpv as its definitive row, and the Portage-shaped `[type, root, cpv, "merge"]` items cannot say which is which. The marker is one nested key inside `resume` -- `"bootstrap": {"<cat>/<pf>": "<flag>"}`, sorted before `favorites`, written only when a boot row exists -- so the top-level mtimedb shape (#585) is untouched. Portage resuming such a list ignores the key. On load the FIRST mergelist row of a marked cpv is the boot row, a later one the definitive build (`emerge_build::apply_boot_marks`).
+- The mark lives until the DEFINITIVE row merged: a marked cpv listed twice is boot row then definitive build, listed once it is the definitive build still pending (the boot row merged). `remove_merged_entry` drops the mark only when no row of the cpv is left; re-saves keep the marks of the cpvs still in the list (`emerge_build::marks_in`), and `--skipfirst` does the same after dropping the head.

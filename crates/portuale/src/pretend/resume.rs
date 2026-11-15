@@ -6,58 +6,81 @@ use crate::emerge_build::StatusMode;
 use crate::mtimedb::ResumeOpts;
 use crate::pretend::*;
 
+/// Whether `e` already landed: its vdb `CONTENTS` exists and, for a cpv the
+/// plan builds twice (charter 2a, `marks`), the boot row is done as soon as
+/// anything is installed while the definitive row also needs the installed
+/// `USE` to carry the flag the boot build removed. `CONTENTS` alone cannot
+/// tell the reduced build from the definitive one.
+fn entry_merged(
+    root: &Path,
+    marks: &crate::mtimedb::BootMarks,
+    e: &portage_repo::GraphEntry,
+) -> bool {
+    let Some((_, category, package, version)) = emerge_build::resume_cpv(e) else {
+        return false;
+    };
+    let pf = format!("{package}-{version}");
+    // One `stat` of the entry's `CONTENTS` through the root's backend.
+    if !ebuild_merge::entry_file_is_regular(root, &category, &pf, "CONTENTS") {
+        return false;
+    }
+    let Some(flag) = marks.get(&format!("{category}/{pf}")) else {
+        return true;
+    };
+    e.bootstrap.is_some()
+        || ebuild_merge::read_entry_text(root, &category, &pf, "USE")
+            .unwrap_or_default()
+            .split_whitespace()
+            .any(|f| f == flag)
+}
+
 /// The `(kind, category, package, version)` of every entry in `entries`
-/// (source or binary) that was supposed to merge but has no `CONTENTS`
-/// under `root` yet: the resume list for `mtimedb::write_resume_list` on
-/// the failure path.
+/// (source or binary) that was supposed to merge but has not landed yet:
+/// the resume list for `mtimedb::write_resume_list` on the failure path.
+#[cfg(test)]
 pub(crate) fn entries_not_merged(
     root: &Path,
     entries: &[portage_repo::GraphEntry],
 ) -> Vec<crate::mtimedb::ResumeCpv> {
-    let mut out = Vec::new();
-    for e in entries {
-        let Some((kind, category, package, version)) = emerge_build::resume_cpv(e) else {
-            continue;
-        };
-        // One `stat` of the entry's `CONTENTS` through the root's backend.
-        if !ebuild_merge::entry_file_is_regular(
-            root,
-            &category,
-            &format!("{package}-{version}"),
-            "CONTENTS",
-        ) {
-            out.push((kind, category, package, version));
-        }
-    }
-    out
+    let marks = emerge_build::boot_marks(entries);
+    entries
+        .iter()
+        .filter(|e| !entry_merged(root, &marks, e))
+        .filter_map(emerge_build::resume_cpv)
+        .collect()
 }
 
-/// The resume list a failed run re-saves: the still-unmerged entries (no
-/// vdb `CONTENTS`), plus any postinst-failed entry, whose merge landed.
-/// Portage never removes a failed entry from the saved list except through
-/// a `--keep-going` resume pass, which already re-saved without it (see
-/// `MergePassReport::resumed`).
+/// A failed run's resume list and the boot marks of the rows in it.
+pub(crate) struct ResumeSave {
+    pub(crate) mergelist: Vec<crate::mtimedb::ResumeCpv>,
+    pub(crate) boot: crate::mtimedb::BootMarks,
+}
+
+/// The resume list a failed run re-saves: the still-unmerged entries, plus
+/// any postinst-failed entry, whose merge landed. Portage never removes a
+/// failed entry from the saved list except through a `--keep-going` resume
+/// pass, which already re-saved without it (see `MergePassReport::resumed`).
 // Portage: Scheduler.py, _do_merge_exit / merge (`_save_resume_list`)
 pub(crate) fn unmerged_for_resume_save(
     root: &Path,
     entries: &[portage_repo::GraphEntry],
+    marks: &crate::mtimedb::BootMarks,
     report: &emerge_build::MergePassReport,
-) -> Vec<crate::mtimedb::ResumeCpv> {
-    let unmerged = entries_not_merged(root, entries);
-    if report.resumed {
-        return unmerged;
+) -> ResumeSave {
+    let kept: Vec<portage_repo::GraphEntry> = entries
+        .iter()
+        .filter(|e| {
+            let cp = (e.category.clone(), e.package.clone());
+            !entry_merged(root, marks, e)
+                || (!report.resumed && report.postinst_failed.contains(&cp))
+        })
+        .cloned()
+        .collect();
+    let mergelist: Vec<_> = kept.iter().filter_map(emerge_build::resume_cpv).collect();
+    ResumeSave {
+        boot: emerge_build::marks_in(marks, &mergelist),
+        mergelist,
     }
-    let mut out = Vec::new();
-    for e in entries {
-        let cp = (e.category.clone(), e.package.clone());
-        let Some(cpv) = emerge_build::resume_cpv(e) else {
-            continue;
-        };
-        if unmerged.contains(&cpv) || report.postinst_failed.contains(&cp) {
-            out.push(cpv);
-        }
-    }
-    out
 }
 
 /// Arguments of [`run_resume`].
@@ -163,8 +186,13 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // that check uses (oracle probe, #465).
     let cmdline_quiet = quiet;
     let quiet = opts.quiet;
+    let mut boot = crate::mtimedb::read_resume_bootstrap(root);
     if skipfirst && !mergelist.is_empty() {
         mergelist.remove(0);
+        // Skipping the boot row keeps the mark (the definitive row still
+        // has to replace the reduced build); skipping the definitive one
+        // drops it.
+        boot = emerge_build::marks_in(&boot, &mergelist);
     }
     if mergelist.is_empty() {
         // `--skipfirst` dropped the only entry. Portage still re-resolves the
@@ -210,7 +238,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // when the list turns out all-source.
     // Portage: depgraph.py, _loadResumeCommand
     let resume_bin_index = portage_repo::build_local_binpkg_index(config);
-    let entries: Vec<portage_repo::GraphEntry> = mergelist
+    let mut entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
         .map(|(kind, c, p, v)| {
             let source = match kind {
@@ -253,6 +281,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
             entry
         })
         .collect();
+    emerge_build::apply_boot_marks(&mut entries, &boot);
 
     // `emerge --resume --fetchonly`: fetch the saved list's sources, merge
     // nothing; `-p` lists their URIs. The saved list stays as it is.
@@ -308,7 +337,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // this run is itself killed. A preview never touches the list.
     // Portage: Scheduler.merge, _save_resume_list
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
+    let _ = crate::mtimedb::write_resume_list_marked(root, &fav_refs, &mergelist, &opts, &boot);
 
     // Portage re-resolves the saved list (`resume_depgraph`) and then
     // `Scheduler.merge` prints the banner, ahead of the interactive-task
@@ -366,6 +395,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         debug,
         config,
         favorites: &favorites,
+        boot: &boot,
         opts,
         color,
     }) {
@@ -546,6 +576,8 @@ pub(crate) struct ResumeMergeArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) config: &'a Config,
     pub(crate) favorites: &'a [String],
+    /// The saved list's boot marks, re-saved with the unmerged tail.
+    pub(crate) boot: &'a crate::mtimedb::BootMarks,
     pub(crate) opts: ResumeOpts,
     pub(crate) color: Colorizer,
 }
@@ -566,6 +598,7 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         debug,
         config,
         favorites,
+        boot,
         opts,
         color,
     } = args;
@@ -610,12 +643,18 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         })
     };
     if let Err(e) = merge_result {
-        let still = unmerged_for_resume_save(root, entries, &e.report);
+        let still = unmerged_for_resume_save(root, entries, boot, &e.report);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
         // A failure with nothing unmerged leaves the per-merge shrink's
         // own tail alone.
-        if !still.is_empty() {
-            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        if !still.mergelist.is_empty() {
+            let _ = crate::mtimedb::write_resume_list_marked(
+                root,
+                &fav_refs,
+                &still.mergelist,
+                &opts,
+                &still.boot,
+            );
         }
         // A merge-time binpkg digest/missing-file failure already printed
         // its own tail: no `emerge:` line. The silent resume re-save above
@@ -627,7 +666,13 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         }
         // The notice prints when the vdb changed (at least one resumed
         // entry landed); see `merge_failure_news_notice`.
-        merge_failure_news_notice(still.len() < entries.len(), repos, root, config, &color);
+        merge_failure_news_notice(
+            still.mergelist.len() < entries.len(),
+            repos,
+            root,
+            config,
+            &color,
+        );
         return Some(ExitCode::from(1));
     }
     None

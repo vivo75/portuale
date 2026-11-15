@@ -20,3 +20,6 @@
 ## fn resolved_features
 - Ports Portage's `PORTAGE_LOG_FILE` (`PORTAGE_LOGDIR` unset means `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`; with `FEATURES=compress-build-logs`, `${T}/build.log.gz` -- `prepare_build_dirs.py`'s own `f"build.log{compress_log_ext}"`). Same precedence `ebuild_phases::features_string` uses for the phase-execution gates; `MergeOptions::features` when the caller resolved a config (#37 S2), else the raw process env (standalone `ebuild <file>` / tests).
 - `pub(crate)` for the binary-merge digest-failure path (`emerge_getbinpkg`): Portage's `Binpkg` prepares the same builddir before `BinpkgVerifier` runs, so the failure log lives at this same path.
+
+## fn boot_marks (#759)
+- The plan's boot rows as `<cat>/<pf>` -> reduced flag, saved inside `mtimedb["resume"]` (see `mtimedb.md`, `type BootMarks`). `apply_boot_marks` rebuilds the marker on `--resume` only for a cpv listed twice (first row = boot; a single row is the pending definitive build), with an empty `declared_use`: only `plan_world` reads that field, and a resumed boot row never goes through it.

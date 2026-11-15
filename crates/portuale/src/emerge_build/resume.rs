@@ -4,7 +4,7 @@ use crate::emerge_build::*;
 
 /// This entry's `mtimedb["resume"]` mergelist item, or `None` for an entry
 /// that never merges (an installed no-op, a blocker removal, or an entry
-/// with no visible candidate). The kind tag matches what `entries_not_merged`
+/// with no visible candidate). The kind tag matches what `unmerged_for_resume_save`
 /// writes on the failure path.
 // Portage: Scheduler.py, _save_resume_list
 pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv> {
@@ -19,6 +19,62 @@ pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv
         entry.package.clone(),
         version.to_string(),
     ))
+}
+
+/// The charter 2a boot marks of a plan: `<cat>/<pf>` -> reduced flag for
+/// each boot row, saved inside `mtimedb["resume"]` so a resume keeps it.
+pub(crate) fn boot_marks(entries: &[GraphEntry]) -> crate::mtimedb::BootMarks {
+    entries
+        .iter()
+        .filter_map(|e| {
+            let boot = e.bootstrap.as_ref()?;
+            let (_, cat, pkg, ver) = resume_cpv(e)?;
+            Some((format!("{cat}/{pkg}-{ver}"), boot.reduced_flag.clone()))
+        })
+        .collect()
+}
+
+/// `marks` restricted to the cpvs still in `mergelist`: a mark lives until
+/// the definitive row of its cpv is gone from the list.
+pub(crate) fn marks_in(
+    marks: &crate::mtimedb::BootMarks,
+    mergelist: &[crate::mtimedb::ResumeCpv],
+) -> crate::mtimedb::BootMarks {
+    marks
+        .iter()
+        .filter(|(cpv, _)| {
+            mergelist
+                .iter()
+                .any(|(_, c, p, v)| format!("{c}/{p}-{v}") == **cpv)
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// A marked cpv listed twice has the reduced-flag boot row first and the
+/// definitive build second; listed once, the boot row merged already and
+/// the row is the pending definitive build, so it carries no marker. The
+/// saved list has no other room for the marker.
+pub(crate) fn apply_boot_marks(entries: &mut [GraphEntry], marks: &crate::mtimedb::BootMarks) {
+    let key = |e: &GraphEntry| resume_cpv(e).map(|(_, c, p, v)| format!("{c}/{p}-{v}"));
+    for (cpv, flag) in marks {
+        let rows: Vec<usize> = (0..entries.len())
+            .filter(|&i| key(&entries[i]).as_deref() == Some(cpv))
+            .collect();
+        let [first, _, ..] = rows[..] else {
+            continue;
+        };
+        let entry = &mut entries[first];
+        for (name, on) in &mut entry.use_flags_display {
+            if name == flag {
+                *on = false;
+            }
+        }
+        entry.bootstrap = Some(portage_use_reduce::BootstrapUse {
+            reduced_flag: flag.clone(),
+            declared_use: Vec::new(),
+        });
+    }
 }
 
 /// The entry's `::repo` for the progress lines. An empty fallback keeps a

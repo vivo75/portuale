@@ -344,7 +344,8 @@ pub(crate) fn resave_resume_list(root: &Path, survivors: &[usize], entries: &[Gr
         .filter_map(|&i| resume_cpv(&entries[i]))
         .collect();
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
+    let marks = marks_in(&crate::mtimedb::read_resume_bootstrap(root), &mergelist);
+    let _ = crate::mtimedb::write_resume_list_marked(root, &fav_refs, &mergelist, &opts, &marks);
 }
 
 /// Arguments of [`merge_one_source_entry`].

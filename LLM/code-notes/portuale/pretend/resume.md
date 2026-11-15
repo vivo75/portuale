@@ -44,3 +44,7 @@
 
 ## fn run_resume scope replay (#512)
 - The saved `myopts` replays the scope the original run used; unset means Portage's `deep` default.
+
+## fn entry_merged (#759)
+- Charter 2a: `CONTENTS` of the cpv exists once the boot row merged, so by itself it also marks the definitive row of the same cpv merged and a failure re-save would drop it, leaving the reduced build installed on `--resume`. For a cpv in the saved boot marks, the boot row counts as merged as soon as `CONTENTS` exists; any other row of that cpv (the second occurrence, or the single one left after the boot row merged) only when the installed `USE` carries the reduced flag. A resumed `[M, P]` list failing at M therefore re-saves P with its mark.
+- `entries_not_merged` is now test-only; the failure path uses `unmerged_for_resume_save`, which takes the marks and returns the mergelist plus the marks of the cpvs it keeps.
