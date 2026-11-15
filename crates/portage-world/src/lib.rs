@@ -415,7 +415,55 @@ fn dependency_keys(
     }
 }
 
-/// Whether the `[flag]` / `[-flag]` dependencies of `atom_str` hold for a
+/// The USE flags guarding the `node -> dep` edge: the flags whose removal
+/// drops every build-time arm naming the dep's `cp` (the S0-proved seam:
+/// raw `*DEPEND` strings via `repo_aux_metadata` plus this slot's own
+/// effective USE). `None` when the slot has no readable candidate or no
+/// flag drops the edge — the caller keeps today's report then.
+fn edge_use_guards(
+    node: &str,
+    dep: &str,
+    chosen: &BTreeMap<String, &Candidate>,
+) -> Option<BTreeSet<String>> {
+    let best = chosen.get(node)?;
+    let (cp, _) = node.rsplit_once(':')?;
+    let (category, package) = cp.split_once('/')?;
+    let dep_cp = dep.rsplit_once(':').map_or(dep, |(cp, _)| cp);
+    let pf = format!("{package}-{}", best.version);
+    let meta = portage_repo::repo_aux_metadata(&best.repo_location, category, &pf).ok()?;
+    // No effective-USE call here by design: whether an arm is active is
+    // already encoded in the edge's existence (the walk evaluated it), so
+    // the guard relation itself is purely syntactic.
+    let mut candidates: BTreeSet<String> = BTreeSet::new();
+    let mut arms: Vec<(String, BTreeSet<String>)> = Vec::new();
+    for key in ["DEPEND", "BDEPEND", "IDEPEND"] {
+        let Some(text) = meta.get(key) else {
+            continue;
+        };
+        for (atom, guards) in portage_use_reduce::conditional_guards(text) {
+            candidates.extend(guards.iter().cloned());
+            let Some(parsed) = portage_dep::parse_atom(&atom) else {
+                continue;
+            };
+            if parsed.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            if format!("{}/{}", parsed.category, parsed.package) == dep_cp {
+                arms.push((atom, guards));
+            }
+        }
+    }
+    if arms.is_empty() {
+        return None;
+    }
+    // Universally quantified: an unguarded arm naming the dep keeps the
+    // edge, so no single flag drops it.
+    let dropping: BTreeSet<String> = candidates
+        .into_iter()
+        .filter(|f| arms.iter().all(|(_, g)| g.contains(f)))
+        .collect();
+    Some(dropping)
+}
 /// package declaring `iuse` and enabling `enabled`. A flag the package does
 /// not declare is judged by the dependency's `(+)`/`(-)` default; a flag
 /// that is enabled counts as declared (implicit IUSE).
@@ -518,6 +566,14 @@ pub struct World {
     /// `cat/pkg:slot` -> the enabled USE flags of the version a plan would
     /// install there, for each reached slot with a change.
     pub planned_use: BTreeMap<String, BTreeSet<String>>,
+    /// `(slot, slot it depends on)` -> the USE flags guarding that edge in
+    /// the raw `*DEPEND` strings: the flags whose removal drops every
+    /// build-time arm naming the dep. Parsed from the raw strings for every
+    /// reached slot (not just [`World::planned_use`]'s changed subset), so
+    /// the charter 2a bootstrap recovers the guard through the existing
+    /// seam; no effective-USE call is needed because the edge's existence
+    /// already encodes the evaluated USE.
+    pub use_guards: BTreeMap<(String, String), BTreeSet<String>>,
     /// `cat/pkg-ver` of the ebuilds of every reached package whose metadata
     /// could not be read: they are no candidates, so their dependencies
     /// are missing from the walk. Sorted.
@@ -701,6 +757,15 @@ fn walk(
     // slot -> the slots it depends on (itself left out).
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
+    let mut use_guards: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    // `cat/pkg:slot` -> the chosen candidate, for the per-slot effective
+    // USE the guard map is built from.
+    let mut chosen: BTreeMap<String, &Candidate> = BTreeMap::new();
+    for slot in &slots {
+        if let Some(best) = slot.chosen() {
+            chosen.insert(slot.node(), best);
+        }
+    }
     for (node, atoms) in node_atoms {
         let to = edges.entry(node.clone()).or_default();
         for (atom, mask) in &atoms {
@@ -708,6 +773,15 @@ fn walk(
                 if *dep != node {
                     to.insert(dep.clone());
                     *edge_kinds.entry((node.clone(), dep.clone())).or_default() |= mask;
+                    // The guard behind this edge, when one USE flag's removal
+                    // drops every build-time arm naming the dep: parsed from
+                    // the raw strings with this slot's own effective USE, the
+                    // S0-proved seam (`docs/evidence/02.753/`).
+                    if let Some(guards) = edge_use_guards(&node, dep, &chosen)
+                        && !guards.is_empty()
+                    {
+                        use_guards.insert((node.clone(), dep.clone()), guards);
+                    }
                 }
             }
         }
@@ -718,6 +792,7 @@ fn walk(
         unmatched,
         edges,
         edge_kinds,
+        use_guards,
         reached,
         rebuilds: BTreeSet::new(),
         refused: Vec::new(),

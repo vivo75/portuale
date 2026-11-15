@@ -786,6 +786,7 @@ pub(crate) fn push_unresolved_entry(args: PushUnresolvedEntryArgs<'_>) {
         state,
     } = args;
     state.entries.push(GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: key.0,

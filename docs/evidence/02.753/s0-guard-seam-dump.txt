@@ -1,0 +1,300 @@
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running unittests src/main.rs (target/release/deps/portuale-3266ec6269d84d89)
+
+running 1 test
+test plan_world::tests::s0_753_guard_seam_probe_tmp ... FAILED
+
+failures:
+
+---- plan_world::tests::s0_753_guard_seam_probe_tmp stdout ----
+
+thread 'plan_world::tests::s0_753_guard_seam_probe_tmp' (1141820) panicked at crates/portuale/src/plan_world.rs:905:9:
+S0_753_DUMP
+EDGES: {
+    "dev-libs/dualslotpkg:1": {},
+    "dev-libs/dualslotpkg:2": {},
+    "dev-libs/innernestedsetpkg:0": {},
+    "dev-libs/nestedsetpkg:0": {},
+    "dev-libs/newpkg:0": {},
+    "dev-libs/systempkg:0": {},
+    "dev-libs/upgradepkg:0": {},
+    "dev-libs/w749otherpkg:0": {
+        "dev-libs/w749pkgnew:0",
+    },
+    "dev-libs/w749pkgnew:0": {
+        "dev-libs/w749otherpkg:0",
+    },
+    "dev-libs/withdeps:0": {
+        "dev-libs/newpkg:0",
+        "dev-libs/upgradepkg:0",
+    },
+}
+EDGE_KINDS (mask -> DEP_KEYS bits):
+  dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0: 0b01000 ["BDEPEND"]
+  dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0: 0b01000 ["BDEPEND"]
+  dev-libs/withdeps:0 -> dev-libs/newpkg:0: 0b00010 ["RDEPEND"]
+  dev-libs/withdeps:0 -> dev-libs/upgradepkg:0: 0b00010 ["RDEPEND"]
+CYCLES: [["dev-libs/w749otherpkg:0", "dev-libs/w749pkgnew:0"]]
+PLANNED_USE: {
+    "dev-libs/innernestedsetpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/newpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/upgradepkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/w749otherpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "useblah",
+        "useboh",
+        "video_cards_nvidia",
+    },
+    "dev-libs/w749pkgnew:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "use3",
+        "usefoo",
+        "video_cards_nvidia",
+    },
+    "dev-libs/withdeps:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+}
+RAW dev-libs/w749otherpkg/1 BDEPEND="useboh? ( dev-libs/w749pkgnew[use3] )"
+REDUCED[dev-libs/w749otherpkg:0 full]=["dev-libs/w749pkgnew[use3]"]
+REDUCED[dev-libs/w749otherpkg:0 -usefoo]=["dev-libs/w749pkgnew[use3]"]
+REDUCED[dev-libs/w749otherpkg:0 -useboh]=[]
+RAW dev-libs/w749pkgnew/1 BDEPEND="usefoo? ( dev-libs/w749otherpkg[useblah] )"
+REDUCED[dev-libs/w749pkgnew:0 full]=["dev-libs/w749otherpkg[useblah]"]
+REDUCED[dev-libs/w749pkgnew:0 -usefoo]=[]
+REDUCED[dev-libs/w749pkgnew:0 -useboh]=["dev-libs/w749otherpkg[useblah]"]
+GUARD_MAP: {
+    (
+        "dev-libs/w749otherpkg:0",
+        "dev-libs/w749pkgnew:0",
+    ): {
+        "useboh",
+    },
+    (
+        "dev-libs/w749pkgnew:0",
+        "dev-libs/w749otherpkg:0",
+    ): {
+        "usefoo",
+    },
+}
+OFF_CYCLES: []
+OFF_EDGES: {
+    "dev-libs/dualslotpkg:1": {},
+    "dev-libs/dualslotpkg:2": {},
+    "dev-libs/innernestedsetpkg:0": {},
+    "dev-libs/nestedsetpkg:0": {},
+    "dev-libs/newpkg:0": {},
+    "dev-libs/systempkg:0": {},
+    "dev-libs/upgradepkg:0": {},
+    "dev-libs/w749otherpkg:0": {},
+    "dev-libs/w749pkgnew:0": {
+        "dev-libs/w749otherpkg:0",
+    },
+    "dev-libs/withdeps:0": {
+        "dev-libs/newpkg:0",
+        "dev-libs/upgradepkg:0",
+    },
+}
+OFF_PLANNED_USE: {
+    "dev-libs/innernestedsetpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/newpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/upgradepkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+    "dev-libs/w749otherpkg:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "useblah",
+        "video_cards_nvidia",
+    },
+    "dev-libs/w749pkgnew:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "use3",
+        "usefoo",
+        "video_cards_nvidia",
+    },
+    "dev-libs/withdeps:0": {
+        "amd64",
+        "baz",
+        "confflag",
+        "cpu_flags_x86_sse2",
+        "elibc_glibc",
+        "envdusetestflag",
+        "foo",
+        "globalforceflag",
+        "localflag",
+        "lua_single_target_lua5-1",
+        "repo_amd64",
+        "repomakedefaultflag",
+        "stableforceflag",
+        "video_cards_nvidia",
+    },
+}
+OFF_SLOT dev-libs/dualslotpkg:1 ver=1.0 sub_slot=1 installed=Some("1.0") change=None
+OFF_SLOT dev-libs/dualslotpkg:2 ver=2.0 sub_slot=2 installed=Some("2.0") change=None
+OFF_SLOT dev-libs/innernestedsetpkg:0 ver=1.0 sub_slot=0 installed=None change=Some(New)
+OFF_SLOT dev-libs/nestedsetpkg:0 ver=1.0 sub_slot=0 installed=Some("1.0") change=None
+OFF_SLOT dev-libs/newpkg:0 ver=1.0 sub_slot=0 installed=None change=Some(New)
+OFF_SLOT dev-libs/systempkg:0 ver=1.0 sub_slot=0 installed=Some("1.0") change=None
+OFF_SLOT dev-libs/upgradepkg:0 ver=2.0 sub_slot=0 installed=Some("1.0") change=Some(Upgrade)
+OFF_SLOT dev-libs/w749otherpkg:0 ver=1 sub_slot=0 installed=None change=Some(New)
+OFF_SLOT dev-libs/w749pkgnew:0 ver=1 sub_slot=0 installed=None change=Some(New)
+OFF_SLOT dev-libs/withdeps:0 ver=1.0 sub_slot=0 installed=None change=Some(New)
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    plan_world::tests::s0_753_guard_seam_probe_tmp
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 0.43s
+
+error: test failed, to rerun pass `-p portuale --bin portuale`

@@ -171,13 +171,7 @@ fn children<'a>(edges: &'a BTreeMap<String, BTreeSet<String>>, node: &String) ->
 
 /// The `*DEPEND` bits that order a package before what needs it at build time.
 fn build_mask() -> u8 {
-    let mut mask = 0u8;
-    for (i, key) in crate::DEP_KEYS.iter().enumerate() {
-        if ["DEPEND", "BDEPEND", "IDEPEND"].contains(key) {
-            mask |= 1u8 << i;
-        }
-    }
-    mask
+    portage_use_reduce::BUILD_KIND_MASK
 }
 
 /// Whether the edge only carries runtime `*DEPEND` variables.

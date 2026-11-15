@@ -375,3 +375,56 @@ fn entry_merge_root_needs_the_opt_in_and_a_running_root_entry() {
         }
     }
 }
+
+/// Backlog #753 (C2): a boot row executes with the reduced USE, not the
+/// declared one. `entry_phase_env_tail` recomputes USE from the
+/// candidate's full effective set, so it subtracts the reduced flag when
+/// `entry.bootstrap` is set; the definitive row keeps the full set.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn boot_build_env_lacks_the_reduced_flag() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let distdir = tempdir();
+    let mut config = portage_profile::Config::default();
+    config.accept_keywords = ["amd64".to_string()].into_iter().collect();
+    let mut options = ebuild_merge::MergeOptions {
+        distdir: distdir.path().to_path_buf(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    options.resolved_config = Some(std::sync::Arc::new(config));
+    let mut boot = source_entry(
+        "w753otherpkg",
+        PretendOutcome::New {
+            version: "1".into(),
+        },
+    );
+    boot.bootstrap = Some(portage_use_reduce::BootstrapUse {
+        reduced_flag: "useboh".to_string(),
+        declared_use: vec!["useblah".to_string(), "useboh".to_string()],
+    });
+    let get = |env: &[(String, String)]| {
+        env.iter()
+            .rev()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let boot_use = get(&entry_build_env(&options, &boot, &repos));
+    assert!(
+        !boot_use.split_whitespace().any(|f| f == "useboh"),
+        "boot USE must lack the reduced flag, got {boot_use:?}"
+    );
+    assert!(
+        boot_use.split_whitespace().any(|f| f == "useblah"),
+        "boot USE keeps the other flags, got {boot_use:?}"
+    );
+    boot.bootstrap = None;
+    let full_use = get(&entry_build_env(&options, &boot, &repos));
+    assert!(
+        full_use.split_whitespace().any(|f| f == "useboh"),
+        "definitive USE keeps the declared flag, got {full_use:?}"
+    );
+    let _ = std::fs::remove_dir_all(&distdir);
+}

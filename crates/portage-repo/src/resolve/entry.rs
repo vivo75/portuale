@@ -135,6 +135,11 @@ pub struct GraphEntry {
     /// The metadata and USE this entry's dependencies were read with, so `--json`
     /// can hand them to a plan checker. `None` when the entry was never expanded.
     pub dep_input: Option<std::sync::Arc<DepInput>>,
+    /// A reduced-USE first build of this same slot (charter 2a bootstrap):
+    /// `Some` on the boot row only, carrying the removed flag and the
+    /// declared USE. The final row of the slot carries the declared USE and
+    /// no marker; acyclic plans never set this. See `resolve::bootstrap`.
+    pub bootstrap: Option<portage_use_reduce::BootstrapUse>,
 }
 
 /// What one entry's dependency strings were evaluated against.

@@ -813,20 +813,77 @@ pub(crate) fn run_build_scheduler(
     use std::sync::mpsc;
 
     let n = entries.len();
+    // `cat/pkg` -> the row indices carrying it, in merge order. A slot
+    // can hold two rows: the charter 2a boot row plus its definitive
+    // rebuild (`GraphEntry::bootstrap`). `cp_to_idx` below keeps the old
+    // last-index mapping for failure attribution and skip propagation,
+    // whose per-cp answers do not change; the wait graph itself resolves
+    // per row (see below).
     let cp_to_idx: HashMap<(String, String), usize> = entries
         .iter()
         .enumerate()
         .map(|(i, e)| ((e.category.clone(), e.package.clone()), i))
         .collect();
+    let mut cp_to_indices: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        cp_to_indices
+            .entry((e.category.clone(), e.package.clone()))
+            .or_default()
+            .push(i);
+    }
 
     // idx -> the indices (present in this graph) it depends on,
-    // reconstructed from the reverse `required_by` edges.
+    // reconstructed from the reverse `required_by` edges. Only a cp with
+    // a bootstrap-marked row narrows: among the dep's instances, the
+    // owner waits on the latest one merged before it builds (the peer
+    // the placement invariant guarantees: boot < middles <
+    // definitive), and the owner's own `deps` must name the dep (a stale
+    // required_by copy names none of the boot's dropped arms). Every
+    // other cp keeps exactly the old last-index mapping bit for bit —
+    // including multi-slot rows, which never narrow — so a non-bootstrap
+    // same-cp plan cannot change order (the post-merge cycle test keeps
+    // its forward edge for the same reason). Without the narrowing the
+    // middle waits on the definitive while the definitive waits on the
+    // middle, stranding a `--jobs>=2` bootstrap with rc 0 after one merge.
     let deps: Vec<HashSet<usize>> = {
         let mut deps = vec![HashSet::new(); n];
         for (d_idx, d) in entries.iter().enumerate() {
+            let insts = match cp_to_indices.get(&(d.category.clone(), d.package.clone())) {
+                Some(idxs) => idxs,
+                None => continue,
+            };
+            // The synthesis clones the definitive row, so a marked row's
+            // cp is exactly the multi-row bootstrap shape; anything else
+            // is today's plan, untouched.
+            let narrowing = insts.iter().any(|&i| entries[i].bootstrap.is_some());
             for r_cp in &d.required_by {
-                if let Some(&r_idx) = cp_to_idx.get(r_cp) {
-                    deps[r_idx].insert(d_idx);
+                let owners = match cp_to_indices.get(r_cp) {
+                    Some(idxs) => idxs,
+                    None => continue,
+                };
+                if !narrowing {
+                    if let Some(&last) = owners.last() {
+                        deps[last].insert(d_idx);
+                    }
+                    continue;
+                }
+                for &o in owners {
+                    let names = entries[o]
+                        .deps
+                        .iter()
+                        .any(|e| e.category == d.category && e.package == d.package);
+                    if !names {
+                        continue;
+                    }
+                    let peer = insts
+                        .iter()
+                        .copied()
+                        .filter(|&i| i < o)
+                        .max()
+                        .or_else(|| insts.iter().copied().max());
+                    if peer == Some(d_idx) {
+                        deps[o].insert(d_idx);
+                    }
                 }
             }
         }

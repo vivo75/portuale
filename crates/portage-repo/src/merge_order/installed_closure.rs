@@ -148,6 +148,7 @@ pub(crate) fn synthetic_installed_entry(
     deps: Vec<DepEdge>,
 ) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category,

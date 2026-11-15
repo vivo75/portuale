@@ -110,7 +110,12 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
     // pass would over-connect (multi-slot cps, `||` branches).
     //
     // `required_by` is cp-keyed, so an owner whose own atom already resolved
-    // to one instance of this cp must not gain an edge to the others.
+    // to one instance of this cp must not gain an edge to the others —
+    // except a charter 2a boot row (backlog #753): its sibling is the same
+    // slot's definitive rebuild, so the multi-slot ambiguity the guard
+    // protects against cannot arise, and without the edge the boot row
+    // would hang parentless off the tree instead of rendering as a real
+    // node under the owners that build against it.
     for (i, e) in entries.iter().enumerate() {
         if !e.deps.is_empty() {
             continue;
@@ -120,9 +125,12 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
                 if t.category != owner.0 || t.package != owner.1 || j == i {
                     continue;
                 }
-                let resolved_elsewhere = dep_targets[j].iter().flatten().any(|&k| {
-                    k != i && entries[k].category == e.category && entries[k].package == e.package
-                });
+                let resolved_elsewhere = e.bootstrap.is_none()
+                    && dep_targets[j].iter().flatten().any(|&k| {
+                        k != i
+                            && entries[k].category == e.category
+                            && entries[k].package == e.package
+                    });
                 if !resolved_elsewhere {
                     add_edge(TreeNode::Entry(i), TreeNode::Entry(j));
                 }

@@ -805,7 +805,10 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
 
 #[test]
 fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
-    // USE-gated build cycle: exactly "disable x on usecyclea".
+    // Backlog #753: `usecyclea` bootstraps now, so the end-to-end gating
+    // suggestion pins the still-cycling two-flag shape instead —
+    // `dev-libs/cddseva` needs *both* `doc` and `nls` off to drop the
+    // edge, exactly one minimal solution.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -818,7 +821,7 @@ fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
     })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
-    let result = graph_result_real("dev-libs/usecyclea");
+    let result = graph_result_real("dev-libs/cddseva");
     assert_eq!(result.circular_deps.len(), 1);
     let sols = circular_dep_solutions(
         &result.circular_deps[0],
@@ -830,8 +833,8 @@ fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
     assert_eq!(
         sols,
         vec![CircularSuggestion {
-            parent_cpv: "dev-libs/usecyclea-1.0".to_string(),
-            changes: vec![("x".to_string(), false)],
+            parent_cpv: "dev-libs/cddseva-1".to_string(),
+            changes: vec![("doc".to_string(), false), ("nls".to_string(), false)],
             followup: false,
         }]
     );
@@ -882,7 +885,12 @@ fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
 
 #[test]
 fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
-    // Grandparent with a hard use-dep on the fix: the suggestion list is empty.
+    // Grandparent with a hard use-dep on the fix: the suggestion list is
+    // empty. Backlog #753: the `gpcyclec` fixture cycle bootstraps now, so
+    // the disqualification is pinned on synthetic entries over the same
+    // real ebuilds — the cycle's own suggestion ("disable x") is dropped
+    // because `gpcyclec`'s recorded hard `gpcyclea[x]` requirement
+    // contradicts it.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -895,14 +903,39 @@ fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
     })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
-    let result = graph_result_real("dev-libs/gpcyclec");
-    assert_eq!(result.circular_deps.len(), 1);
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let edge = |pkg: &str, atom: &str, key: u8| DepEdge {
+        atom: atom.to_string(),
+        evaluated: atom.to_string(),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority: buildtime,
+        disjunctive: false,
+        alt: None,
+        key,
+        walk_chosen: false,
+    };
+    let mut a = graph_entry("dev-libs", "gpcyclea", "1.0");
+    a.deps = vec![edge("gpcycleb", "dev-libs/gpcycleb", 4)];
+    a.required_by = vec![("dev-libs".to_string(), "gpcyclec".to_string())];
+    let mut b = graph_entry("dev-libs", "gpcycleb", "1.0");
+    b.deps = vec![edge("gpcyclea", "dev-libs/gpcyclea", 4)];
+    b.required_by = vec![("dev-libs".to_string(), "gpcyclea".to_string())];
+    let mut c = graph_entry("dev-libs", "gpcyclec", "1.0");
+    c.deps = vec![edge("gpcyclea", "dev-libs/gpcyclea[x]", 3)];
+    let entries = vec![a, b, c];
     let sols = circular_dep_solutions(
-        &result.circular_deps[0],
+        &[
+            "dev-libs/gpcyclea-1.0".to_string(),
+            "dev-libs/gpcycleb-1.0".to_string(),
+        ],
         &repos,
         &config,
-        &result.autounmask_use_changes,
-        &result.entries,
+        &[],
+        &entries,
     );
     assert!(sols.is_empty(), "{:?}", sols);
 }

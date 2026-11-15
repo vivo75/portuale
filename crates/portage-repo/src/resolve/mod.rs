@@ -3,6 +3,7 @@ mod autounmask;
 mod backtrack_params;
 mod backtracker;
 mod blockers;
+mod bootstrap;
 mod complete_graph;
 mod conflict_use_display;
 mod ctx;

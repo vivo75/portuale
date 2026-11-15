@@ -107,6 +107,7 @@
 - [crates/portage-repo/src/resolve/backtrack_params.rs](portage-repo/resolve/backtrack_params.md) — Parameters a backtracking pass runs with.
 - [crates/portage-repo/src/resolve/backtracker.rs](portage-repo/resolve/backtracker.md) — The backtracking search tree.
 - [crates/portage-repo/src/resolve/blockers.rs](portage-repo/resolve/blockers.md) — Blocker collection and resolution.
+- [crates/portage-repo/src/resolve/bootstrap.rs](portage-repo/resolve/bootstrap.md) — Charter 2a bootstrap (backlog #753): the resolver-side synthesis.
 - [crates/portage-repo/src/resolve/complete_graph.rs](portage-repo/resolve/complete_graph.md) — Auto-enables complete mode when a first-pass merge changes an installed package.
 - [crates/portage-repo/src/resolve/conflict_use_display.rs](portage-repo/resolve/conflict_use_display.md) — `USE="…"` display pairs shared by the slot-conflict and skipped-update reports.
 - [crates/portage-repo/src/resolve/ctx.rs](portage-repo/resolve/ctx.md) — The per-run resolver context: BFS request fields plus the derived required-set closures.

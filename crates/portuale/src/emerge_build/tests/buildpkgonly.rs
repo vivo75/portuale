@@ -6,6 +6,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
     // without attempting any execution (proven by the nonexistent paths).
     let entries = vec![
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),
@@ -40,6 +41,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             deps: Vec::new(),
         },
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),
@@ -106,6 +108,7 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
     let distdir = tempdir();
 
     let entries = vec![GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".into(),
@@ -581,6 +584,7 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
     let distdir = tempdir();
 
     let entries = vec![GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "dev-libs".into(),
@@ -918,6 +922,7 @@ fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::
     let portage_tmpdir = tempdir();
     let repos = find_repos(cfg).unwrap();
     let entries = vec![GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: "app-misc".into(),

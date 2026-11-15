@@ -317,6 +317,19 @@ pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
     format!(" {}", groups.concat())
 }
 
+/// Renders the boot-row notice: a charter 2a bootstrap first build is
+/// temporary and is rebuilt with the declared USE (property 5: the user
+/// is told). Empty on every other row, so acyclic plans are byte-identical.
+pub(crate) fn bootstrap_suffix(entry: &GraphEntry) -> String {
+    match &entry.bootstrap {
+        Some(boot) => format!(
+            " (bootstrap: USE=\"-{}\" temporary — will be rebuilt with the declared USE)",
+            boot.reduced_flag
+        ),
+        None => String::new(),
+    }
+}
+
 /// Arguments of [`nomerge_row`].
 pub(crate) struct NomergeRowArgs<'a> {
     pub(crate) category: &'a str,

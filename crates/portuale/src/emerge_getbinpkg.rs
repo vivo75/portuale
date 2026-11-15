@@ -2660,6 +2660,7 @@ mod tests {
         version: &str,
     ) -> GraphEntry {
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: category.into(),
@@ -5512,6 +5513,7 @@ mod tests {
             ..Config::default()
         };
         let entry = GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),
@@ -5642,6 +5644,7 @@ mod tests {
             ..Config::default()
         };
         let entry = GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),
@@ -5939,6 +5942,7 @@ mod tests {
             ..Config::default()
         };
         let entry = GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),
@@ -6182,6 +6186,7 @@ mod mixed_pretend_tests {
 
     fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
         GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: "dev-libs".into(),

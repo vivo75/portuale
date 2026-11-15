@@ -258,13 +258,21 @@ pub(crate) fn entry_phase_env_tail(
     };
     if let Some(candidate) = candidate {
         env.extend(entry_metadata_env(entry, candidate));
-        let enabled = portage_repo::candidate_effective_use_flags(
+        let mut enabled = portage_repo::candidate_effective_use_flags(
             repos,
             config,
             &entry.category,
             &entry.package,
             &candidate.version,
         );
+        // Charter 2a bootstrap: the boot build executes with the reduced
+        // USE, not the declared one. The entry's own reduced
+        // `use_flags_display` is only read on the no-config legacy path
+        // below, so force the reduced flag off here (the S0 seam in
+        // reverse: the plan reduced it, the build must execute it).
+        if let Some(boot) = entry.bootstrap.as_ref() {
+            enabled.retain(|f| f != &boot.reduced_flag);
+        }
         let iuse: Vec<String> = candidate
             .iuse
             .split_whitespace()

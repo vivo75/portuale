@@ -444,6 +444,7 @@ fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
 /// shape `direct_solve_instance_use` reads for a merge instance).
 fn entry_166(cat: &str, pkg: &str, version: &str, display: Vec<(String, bool)>) -> GraphEntry {
     GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: None,
         category: cat.to_string(),

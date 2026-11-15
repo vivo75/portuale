@@ -1370,6 +1370,7 @@ fn bridge_entry_for(
     let (fetch_restrict, fetch_restrict_satisfied) =
         bridge_fetch_restriction(&record, &use_set, &req.distdir);
     Some(GraphEntry {
+        bootstrap: None,
         discovery: 0,
         dep_input: Some(bridge_dep_input(&record, &use_set)),
         category: record.category.clone(),
@@ -4944,6 +4945,7 @@ fn bridge_validate_aborts(
     };
     for ((category, package), owner, atom, suggestion) in rescued {
         let mut entry = GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: category.clone(),
@@ -5023,6 +5025,7 @@ fn bridge_validate_aborts(
         owners.sort();
         owners.dedup();
         validation.nvc_entries.push(GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: miss.category.clone(),
@@ -9690,6 +9693,7 @@ mod tests {
         deps: Vec<super::super::DepEdge>,
     ) -> super::super::GraphEntry {
         super::super::GraphEntry {
+            bootstrap: None,
             discovery: 0,
             dep_input: None,
             category: category.to_string(),
