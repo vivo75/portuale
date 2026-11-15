@@ -48,8 +48,8 @@ bzip2 = "0.6"
 portage-solver = "=0.4.0"
 portage-atom-pubgrub = "=0.9.0"
 # Direct (not just transitive via the solver crates): the #34 S5 G2
-# parent-USE pre-pass matches on `UseDepKind` itself. Same locked
-# `=0.12.0` the solver crates use; no version moves.
+# parent-USE pre-pass matches on `UseDepKind` itself. Pinned to the version
+# the solver crates use; bump it together with them.
 portage-atom = "=0.12.0"
 
 [lints]

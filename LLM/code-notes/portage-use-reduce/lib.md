@@ -79,6 +79,13 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 - `tie_break` design rule 2 (`docs/history/022-agent-task-22-zapdeps.fable.md`): portage-use-reduce stays atom-agnostic and hands the caller the tied alternatives' flattened atom lists; the caller owns candidate lookup, `cp`/version parsing and `vercmp`. In-bin ordering: prefer an upgrade via `vercmp` over the intersecting `cp_map`, or `all_installed_slots`, or `all_in_graph`, unless sacrificing an upgrade (`dep_check.py` soft 738-802). A trivial `&mut |_| 0` reproduces pre-slice-2 behaviour (portage-repo's pre-slice-2 shim at its two `--root-deps` call sites).
 - Portage fills nine lists and picks the first atom of the first *selectable* choice across them, in bin order (`dep_check.py:812-816`):
 - Every bin's choices have `all_available = True` except bins 5-8 (`other_*`, reached when some atom is only available via a masked / force path), which Portage still *returns* on its `allow_masked` second pass -- ported as of slice 2/4 of backlog #22 (`docs/history/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions` runs a first pass considering only [`is_selectable`](AltPreference::is_selectable) ranks (Portage's `allow_masked=False`), and only when THAT finds nothing at all does a second pass consider the `other_*` bins too (Portage's `allow_masked=True`) -- see `resolve_disjunctions`'s own doc comment. One exception: portuale's own bolt-on circular-self-dep guard (no Portage equivalent) stays hard-`Unsatisfiable` in both passes -- see `portage-repo::disjunction_preference`'s own doc comment.
+- 
+  `BestVisibleAvailable` and `BestVisibleInstalled` are portuale's own, not
+  Portage's: in plan mode a branch every atom of which the best visible
+  candidate of its slot matches outranks a merely installed one, so the plan
+  takes the arm that admits the newest version (charter property 3). The
+  installed bit stays the tie-break, so two best-visible arms still prefer
+  the installed one and nothing churns.
 
 ## fn use_reduce_flat_disjunctive / type TieBreak
 - Portage `_add_pkg_dep_string`'s `"||"` resolution. The never-silently-wrong invariant: a dependency portuale can't currently resolve is never silently dropped (established by `resolve_pretend_graph`, portage-repo, for the unconditional-flatten v1 this replaces).
@@ -145,6 +152,10 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
   leaf (`regex`-only deps) so `portage-repo`, `portage-world` and (through
   them) `portuale` name it with no new dependency edge. The marker, not the
   outcome, distinguishes the rows.
+- The mark a bootstrap (reduced-USE first) build carries: the single USE
+  flag removed relative to the declared build, and the declared USE itself.
+  Charter 2a: a boot row is never a second identical row (that is what #749
+  removed) — the marker, not the outcome, distinguishes the rows.
 
 ## const BUILD_KIND_MASK
 - `0b11001`: `DEPEND`, `BDEPEND`, `IDEPEND` bits in `portage-world`'s
@@ -161,6 +172,17 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
   needs to see the unguarded second arm (`unrelated? ( X ) X`,
   `doc? ( X ) nls? ( X )` — backlog #506 pins), which a distinct-atom map
   would merge away. Best-effort on unbalanced input.
+- Each atom occurrence of `dep_str` with the positive USE flags guarding
+  it: the active `flag?` stack at its position (nested conditionals
+  accumulate), in string order. Occurrences — not distinct atoms — are
+  the unit: the bootstrap rule universally quantifies over them, so an
+  unguarded second arm keeps the edge even when the first is guarded
+  (backlog #506: `unrelated? ( X ) X`, `doc? ( X ) nls? ( X )`).
+  A negated `!flag?` arm guards nothing here: removing it means forcing
+  the flag on, which the single-flag `USE = declared − flag` boot shape
+  cannot express, so such an arm counts as unconditional (never reduced).
+  `||` markers and grouping parens carry no atoms and contribute none.
+  Best-effort: unbalanced input yields the guards seen before the break.
 
 ## fn bootstrap_reduction
 - Backlog #753: the [default sicuro] selection — smallest deterministic
@@ -176,6 +198,20 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
   emitters agree no matter which walk order reported it (reversed argv
   picks the same reduction — pinned by the reversed-argv agreement test).
   A USE-gated self-loop is an ordinary one-member cycle under this rule.
+- The smallest deterministic single-flag reduction breaking a reported
+  cycle set: `(boot slot, flag to force off)`, or `None` when no single
+  flag breaks any reported cycle (callers keep today's report, never
+  enumerate flag combinations). `cycles` arrive in reported order with
+  walk-order members; `edges` is the adjacency they were reported over;
+  `kinds` carries the `*DEPEND` bits behind each edge in `DEP_KEYS`
+  layout (a missing entry counts as build-time); `use_guards` maps each
+  directed edge to the USE flags whose removal drops it. Tie-breaks, in
+  order: a flag breaking more than one reported cycle in the same pass
+  wins; then reported-cycle order; then member order within the cycle;
+  then the lexicographically first flag. A USE-gated self-loop is an
+  ordinary one-member cycle under this rule. Member order is name order:
+  each reported cycle is sorted first, so both emitters agree no matter
+  which walk order reported it (reversed argv picks the same reduction).
 
 ## fn boot_closure_reaches_member
 - Backlog #753 STOP rule 2 without a second resolve: DFS from the boot slot
@@ -187,3 +223,18 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
   refusal test). Only the reduced flag drops edges: guards from other
   flags stay, so a transitive need through another member's own guarded arm
   still refuses (the `r1 -> r3 -> r2` shape).
+
+## fn conditional_guards_collects_the_active_flag_stack_per_atom
+
+- Backlog #506: a repeated atom keeps both occurrences — the
+  unguarded arm is what keeps the edge under either flag.
+
+## fn a_bootstrap_reduction_picks_useboh_on_otherpkg
+
+- Charter 2a (backlog #753): the owner's pair reduces to the owner's
+  own choice — `otherpkg` with `-useboh`.
+
+## fn a_selectable_best_visible_alternative_beats_an_installed_one
+
+- Charter property 3 (plan 02.740): a best-visible first branch beats an
+  installed-only second one in the first pass, so the rank is selectable.

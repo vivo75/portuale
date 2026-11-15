@@ -24,6 +24,13 @@ The `--tree` display. Context moved out of the code comments (#336 Phase 7); the
 - Blocker nodes: a satisfied row hangs its removal/replacement under the blocker, and the blocker under the row's owner (unless the row already lives on that same removal entry -- the #77 absent-owner arm, whose owner is Portage's non-node vardb `Package`). #84: one kept-branch derivation for the whole node walk.
 - `_ordered_tree_display` (`output_helpers.py:434-495`): walk the reversed list; a node that is a child of the current chain continues it, otherwise `add_parents` fills the ancestor chain in first. The `ordered` flag is `False` for every ancestor-walk occurrence (`:453`), which is what renders a merge node as `nomerge`. /// Arguments of [`add_parents`].
 - `_prune_tree_display` (`output_helpers.py:497-535`).
+- `required_by` is cp-keyed, so an owner whose own atom already resolved
+  to one instance of this cp must not gain an edge to the others —
+  except a charter 2a boot row (backlog #753): its sibling is the same
+  slot's definitive rebuild, so the multi-slot ambiguity the guard
+  protects against cannot arise, and without the edge the boot row
+  would hang parentless off the tree instead of rendering as a real
+  node under the owners that build against it.
 
 ## fn unordered_display_order
 - `_unordered_tree_display` (`output_helpers.py:410-431`): DFS from every root (no parents) in graph insertion order, each node once.

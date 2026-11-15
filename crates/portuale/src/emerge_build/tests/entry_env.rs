@@ -376,10 +376,8 @@ fn entry_merge_root_needs_the_opt_in_and_a_running_root_entry() {
     }
 }
 
-/// Backlog #753 (C2): a boot row executes with the reduced USE, not the
-/// declared one. `entry_phase_env_tail` recomputes USE from the
-/// candidate's full effective set, so it subtracts the reduced flag when
-/// `entry.bootstrap` is set; the definitive row keeps the full set.
+/// A boot row executes with the reduced USE, not the declared one; the
+/// definitive row keeps the full set.
 #[allow(clippy::field_reassign_with_default)]
 #[test]
 fn boot_build_env_lacks_the_reduced_flag() {

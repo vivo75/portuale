@@ -142,9 +142,8 @@ fn candidate_options_json_names_the_four_binary_options() {
     );
 }
 
-/// Charter 2a (backlog #753): a boot row carries the `bootstrap` marker
-/// and the minus-spelled reduced flag; every other row carries neither
-/// key, so acyclic plans are byte-identical.
+/// Charter 2a: a boot row carries the `bootstrap` marker and the minus-spelled
+/// reduced flag; every other row carries neither key.
 #[test]
 fn bootstrap_json_marks_only_the_boot_row() {
     use portage_use_reduce::BootstrapUse;

@@ -18,3 +18,10 @@ Per-entry environment unit tests.
 
 ## fn get (test helper)
 - Later pairs win in both backends (`Command::envs` / successive `export`s), so it reads the *last* pair: the run-wide base carries empty `USE_EXPAND` placeholders that the per-entry rows override.
+
+## fn boot_build_env_lacks_the_reduced_flag
+
+- Backlog #753 (C2): a boot row executes with the reduced USE, not the
+  declared one. `entry_phase_env_tail` recomputes USE from the
+  candidate's full effective set, so it subtracts the reduced flag when
+  `entry.bootstrap` is set; the definitive row keeps the full set.

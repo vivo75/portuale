@@ -74,3 +74,14 @@
 
 ## tests: shared-fixture hermeticity (Task 11)
 - Any test that runs `mrg`/`emerge` with `ROOT` (or `PORTAGE_RUNNING_ROOT`) at the shared fixtures mutates them now: the updates run moves vdb entries and records mtimes on the target (and running) root. `pretend_plan_is_identical_on_files_sqlite_and_redb` copies the whole tree to scratch and serves it as `ROOT`; the missing-database and redb-busy tests use fresh tmp target roots; the `has_version`/`emerge -p` probe splits its shared `run` closure per root (fixtures stay for the read-only `portageq`/`ebuild` calls, scratch copies for `emerge`). A warm-up run establishes the record so the compared backend runs all skip the block.
+
+## fn redb_merge_phases_query_the_parent_over_the_pipe
+
+- (`<TMPDIR>/portuale-vdb-ipc-<pid>-<nanos>/s`), else `/tmp`
+  (`vdb_ipc::MAX_SOCKET_PATH`: `sun_path` holds 108 bytes with
+  the NUL). Judge the full path, not the parent's length: a long
+  TMPDIR such as `/var/tmp` still fits when the child name is
+  short enough, so a proxy on the parent would call correct
+  behaviour a bug. The pid/nanos digits are unknown here, so the
+  fallback is legitimate only when even the shortest possible
+  child name (`/portuale-vdb-ipc-0-0/s`, 24 bytes) overflows.

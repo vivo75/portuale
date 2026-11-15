@@ -166,11 +166,8 @@ pub(crate) fn assemble_result(
         mut cycle_display,
         mut cycle_display_idx,
     } = build_cycle_display(ctx, &pass, params);
-    // Charter 2a bootstrap (backlog #753): when a single USE-flag
-    // reduction breaks a reported hard cycle, synthesize the boot row
-    // after the sort and read the reduced edge set instead of failing.
-    // The re-run below also recomputes every other field, so any cycle
-    // the reduction does not break still fails exactly as today.
+    // Charter 2a bootstrap: a single-flag USE reduction that breaks a reported
+    // hard cycle gets a boot row after the sort; other cycles still fail.
     if super::bootstrap::maybe_bootstrap(ctx, config, &mut pass, &circular_deps) {
         let fresh = build_cycle_display(ctx, &pass, params);
         circular_deps = fresh.circular_deps;

@@ -70,7 +70,7 @@
   are for (10 new `build-order` findings on a 176-row bed plan). The known
   hole (and the real fix) is filed as #751.
 - Pinned 2026-11-14 (plan `02.751-kept-virtual-cut` §6-A,
-  evidence `docs/evidence/02.751/`): on the amended R/B/R probe (kept
+  evidence `LLM/evidence/02.751/`): on the amended R/B/R probe (kept
   `virtual/*` middle, `base BDEPEND prov` so `prov` is build-time-used,
   stale-provider rebuild) the cut lands on the virtual's provider edge
   (`BackEdge(virt, prov)`) — the exclusion routing the cut — with rows
@@ -182,3 +182,98 @@
 
 ## fn runtime_cut (#760)
 - Returns the one edge to cut. It used to return `CycleCut::Edge` or `CycleCut::BackEdge`, handled identically: cutting the back edge when it is the only cuttable one must not stop the scan, or every later cycle is left to the walk's implicit cuts, which no rule chooses (backlog #746: the perl cluster moved late).
+
+## fn the_mixed_cycle_cut_is_the_order_the_closure_walks
+
+- Charter property 2 (backlog #745): the middle link — `depend_order`
+  on the mixed `R/B/R` `w745` graph yields the cut
+  `[prov, virt, user]`, which the literal checker passes with no
+  finding (every build atom is satisfied at start).
+
+## fn a_cycle_with_a_cuttable_runtime_edge_lists_each_node_once
+
+- Charter property 2: a cycle with a cuttable runtime-only edge is cut,
+  so every node is still listed once (backlog #743).
+
+## fn the_virtual_provider_edge_is_the_only_cuttable_edge
+
+- Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): a
+  kept `virtual/*` middle confers no build-time status, so with `prov`
+  build-time-used the cycle's only cuttable edge is the virtual's own
+  provider edge — cut as the back edge once the genuine `base <-> prov`
+  pair is left to the implicit walk (`LLM/evidence/02.751/`, once cited as `docs/evidence/02.751/`).
+  Theoretical, pinned, not proven safe: no live shape exhibits a
+  consumer building against a broken installed provider.
+- The first cycle the walk meets is the genuine `base <-> prov`
+  pair, with no cuttable edge: the cut loop leaves it alone (the
+  walk orders it implicitly and the checker fails it — backlog
+  #749: reported, never a second build) and cuts the remaining
+  cycle at the virtual's provider edge instead — the back edge,
+  and the only cuttable one. It is not a build-time cycle: the
+  `prov -> base` half is `RDEPEND`, so the report reads nothing.
+
+## fn a_runtime_edge_that_carries_a_build_time_need_is_not_cut
+
+- Charter property 2 (PMS 8.1: a build tool must be usable, so its
+  `RDEPEND` closure constrains the order): the cut spares a runtime-only
+  edge out of a package the plan builds with, and cuts the next
+  runtime-only edge instead, so the repaired provider still comes first
+  (backlog #746: `help2man -> Locale-gettext`, not `automake -> help2man`).
+
+## fn an_all_build_time_cycle_is_ordered_once_and_reported
+
+- Charter property 2a (backlog #749): a pure build-time cycle has no
+  cuttable edge, so no cut is chosen for it — the walk orders it
+  implicitly (here `y` before `x`, the walk's name order) and
+  `build_time_cycles` reports the pair, which the checker fails.
+  Nothing is ever listed twice.
+
+## fn build_time_cycles
+
+- The build-time cycles of `edges`: strongly connected components over
+  build-kind edges only (`build_mask`; an edge without kind information
+  counts as build-time, as before), members in walk order, deterministic.
+  Empty means every build need is serializable; non-empty is genuine: the
+  plan-world report reads this, nothing else, and the checker fails it
+  (charter 2a: a cycle no order satisfies is reported, never papered over
+  by building a package twice).
+
+## fn is_cuttable_runtime_edge
+
+- Whether the runtime-only edge can be cut to serialize a cycle: an edge
+  out of a package the plan builds with carries a build-time need in fact
+  (backlog #746), so cutting it would build against an unusable package.
+
+## fn build_time_used
+
+- The nodes the plan builds with: the targets of a `DEPEND`, `BDEPEND` or
+  `IDEPEND` edge, except `virtual/*` targets. PMS 8.1 makes such a package
+  usable, so its `RDEPEND` closure constrains the order too. Excluding
+  virtuals is a heuristic that keeps the perl/libcrypt rebuild cluster
+  ordered, not PMS soundness: `BDEPEND virtual/foo` makes the provider a
+  build input in fact, so a kept virtual's provider edge stays cuttable
+  even when the installed provider is broken. The known hole (and the real
+  fix) is filed as #751. One pass: build-time use must not propagate
+  through `RDEPEND`, or every cycle edge would count as build-time in fact
+  and no cycle could be cut.
+
+## fn depend_order
+
+- every run. A cycle is cut at the first cuttable runtime-only edge (a
+  runtime edge out of a package the plan builds with still orders, so it is
+  not cuttable); a cycle with no cuttable edge is genuine: no cut is
+  chosen for it, the walk below orders it implicitly, and
+  [`build_time_cycles`] reports it for the checker to fail. `kinds`
+  carries the `*DEPEND` variables behind each edge, as bits of
+  [`crate::DEP_KEYS`]; an edge without one counts as build-time.
+
+## fn (see source)
+
+- (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`). A `PDEPEND`-only edge
+  puts no constraint on the order (PMS). A cycle is cut at a cuttable
+  runtime-only edge when it has one (a runtime edge out of a package
+  the plan builds with still orders, PMS 8.1); a cycle with none is
+  genuine: the walk below orders it implicitly and
+  [`build_time_cycles`] reports it, for the checker to fail (charter
+  2a: a cycle no order satisfies is reported, never papered over by
+  building a package twice).

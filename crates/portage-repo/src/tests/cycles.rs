@@ -805,10 +805,8 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
 
 #[test]
 fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
-    // Backlog #753: `usecyclea` bootstraps now, so the end-to-end gating
-    // suggestion pins the still-cycling two-flag shape instead —
-    // `dev-libs/cddseva` needs *both* `doc` and `nls` off to drop the
-    // edge, exactly one minimal solution.
+    // `usecyclea` bootstraps now, so the gating suggestion pins the still-cycling
+    // two-flag `dev-libs/cddseva` (both `doc` and `nls` off, one minimal solution).
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
@@ -885,12 +883,8 @@ fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
 
 #[test]
 fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
-    // Grandparent with a hard use-dep on the fix: the suggestion list is
-    // empty. Backlog #753: the `gpcyclec` fixture cycle bootstraps now, so
-    // the disqualification is pinned on synthetic entries over the same
-    // real ebuilds — the cycle's own suggestion ("disable x") is dropped
-    // because `gpcyclec`'s recorded hard `gpcyclea[x]` requirement
-    // contradicts it.
+    // Grandparent with a hard use-dep on the fix: the suggestion list is empty.
+    // Pinned on synthetic entries, since the `gpcyclec` fixture cycle bootstraps now.
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,

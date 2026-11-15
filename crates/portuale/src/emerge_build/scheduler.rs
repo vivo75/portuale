@@ -833,18 +833,10 @@ pub(crate) fn run_build_scheduler(
     }
 
     // idx -> the indices (present in this graph) it depends on,
-    // reconstructed from the reverse `required_by` edges. Only a cp with
-    // a bootstrap-marked row narrows: among the dep's instances, the
-    // owner waits on the latest one merged before it builds (the peer
-    // the placement invariant guarantees: boot < middles <
-    // definitive), and the owner's own `deps` must name the dep (a stale
-    // required_by copy names none of the boot's dropped arms). Every
-    // other cp keeps exactly the old last-index mapping bit for bit —
-    // including multi-slot rows, which never narrow — so a non-bootstrap
-    // same-cp plan cannot change order (the post-merge cycle test keeps
-    // its forward edge for the same reason). Without the narrowing the
-    // middle waits on the definitive while the definitive waits on the
-    // middle, stranding a `--jobs>=2` bootstrap with rc 0 after one merge.
+    // idx -> the indices (present in this graph) it depends on, from the reverse
+    // `required_by` edges. Only a cp with a bootstrap-marked row narrows: the owner
+    // waits on the latest instance merged before it builds, and its own `deps` must
+    // name the dep. Every other cp keeps the old last-index mapping.
     let deps: Vec<HashSet<usize>> = {
         let mut deps = vec![HashSet::new(); n];
         for (d_idx, d) in entries.iter().enumerate() {

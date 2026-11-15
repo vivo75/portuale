@@ -15,6 +15,9 @@
 - Portage `output.py:833`'s own `I` bracket column, exposed unconditionally: `true` for a merge-bound entry whose evaluated `PROPERTIES` contains `interactive` (`GraphEntry::interactive`).
 - Portage `output.py:633`'s own `f`/`F` fetch-restrict column (`GraphEntry::fetch_restrict` / `fetch_restrict_satisfied`).
 - `--root-deps`'s own running-root build entries (see `root_suffix`'s own doc comment and `GraphEntry::targets_running_root`): the same `to <root>` distinction the plain-text output carries, as an explicit field -- the running-root path string for such an entry, `null` for every ordinary `ROOT`-targeted one.
+- Charter 2a bootstrap (backlog #753): a reduced-USE first build
+  carries the marker; the final row of the slot and every acyclic row
+  carry neither key (byte-identical by construction).
 
 ## fn print_json
 - `backtrack_restarts`: backlog #59 S2 (K1 option (a)) -- the deterministic `(backtrack: N/M)` count Portage's `_show_resolution_report` prints on every run.

@@ -91,3 +91,11 @@ Assembling the final result.
 
 ## fn assemble_result residual-conflict gate (#594)
 - The residual installed-instance conflicts (`build_residual_slot_conflicts`, from the dropped-pin scan of the fallback re-pass) are skipped when the walk stopped at an unsatisfied dependency outside complete mode (`!ctx.complete && pass_has_unsatisfied_dep`, the R1 gate in `feedback::pass_has_unsatisfied_dep`). Portage's stopped graph never reaches the installed instances -- they only enter through `_complete_graph` (`depgraph.py:9482`, inside `altlist` after `_resolve` returns at `:5691-5693`), so the final display (`:11273-11276`, `:1735-1736` over `_package_tracker.slot_conflicts()`) shows no such block. The try count on these cells (0/20 against Portage's 1/20) is R6's dead-end count, not this gate.
+
+## fn assemble_result
+
+- Charter 2a bootstrap (backlog #753): when a single USE-flag
+  reduction breaks a reported hard cycle, synthesize the boot row
+  after the sort and read the reduced edge set instead of failing.
+  The re-run below also recomputes every other field, so any cycle
+  the reduction does not break still fails exactly as today.

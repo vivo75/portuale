@@ -205,8 +205,7 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) top_level_atoms: &'a HashSet<String>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
-    /// `--emptytree`: Portage files no slot-operator rebuild there
-    /// (`depgraph.py:7917-7925`), so the stale-pin arm stays out.
+    /// `--emptytree`: Portage files no slot-operator rebuild, so the stale-pin arm stays out.
     pub(crate) empty: bool,
     pub(crate) usepkg: bool,
 }

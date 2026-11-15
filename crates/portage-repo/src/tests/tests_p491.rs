@@ -207,19 +207,10 @@ fn p491_pass0_seed_stays_quiet_when_the_child_already_moved() {
 
 #[test]
 fn p491_pass0_seed_stays_quiet_when_no_replacement_is_newer() {
-    // Backlog #748 (Branch B): the host `@world` shape — installed
-    // qtmultimedia-6.11.3 records `ffmpeg:0/60.62.62=`, installed and final
-    // ffmpeg both sit at `0/60.62.62`, and the only tree replacements are
-    // the installed version itself; the visible-but-unmerged ffmpeg-9.0.2
-    // (`0/61.63.63`) the probe finds never merges, so the forced
-    // same-version reinstall repairs no binding. Reduced: installed
-    // p491con-2, the newest tree version, recording
-    // `>=dev-libs/p491lib-1:6/7=`, with installed p491lib-1 at `6/7` and
-    // tree p491lib-2 at `6/8` available but unmerged. Expected: no seed — a
-    // same-version "replacement" re-binds nothing.
-    // Charter property 1 (the final state holds with or without the
-    // reinstall; a resolver/fast difference is judged against the final
-    // state, never filed as a defect by itself).
+    // Host `@world` ffmpeg shape, reduced: installed p491con-2 (the newest tree
+    // version) records `>=dev-libs/p491lib-1:6/7=`; p491lib-2 at `6/8` is available
+    // but unmerged. Expected: no seed, a same-version "replacement" re-binds nothing
+    // (charter property 1).
     let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "2");
     let entries = p491_entries("2");
     let replace = p491_probe(&root, &entries, HashSet::new(), true);

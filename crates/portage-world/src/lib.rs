@@ -1335,11 +1335,10 @@ mod tests {
         std::fs::write(cache.join(pf), entry).expect("cache entry");
     }
 
-    /// PMS `dependencies.tex`, `sec:slot-dep`: a consumer is rebuilt when the
-    /// plan moves the sub-slot its `:=` dependency recorded, and when the
-    /// recorded sub-slot already differs from the installed provider's (an
-    /// earlier move the plan leaves alone, backlog #741); a `:*` consumer,
-    /// and one whose other recorded pins forbid the plan, are not.
+    /// PMS `dependencies.tex`, `sec:slot-dep`: a consumer is rebuilt when the plan
+    /// moves the sub-slot its `:=` dependency recorded, or when the recorded
+    /// sub-slot already differs from the installed provider's; a `:*` consumer, and
+    /// one whose other recorded pins forbid the plan, are not.
     #[test]
     fn a_sub_slot_change_rebuilds_the_slot_operator_consumers_only() {
         let tree = fixture_copy();
@@ -1479,8 +1478,7 @@ mod tests {
         }
     }
 
-    /// A tree shaped like backlog #746: `w746auto` builds with `w746help`,
-    /// which needs `w746loc` at run time, which needs `w746get`.
+    /// A tree where `w746auto` builds with `w746help`, which needs `w746loc` at run time.
     fn build_time_in_fact_tree(root: &Path) {
         add_ebuild_fields(
             root,
@@ -1493,9 +1491,8 @@ mod tests {
         add_ebuild(root, "dev-libs/w746get-1", "0", "");
     }
 
-    /// Charter property 2 (PMS 8.1: a build tool must be usable, backlog
-    /// #746): a runtime edge out of a package the plan builds with is a
-    /// build-time need in fact, so the cut spares it.
+    /// Charter property 2 (PMS 8.1: a build tool must be usable): a runtime edge out
+    /// of a package the plan builds with is a build-time need, so the cut spares it.
     #[test]
     fn a_build_tool_makes_its_runtime_closure_build_time() {
         let tree = fixture_copy();
@@ -1515,9 +1512,8 @@ mod tests {
         ));
     }
 
-    /// Charter property 2 (backlog #746): a runtime edge out of a package
-    /// nothing builds with is not a build-time need in fact, so the cut can
-    /// still serialize the cycle there.
+    /// Charter property 2: a runtime edge out of a package nothing builds with can
+    /// still be cut to serialize the cycle.
     #[test]
     fn a_runtime_dependency_of_a_runtime_dependency_is_not_build_time() {
         let tree = fixture_copy();
@@ -1562,11 +1558,9 @@ mod tests {
         assert!(world.refused.is_empty(), "{:?}", world.refused);
     }
 
-    /// The openssl shape of plan 02.740: `w740user` reaches
-    /// `|| ( dev-libs/w740compat:3 dev-libs/w740prov:0/3 )` and the kept
-    /// `w740sudo` (like the host's profile `@system` sudo) reaches
-    /// `dev-libs/w740prov:=`; `w740prov-3` (`0/3`) is installed while
-    /// `w740prov-4` (`0/4`) and `w740compat-3` are visible.
+    /// The openssl shape: `w740user` reaches `|| ( w740compat:3 w740prov:0/3 )`, the
+    /// kept `w740sudo` reaches `w740prov:=`; `w740prov-3` is installed, `w740prov-4`
+    /// and `w740compat-3` are visible.
     fn newest_arm_tree(root: &Path) {
         add_ebuild(
             root,
@@ -1615,10 +1609,9 @@ mod tests {
             .and_then(|s| s.change())
     }
 
-    /// Charter property 3 (plan 02.740): in plan mode the `||` branch every
-    /// atom of which the best visible candidate of its slot matches wins over
-    /// the installed-matching branch, so the plan takes the compat arm and
-    /// upgrades the provider instead of pinning the installed sub-slot.
+    /// Charter property 3: in plan mode the `||` branch the best visible candidates
+    /// match wins, so the plan upgrades the provider instead of pinning the installed
+    /// sub-slot.
     #[test]
     fn a_plan_prefers_the_branch_that_admits_the_best_version() {
         let world = newest_arm_world(true);

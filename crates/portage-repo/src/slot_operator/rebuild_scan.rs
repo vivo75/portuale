@@ -38,8 +38,7 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) excluded: &'a [String],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
-    /// `--emptytree`: Portage files no slot-operator rebuild there
-    /// (`depgraph.py:7917-7925`), so the stale-pin arm stays out.
+    /// `--emptytree`: Portage files no slot-operator rebuild, so the stale-pin arm stays out.
     pub(crate) empty: bool,
 }
 
@@ -239,13 +238,9 @@ pub(crate) fn slot_operator_rebuild_scan(
                 && (scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp));
             // New-slot arm scope: reachability or walked this pass.
             let new_slot_scope = scope.unwrap_or(reachable).contains(&cp) || walked.contains(&cp);
-            // Stale-pin arm scope: under --update every installed consumer
-            // the run does not merge, except one the pass already walked
-            // outside any scope: its own entry governs, so a walked
-            // consumer the pass keeps as-is stays out. Otherwise only one
-            // outside the walk (the #744 shape -- the provider move itself
-            // is checked per atom, since an unchanged provider still
-            // leaves a stale final).
+            // Stale-pin arm scope: under --update every installed consumer the run does
+            // not merge, except one the pass already walked (its own entry governs);
+            // otherwise only one outside the walk.
             let in_scope =
                 scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp);
             let stale_scope = if update {
@@ -341,16 +336,9 @@ pub(crate) fn slot_operator_rebuild_scan(
                     provider_joins.push(provider_cp);
                 }
             }
-            // A merge-bound consumer is already merging, so it contributes the
-            // display pair only (no schedule, no child filing). The stale-pin
-            // arm still files an unmerged consumer no arm above reached: its
-            // own walk re-binds nothing. The display pair is re-emitted on
-            // every pass (like the same-slot arm's): the fold path files the
-            // schedule but drops the pair, so only the settling pass's pair
-            // names the parent (`assemble_result` reads it into required_by).
-            // Re-emission also covers an already-scheduled consumer its scope
-            // no longer reaches (a walked consumer the pass keeps filed but
-            // unscoped): scheduling stays scoped, naming does not.
+            // A merge-bound consumer is already merging, so it contributes the display
+            // pair only. The pair is re-emitted every pass: only the settling pass's pair
+            // names the parent, and scheduling stays scoped while naming does not.
             if !survived || merge_bound_consumer {
                 if (stale_scope || scheduled.contains(&cp)) && !merge_bound_consumer {
                     stale_pin_for_consumer(
@@ -699,11 +687,8 @@ fn stale_pin_for_consumer(
 
 /// Whether any replacement ebuild for the consumer names the provider in an
 /// atom its *current* effective USE selects. A rebuild re-records the live
-/// dependencies, so a tree that no longer names the provider has nothing
-/// stale to repair; Portage's probe never fires for such a consumer either
-/// (it pairs only a provider that is a child of the replacement, so the
-/// #254 USE-conditional-off shape keeps its unsatisfied-probe rebuild but
-/// prints no block).
+/// dependencies, so a tree that no longer names the provider has nothing stale
+/// to repair.
 fn replacement_names_provider(args: ReplacementNamesProviderArgs<'_>) -> bool {
     let ReplacementNamesProviderArgs {
         gate,

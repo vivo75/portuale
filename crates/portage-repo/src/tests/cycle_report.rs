@@ -53,8 +53,7 @@ fn flags(list: &[(&str, bool)]) -> Vec<(String, bool)> {
 
 #[test]
 fn edge_use_names_the_enabled_flag_that_pulls_the_dependency_in() {
-    // Backlog #753: `usecyclea` bootstraps now; the pin moves to the
-    // still-cycling two-flag shape.
+    // `usecyclea` bootstraps now; pinned on the still-cycling two-flag shape.
     let (cycle, facts) = facts_for("dev-libs/cddseva");
     assert_eq!(
         edge_use_of(&cycle, &facts, "dev-libs/cddseva-1"),
@@ -94,8 +93,7 @@ fn edge_use_blames_every_flag_when_only_all_of_them_together_drop_it() {
 
 #[test]
 fn a_test_flag_edge_names_its_owner_for_the_features_test_pointer() {
-    // Backlog #753: `cddtsta` bootstraps now; the FEATURES=test pointer
-    // pin moves to the still-cycling two-flag `test?`+`doc?` shape.
+    // `cddtsta` bootstraps now; pinned on the still-cycling `test?`+`doc?` shape.
     let (_, facts) = facts_for("dev-libs/cddtdoa");
     assert_eq!(
         facts.test_dep_parents,
@@ -193,8 +191,7 @@ fn report_for(atom: &str, max: usize) -> CycleReport {
     })
 }
 
-/// Portage's JSON report shape for a USE-cycle fixture. Backlog #753:
-/// `usecyclea` bootstraps now, so the structure is pinned on the
+/// Portage's JSON report shape for a USE-cycle fixture, pinned on the
 /// still-cycling two-flag shape (`cddseva` needs both flags off).
 #[test]
 fn json_report_lists_both_rotations_and_the_flag_solution() {
@@ -226,8 +223,7 @@ fn json_report_lists_both_rotations_and_the_flag_solution() {
 
 #[test]
 fn json_report_carries_test_parents_masked_alternatives_and_truncation() {
-    // Backlog #753: `cddtsta` bootstraps now; the FEATURES=test parent pin
-    // moves to the still-cycling two-flag `test?`+`doc?` shape.
+    // `usecyclea` bootstraps now; pinned on the still-cycling `test?`+`doc?` shape.
     let r = report_for("dev-libs/cddtdoa", 10);
     assert_eq!(r.test_dep_parents, vec!["dev-libs/cddtdoa-1".to_string()]);
     assert_eq!(

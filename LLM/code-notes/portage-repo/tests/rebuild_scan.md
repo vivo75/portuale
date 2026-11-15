@@ -44,3 +44,31 @@ Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal ve
 - Backlog #269: the `mmprov`/`mmcons` shape from the #253 recipe with only `mmcons` requested -- installed `mmprov-1` (`0/1`) + `mmprov-2` (`1/1`) + `mmcons-1` bound `mmprov:0/1=`, tree `mmprov-3` (`1/2`).
 - Portage 3.0.82.2 container probe 2026-10-01 (`emerge --ignore-default-opts --pretend --color=n --backtrack=20 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer`): merges `mmprov-3` bare plus the `mmcons-1` rebuild (`rR`) with no `causing rebuilds` block. The update probe (`_slot_operator_update_probe` with `new_child_slot=True`, depgraph.py:3121-3126) finds `mmprov-3` among the available packages (`_iter_similar_available`) though no pass scheduled it; the backtrack (`_slot_operator_update_backtrack`, depgraph.py:2442) records the consumer alone. The pre-#269 scan ranged only over the scheduled `New`/`Upgrade` entries, so with no provider entry it scheduled nothing.
 - The #252 shape (provider requested too): `want_update` rides on `--update`, and the greedy pin keeps it probing nothing.
+
+## fn stale_pin_stale_bound_consumer_rebuilds_with_one_entry_per_slot
+
+- Backlog #738 as a plan-level pin: the host `pvuDN @world` shape after
+  #741/#744. `w738prov` is installed at sub-slot 3 with 4 visible;
+  `w738cons` is installed bound to `w738prov:0/3=` while its tree ebuild
+  carries the unversioned `w738prov:=`; a binary of the consumer built
+  against `0/3=` sits in the pool. A `--update --deep --usepkg` request
+  for the provider must settle with no slot conflict, one merge-bound
+  entry per `(category, package, slot)`, the provider upgraded 3 -> 4,
+  and the consumer rebuilt (charter property 1: the stale binding
+  repairs instead of conflicting). The consumer stays outside the walk
+  here, so the #741 stale-pin arm files the schedule: the `abi_rebuilds`
+  pair and the `slot_operator_rebuild` row marker pin that path, unlike
+  the in-walk repair a world-member consumer takes. The rebuild keeps
+  the pool binary: `--binpkg-changed-deps` strips `:slot/sub=` on both
+  sides before comparing, exactly like Portage's `strip_slots` in
+  `_changed_deps` (`_emerge/depgraph.py`, `_changed_deps` / `strip_slots`), so a sub-slot-only
+  drift is invisible to it in both implementations (on the host the
+  pool serves freshly built binaries, so the same rows land
+  consistent there). The scan-level scheduling is pinned by
+  `slot_operator_rebuild_scan_schedules_an_outside_consumer_whose_provider_moves_without_deep`
+  and its deep siblings; this pins the assembled plan.
+
+## fn slot_operator_rebuild_scan_schedules_an_outside_consumer_whose_provider_moves_without_deep
+
+- The #744 shape without `--deep`: a consumer outside the walk whose
+  provider the plan moves is rebuilt.

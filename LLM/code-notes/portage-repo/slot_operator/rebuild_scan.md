@@ -26,6 +26,23 @@ Rebuilds triggered by slot-operator dependencies.
 - #72 B3: a removal installs nothing, so it is not "in graph" for the slot-operator rebuild scan (Portage only rebuilds consumers of a package this run actually leaves at a new slot).
 - #269: Portage's probe ranges over every *available* package (`_iter_similar_available`, `depgraph.py:3015-3057`), not just the scheduled entries: a provider upgrade nobody pulled in (the `mmcons` shape) still rebuilds the consumer. Ebuilds only: a binary candidate has no ebuild-visibility verdict at this layer (cut, same direction as the old miss). Visible ones only (Portage's `_pkg_visibility_check`), highest first like the walk's own selection; versions already installed are not updates (Portage's `pkg.installed` skip).
 - #24 S5: Portage `_slot_change_probe` (`depgraph.py:2317-2359`), the slot-move-without-revbump arm (bug 456208). Runs even when the vdb scan above is gated off (Portage's first trigger arm is not complete-mode gated) -- see the helper's own doc comment. The #212 binary arm rides the same call and reports stale binaries into `masked` for `collect_feedback`'s `slot_operator_mask_built` records.
+- Stale-pin arm scope: under --update every installed consumer
+  the run does not merge, except one the pass already walked
+  outside any scope: its own entry governs, so a walked
+  consumer the pass keeps as-is stays out. Otherwise only one
+  outside the walk (the #744 shape -- the provider move itself
+  is checked per atom, since an unchanged provider still
+  leaves a stale final).
+- A merge-bound consumer is already merging, so it contributes the
+  display pair only (no schedule, no child filing). The stale-pin
+  arm still files an unmerged consumer no arm above reached: its
+  own walk re-binds nothing. The display pair is re-emitted on
+  every pass (like the same-slot arm's): the fold path files the
+  schedule but drops the pair, so only the settling pass's pair
+  names the parent (`assemble_result` reads it into required_by).
+  Re-emission also covers an already-scheduled consumer its scope
+  no longer reaches (a walked consumer the pass keeps filed but
+  unscoped): scheduling stays scoped, naming does not.
 
 ## fn slot_op_edge_for_atom
 - #269: Portage's update probe ranges over every *available* package (`_iter_similar_available`, `depgraph.py:3015`), not just the scheduled entries, so the new-slot arm can fire with both maps empty (the `mmcons` shape: no pass schedules the provider, yet the probe finds it among the available packages). The arm itself still needs `want_update` (the per-candidate gate), which is exactly `update || provider requested`.
@@ -78,3 +95,18 @@ pair on `GraphResult::slot_operator_replaced`.
 - #761 split of the former ~230-line `stale_pin_for_consumer` behind a 25-field argument struct: `StalePinCtx` holds what one scan pass knows (shared with `installed_final`, the former free `stale_installed_final`), `StalePinOut` what the arm files, and the steps are methods (`stale_edges`, `held_back`, `repairable`, `file_pairs`). `run_move` is the hoisted `new_slot.get(cp).or_else(|| new_slot_fresh.get(cp))`, which also removed the `.expect("provider moves this run")` in the hold-back loop. No output moved. Where the old comments carried history: the `--emptytree` exclusion is Portage `depgraph.py:7917-7925` (no slot-operator rebuild is filed there); the oneshot-argument half of the with-bdeps oracle and the 23 `go` holders explain the build-time key rule above; the p573virt shape (`slot_operator_rebuild_scan_does_not_schedule_a_consumer_whose_dependency_forbids_the_new_version`) is the hold-back refusal; the #744 shape is the "outside the walk, provider moves" case.
 - `held_back` is the Section 2.3 check: a rebuild may not hold a package back, so every recorded non-`:=` atom naming a provider this run moves must match the final version, and the first that does not is the refusal (`StalePinRefusal`).
 - Comparison with the fast plan (`portage-world/src/rebuild.rs`): the same rule over a different data model (the plan's `World` slots and recorded-USE reduction there; graph entries, replacement gates and the probe veto here). Not a duplicate to merge without a design decision; the resolver additionally gates on `update`/`moved`, scope and `probe_refused`, the fast plan additionally refuses a consumer whose recorded text does not reduce or that has no visible candidate.
+
+## fn replacement_names_provider
+
+- Whether any replacement ebuild for the consumer names the provider in an
+  atom its *current* effective USE selects. A rebuild re-records the live
+  dependencies, so a tree that no longer names the provider has nothing
+  stale to repair; Portage's probe never fires for such a consumer either
+  (it pairs only a provider that is a child of the replacement, so the
+  #254 USE-conditional-off shape keeps its unsatisfied-probe rebuild but
+  prints no block).
+
+## fn (see source)
+
+- `--emptytree`: Portage files no slot-operator rebuild there
+  (`depgraph.py:7917-7925`), so the stale-pin arm stays out.

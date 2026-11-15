@@ -387,20 +387,13 @@ impl Scan<'_> {
 }
 
 /// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
-/// dependency no longer matches the provider version the plan leaves behind:
-/// the chosen one when the plan changes the provider's slot, else the
-/// installed one (a binding already stale is still repaired). A `:*`
-/// dependency never counts, and neither does an atom whose provider version
-/// cannot be worked out.
+/// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
+/// dependency no longer matches the provider version the plan leaves behind (a
+/// binding already stale is repaired too). A `:*` dependency never counts.
 ///
-/// A stale consumer is rebuilt only when no other recorded atom forbids it:
-/// every non-`:=` atom naming a slot the plan changes must still match the
-/// chosen version there (a `=`/`~`/`<`/`>=` pin is judged by the matcher, not
-/// by a sub-slot compare). A `:=` trigger is judged by the sub-slot compare
-/// only: the matcher enforces recorded-sub equality
-/// (`portage-dep` `matches_slot`), so it would refuse every stale binding. A
-/// consumer with no visible tree candidate, and one whose text does not
-/// reduce, is refused rather than mis-judged.
+/// A stale consumer is rebuilt only when no other recorded atom forbids it; one
+/// with no visible tree candidate, or whose text does not reduce, is refused
+/// rather than mis-judged.
 ///
 /// PMS `dependencies.tex`, `sec:slot-dep`: `:=` binds the consumer to the
 /// slot and sub-slot it was built against.

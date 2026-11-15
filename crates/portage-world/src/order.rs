@@ -2,7 +2,7 @@
 //! needs, one row per slot. A dependency cycle is cut at a cuttable
 //! runtime-only edge when it has one; a cycle with none is genuine and is
 //! ordered implicitly, then reported for the checker to fail (charter 2a).
-//! No slot is ever listed twice.
+//! No [`Order`] lists a slot twice; the plan adds a charter 2a boot row on top.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -13,14 +13,9 @@ pub enum Order<'a> {
     /// By `category/package`, then slot. No claim about build order.
     Alpha,
     /// A slot after the slots it needs before it is merged or usable
-    /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`). A `PDEPEND`-only edge
-    /// puts no constraint on the order (PMS). A cycle is cut at a cuttable
-    /// runtime-only edge when it has one (a runtime edge out of a package
-    /// the plan builds with still orders, PMS 8.1); a cycle with none is
-    /// genuine: the walk below orders it implicitly and
-    /// [`build_time_cycles`] reports it, for the checker to fail (charter
-    /// 2a: a cycle no order satisfies is reported, never papered over by
-    /// building a package twice).
+    /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); `PDEPEND` alone orders nothing
+    /// (PMS). A cycle with no cuttable edge is genuine: [`build_time_cycles`] reports
+    /// it and it is never built twice (charter 2a).
     Depend,
     /// By the position in an order the caller got elsewhere (the resolver's
     /// merge list), keyed `cat/pkg:slot`; a slot not in it comes last, in
@@ -40,9 +35,9 @@ impl World {
     }
 
     /// The slots `@world` needs that a plan would change, in `how` order.
-    /// One row per slot: no slot is ever listed twice (charter 2a is
-    /// report-only — a cycle no order satisfies is failed by the checker,
-    /// never papered over by building a package twice).
+    /// One row per slot under every [`Order`]: a cycle no order satisfies is
+    /// failed by the checker, never built twice. The charter 2a boot row is
+    /// added by the plan afterwards, not here.
     #[must_use]
     pub fn ordered(&self, how: &Order<'_>) -> Vec<&SlotSet> {
         let mut changed: Vec<&SlotSet> = self
@@ -95,13 +90,9 @@ impl World {
 
 /// Every node of `edges` (and every node it points at), each after the
 /// nodes it points at. Walks in name order, so the result is the same on
-/// every run. A cycle is cut at the first cuttable runtime-only edge (a
-/// runtime edge out of a package the plan builds with still orders, so it is
-/// not cuttable); a cycle with no cuttable edge is genuine: no cut is
-/// chosen for it, the walk below orders it implicitly, and
-/// [`build_time_cycles`] reports it for the checker to fail. `kinds`
-/// carries the `*DEPEND` variables behind each edge, as bits of
-/// [`crate::DEP_KEYS`]; an edge without one counts as build-time.
+/// A cycle is cut at the first cuttable runtime-only edge; one with none is
+/// genuine and left to [`build_time_cycles`]. `kinds` carries the `*DEPEND` bits
+/// ([`crate::DEP_KEYS`]); an edge without one counts as build-time.
 pub(crate) fn depend_order(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
@@ -165,16 +156,9 @@ fn is_runtime_edge(kinds: &BTreeMap<(String, String), u8>, edge: &(String, Strin
     kinds.get(edge).is_some_and(|mask| mask & build_mask() == 0)
 }
 
-/// The nodes the plan builds with: the targets of a `DEPEND`, `BDEPEND` or
-/// `IDEPEND` edge, except `virtual/*` targets. PMS 8.1 makes such a package
-/// usable, so its `RDEPEND` closure constrains the order too. Excluding
-/// virtuals is a heuristic that keeps the perl/libcrypt rebuild cluster
-/// ordered, not PMS soundness: `BDEPEND virtual/foo` makes the provider a
-/// build input in fact, so a kept virtual's provider edge stays cuttable
-/// even when the installed provider is broken. The known hole (and the real
-/// fix) is filed as #751. One pass: build-time use must not propagate
-/// through `RDEPEND`, or every cycle edge would count as build-time in fact
-/// and no cycle could be cut.
+/// The nodes the plan builds with: targets of a `DEPEND`, `BDEPEND` or `IDEPEND`
+/// edge, except `virtual/*` (PMS 8.1: such a package must be usable, so its
+/// `RDEPEND` closure constrains the order). One level only: known limitation, #764.
 pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSet<String> {
     kinds
         .iter()
@@ -184,9 +168,8 @@ pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSe
         .collect()
 }
 
-/// Whether the runtime-only edge can be cut to serialize a cycle: an edge
-/// out of a package the plan builds with carries a build-time need in fact
-/// (backlog #746), so cutting it would build against an unusable package.
+/// Whether the runtime-only edge can be cut to serialize a cycle: an edge out of
+/// a package the plan builds with is a build-time need in fact.
 pub(crate) fn is_cuttable_runtime_edge(
     kinds: &BTreeMap<(String, String), u8>,
     build_used: &BTreeSet<String>,
@@ -260,12 +243,9 @@ fn cycle_cut(
 }
 
 /// The build-time cycles of `edges`: strongly connected components over
-/// build-kind edges only (`build_mask`; an edge without kind information
-/// counts as build-time, as before), members in walk order, deterministic.
-/// Empty means every build need is serializable; non-empty is genuine: the
-/// plan-world report reads this, nothing else, and the checker fails it
-/// (charter 2a: a cycle no order satisfies is reported, never papered over
-/// by building a package twice).
+/// build-kind edges only (an edge without kind information counts as
+/// build-time), members in walk order. Non-empty is genuine: the plan-world
+/// report reads this and the checker fails it (charter 2a).
 pub fn build_time_cycles(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
@@ -433,10 +413,8 @@ mod tests {
         assert!(pos(&o, "b/lib:0") < pos(&o, "a/app:0"));
     }
 
-    /// Charter property 2a (backlog #749): a pure build-time cycle has no
-    /// cuttable edge, so no cut is chosen for it — the walk orders it
-    /// implicitly (here `y` before `x`, the walk's name order) and
-    /// `build_time_cycles` reports the pair, which the checker fails.
+    /// Charter 2a: a pure build-time cycle has no cuttable edge, so no cut is chosen:
+    /// the walk orders it (`y` before `x`) and `build_time_cycles` reports the pair.
     /// Nothing is ever listed twice.
     #[test]
     fn an_all_build_time_cycle_is_ordered_once_and_reported() {
@@ -488,11 +466,9 @@ mod tests {
         assert!(pos(&o, virt) < pos(&o, user), "{o:?}");
     }
 
-    /// Charter property 2 (PMS 8.1: a build tool must be usable, so its
-    /// `RDEPEND` closure constrains the order): the cut spares a runtime-only
-    /// edge out of a package the plan builds with, and cuts the next
-    /// runtime-only edge instead, so the repaired provider still comes first
-    /// (backlog #746: `help2man -> Locale-gettext`, not `automake -> help2man`).
+    /// Charter property 2 (PMS 8.1): the cut spares a runtime-only edge out of a
+    /// package the plan builds with and cuts the next one, so the repaired provider
+    /// still comes first.
     #[test]
     fn a_runtime_edge_that_carries_a_build_time_need_is_not_cut() {
         let auto = "dev-libs/w746auto:0";
@@ -522,13 +498,9 @@ mod tests {
         assert!(pos(&o, loc) < pos(&o, auto), "{o:?}");
     }
 
-    /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): a
-    /// kept `virtual/*` middle confers no build-time status, so with `prov`
-    /// build-time-used the cycle's only cuttable edge is the virtual's own
-    /// provider edge — cut as the back edge once the genuine `base <-> prov`
-    /// pair is left to the implicit walk (`docs/evidence/02.751/`).
-    /// Theoretical, pinned, not proven safe: no live shape exhibits a
-    /// consumer building against a broken installed provider.
+    /// Charter property 2 (PMS 8.1): a kept `virtual/*` middle confers no build-time
+    /// status, so the cycle's only cuttable edge is the virtual's provider edge.
+    /// Theoretical, pinned, not proven safe.
     #[test]
     fn the_virtual_provider_edge_is_the_only_cuttable_edge() {
         let base = "dev-libs/w751base:0";
@@ -567,13 +539,8 @@ mod tests {
             &used,
             &(virt.to_string(), prov.to_string())
         ));
-        // The first cycle the walk meets is the genuine `base <-> prov`
-        // pair, with no cuttable edge: the cut loop leaves it alone (the
-        // walk orders it implicitly and the checker fails it — backlog
-        // #749: reported, never a second build) and cuts the remaining
-        // cycle at the virtual's provider edge instead — the back edge,
-        // and the only cuttable one. It is not a build-time cycle: the
-        // `prov -> base` half is `RDEPEND`, so the report reads nothing.
+        // The genuine `base <-> prov` pair has no cuttable edge and is left to the walk;
+        // the remaining cycle is cut at the virtual's provider edge, the only cuttable one.
         assert_eq!(
             runtime_cut(&g, &kinds, &used),
             Some((virt.to_string(), prov.to_string()))
@@ -589,8 +556,8 @@ mod tests {
         );
     }
 
-    /// Charter property 2: a cycle with a cuttable runtime-only edge is cut,
-    /// so every node is still listed once (backlog #743).
+    /// Charter property 2: a cycle with a cuttable runtime-only edge is cut, so every
+    /// node is still listed once.
     #[test]
     fn a_cycle_with_a_cuttable_runtime_edge_lists_each_node_once() {
         let prov = "dev-libs/w743prov:0";
@@ -615,10 +582,8 @@ mod tests {
         assert!(pos(&o, virt) < pos(&o, user), "{o:?}");
     }
 
-    /// Charter property 2 (backlog #745): the middle link — `depend_order`
-    /// on the mixed `R/B/R` `w745` graph yields the cut
-    /// `[prov, virt, user]`, which the literal checker passes with no
-    /// finding (every build atom is satisfied at start).
+    /// Charter property 2: `depend_order` on the mixed `R/B/R` `w745` graph yields
+    /// `[prov, virt, user]`, which the checker passes with no finding.
     #[test]
     fn the_mixed_cycle_cut_is_the_order_the_closure_walks() {
         let prov = "dev-libs/w745prov:0";

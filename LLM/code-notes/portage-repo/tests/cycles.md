@@ -51,12 +51,22 @@ Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge label
 ## fn circular_dep_solutions_suggests_disabling_the_gating_flag
 - Fixture `dev-libs/usecyclea` (IUSE +x) build-depends on `dev-libs/usecycleb` only under `x`; `usecycleb` build-depends back unconditionally.
 - `_find_suggestions` should offer exactly "disable x on usecyclea".
+- Backlog #753: `usecyclea` bootstraps now, so the end-to-end gating
+  suggestion pins the still-cycling two-flag shape instead —
+  `dev-libs/cddseva` needs *both* `doc` and `nls` off to drop the
+  edge, exactly one minimal solution.
 
 ## fn circular_dep_solutions_applies_the_autounmask_use_overlay
 - Backlog #208(b): `=dev-libs/cyc0w-3` needs `dev-libs/cyc0z[bar]`, so the resolve autounmasks `bar` on `cyc0z-3` (IUSE `+foo bar`, full DEPEND in the test). Portage `_pkg_use_enabled` (`_emerge/depgraph.py:7669`) evaluates the suggestion on the autounmasked `USE="bar foo"` while `bar` stays untouchable (`resolver/circular_dependency.py:104-114`), so the only assignment dropping `dev-libs/cyc0y` is `foo` off: `cyc0z-3 (Change USE: -foo)`. Without the overlay `bar` reads off and no assignment drops the atom (the generic "temporarily disabling USE flags" advisory).
 
 ## fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion
 - Same USE-gated cycle shape (here gpcyclea/gpcycleb), but top-level `dev-libs/gpcyclec` is a "grandparent" with its own hard `dev-libs/gpcyclea[x]` use-dep: `grandparent_use_conflict`'s `ignore` branch fires. `docs/history/find-suggestions-plan.md`'s "no fixture yet" note.
+- Grandparent with a hard use-dep on the fix: the suggestion list is
+  empty. Backlog #753: the `gpcyclec` fixture cycle bootstraps now, so
+  the disqualification is pinned on synthetic entries over the same
+  real ebuilds — the cycle's own suggestion ("disable x") is dropped
+  because `gpcyclec`'s recorded hard `gpcyclea[x]` requirement
+  contradicts it.
 
 ## fn mixed_priority_cycle_reports_per_edge_labels
 - Backlog #228, expected value from Portage: `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb -DEPEND-> dev-libs/slopcyca`. The pre-#228 detector saw only a soft run-time edge and merged silently. Grounded in the n228 probe (Portage 3.0.81.3 rc 1 with `(buildtime)` on the back edge and `(runtime_slot_op)` on the slot-op edge) and a fresh 3.0.82.2 probe printing `slopcycb depends on / slopcyca (buildtime) / slopcycb (runtime_slot_op)`.

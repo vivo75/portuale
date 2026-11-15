@@ -48,3 +48,8 @@ Eliminating unnecessary slot-operator rebuilds.
 
 ## gate threading (#571)
 - `SlotOperatorEliminateRebuildsArgs`, `SlotOperatorRebuildEntriesArgs` and the `tree_metadata_for` site carry the gate.
+
+## fn (see source)
+
+- `--emptytree`: Portage files no slot-operator rebuild there
+  (`depgraph.py:7917-7925`), so the stale-pin arm stays out.

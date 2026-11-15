@@ -9,6 +9,20 @@ rebuilds over the kept set.
 - Rule 2.3 (no rebuild may hold a package back): every recorded non-`:=` atom naming a slot the plan changes must match the chosen version there, judged by `Memos::atom_matches` (a version operator like `=5.42*` is judged by the matcher, not by a sub-slot compare). `:=` triggers are skipped in this check: `matches_slot` enforces recorded-sub equality, so the matcher would refuse every stale binding. `||` groups and `flag?` conditionals reduce against the recorded USE with the same `use_reduce_flat_disjunctive` the planner uses; a text that does not reduce refuses the consumer rather than mis-judging it.
 - Returns `StaleBindings` (`rebuild` set plus `refused` list) instead of a bare set, so the refusal is explicit. `World.refused` carries the refusals to `plan_world`, which names each once on stderr (property 5) and in `--json` as `stale-bindings`. Refusals sort by `(consumer, atom)`; the scan otherwise collects into `BTreeSet`s (no hash iteration in any order).
 - The p573virt shape is the reason the check reads *recorded* atoms: its tree ebuild pins `=5.42*` too, but a consumer with no visible tree ebuild accepts vacuously in the replacement gates, so only the recorded check guards the co-upgrade.
+- dependency no longer matches the provider version the plan leaves behind:
+  the chosen one when the plan changes the provider's slot, else the
+  installed one (a binding already stale is still repaired). A `:*`
+  dependency never counts, and neither does an atom whose provider version
+  cannot be worked out.
+
+  A stale consumer is rebuilt only when no other recorded atom forbids it:
+  every non-`:=` atom naming a slot the plan changes must still match the
+  chosen version there (a `=`/`~`/`<`/`>=` pin is judged by the matcher, not
+  by a sub-slot compare). A `:=` trigger is judged by the sub-slot compare
+  only: the matcher enforces recorded-sub equality
+  (`portage-dep` `matches_slot`), so it would refuse every stale binding. A
+  consumer with no visible tree candidate, and one whose text does not
+  reduce, is refused rather than mis-judged.
 
 ## fn kept_installed
 - See `## fn slot_operator`: `(node, InstalledPackage)` pairs in VDB order for every installed package the plan does not replace. `plan_json` renders `kept` from it, so the JSON is byte-identical to the old inline filter (verified by `json_rows_equal_text_rows_in_order` and the host kept count 1925 -> 1905, exactly the 20 new rows).

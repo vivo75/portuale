@@ -1,18 +1,8 @@
-//! Charter 2a bootstrap, real merges (backlog #753 C1/C2): the 3-row plan
-//! `[boot otherpkg(-useboh) -> pkgnew -> otherpkg (definitive)]` merges to
-//! completion under `-j1` (serial engine) and `-j2` (the parallel
-//! scheduler), and the boot row executes with its own reduced USE.
-//!
-//! The boot build's marker cannot be asserted after the full plan: the
-//! definitive reinstall is the same PF, so its unmerge deletes the boot
-//! row's files first (Portage reinstall semantics). C2 is therefore pinned
-//! by merging the boot row alone in its own ROOT (its marker and VDB USE
-//! lack the reduced flag), while the full-plan test pins C1 (all 3 rows
-//! land, rc 0) and the survivor's declared USE.
-//!
-//! Fixtures are the `dev-libs/w753*` ebuilds, whose `src_install` records
-//! `USE` into per-build marker files: `USE="-useboh"` in the boot build,
-//! full USE in the definitive one.
+//! Charter 2a bootstrap, real merges: the 3-row plan
+//! `[boot otherpkg(-useboh) -> pkgnew -> otherpkg]` merges under `-j1` and `-j2`,
+//! and the boot row executes with its own reduced USE. The boot marker is pinned
+//! by merging the boot row alone in its own ROOT (the definitive reinstall
+//! unmerges the boot row's files). Fixtures: `dev-libs/w753*`.
 
 use super::*;
 

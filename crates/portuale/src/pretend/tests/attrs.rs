@@ -399,8 +399,8 @@ fn nomerge_row_colours_word_and_package_with_the_row_colour() {
     );
 }
 
-/// Charter 2a (backlog #753): the boot row's text suffix names the removed
-/// flag and the coming rebuild; every other row renders no suffix.
+/// Charter 2a: the boot row's text suffix names the removed flag and the coming
+/// rebuild; every other row renders no suffix.
 #[test]
 fn bootstrap_suffix_marks_only_the_boot_row() {
     use portage_use_reduce::BootstrapUse;

@@ -53,8 +53,9 @@ python3 ../pmtest/differential-test-bed/compare/health-state-mutants.py /      #
 A finding is `(property, package, atom, reason, pre_existing)`.
 
 - It is a **failure** unless the property is `cycle-noted`, `checker-limitation`,
-  `removal-deps` or `private-library`. Those are notes: a cycle the charter
-  allows, a blind spot of the checker, a dependency a removal leaves unmatched
+  `removal-deps` or `private-library`. Those are notes: a weak blocker the plan
+  itself replaces later (`cycle-noted`, a name kept from when it also noted
+  build cycles; a genuine build cycle is now a `build-order` failure), a blind spot of the checker, a dependency a removal leaves unmatched
   (the user may remove it; portuale warns), and a library installed outside the
   linker's search path (a JDK, systemd), which its own program finds.
 - `pre_existing` means the system was already broken before the plan; it does

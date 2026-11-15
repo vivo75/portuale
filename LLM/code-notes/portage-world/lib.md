@@ -62,7 +62,7 @@ the slot sets the reorder pass ranks.
   `dev-libs/openssl:0/3`, and only then does the reorder pass (`chosen()` is
   the first visible version satisfying every requester) keep 3.6.5 although
   kept `app-admin/sudo`'s `openssl:=` best is 4.1.0. S0 capture
-  (`docs/evidence/02.740/requesters.stderr`): arm `[openssl-compat:3]` ->
+  (`LLM/evidence/02.740/requesters.stderr`): arm `[openssl-compat:3]` ->
   `Available`, arm `[openssl:0/3]` -> `Installed`; `dev-libs/openssl:0`
   `chosen=3.6.5` with `openssl:0/3` requested by exactly the four
   `openssl-compat` consumers and `openssl:=` by sudo et al.
@@ -91,4 +91,44 @@ the slot sets the reorder pass ranks.
   resolver side).
 
 ## fn analyse (guards, #760)
-- The USE guard of a build-time edge (`node -> dep`: the flags whose removal drops every build-time arm naming the dependency's `cp`) is no longer a `World` field read for every edge. `bootstrap::select` computes it only for the edges between members of one reported cycle (`bootstrap.rs`), from the raw `*DEPEND` strings via `repo_aux_metadata` (the S0-proved seam, `docs/evidence/02.753/`); `World::planned_use` is where the boot slot's declared USE comes from. Consequence: the guard of an edge outside every cycle no longer cuts the placement or closure walks (the resolver's `graph_view_reaches` never used it either).
+- The USE guard of a build-time edge (`node -> dep`: the flags whose removal drops every build-time arm naming the dependency's `cp`) is no longer a `World` field read for every edge. `bootstrap::select` computes it only for the edges between members of one reported cycle (`bootstrap.rs`), from the raw `*DEPEND` strings via `repo_aux_metadata` (the S0-proved seam, `LLM/evidence/02.753/`); `World::planned_use` is where the boot slot's declared USE comes from. Consequence: the guard of an edge outside every cycle no longer cuts the placement or closure walks (the resolver's `graph_view_reaches` never used it either).
+
+## fn a_plan_prefers_the_branch_that_admits_the_best_version
+
+- Charter property 3 (plan 02.740): in plan mode the `||` branch every
+  atom of which the best visible candidate of its slot matches wins over
+  the installed-matching branch, so the plan takes the compat arm and
+  upgrades the provider instead of pinning the installed sub-slot.
+
+## fn newest_arm_tree
+
+- The openssl shape of plan 02.740: `w740user` reaches
+  `|| ( dev-libs/w740compat:3 dev-libs/w740prov:0/3 )` and the kept
+  `w740sudo` (like the host's profile `@system` sudo) reaches
+  `dev-libs/w740prov:=`; `w740prov-3` (`0/3`) is installed while
+  `w740prov-4` (`0/4`) and `w740compat-3` are visible.
+
+## fn a_runtime_dependency_of_a_runtime_dependency_is_not_build_time
+
+- Charter property 2 (backlog #746): a runtime edge out of a package
+  nothing builds with is not a build-time need in fact, so the cut can
+  still serialize the cycle there.
+
+## fn a_build_tool_makes_its_runtime_closure_build_time
+
+- Charter property 2 (PMS 8.1: a build tool must be usable, backlog
+  #746): a runtime edge out of a package the plan builds with is a
+  build-time need in fact, so the cut spares it.
+
+## fn build_time_in_fact_tree
+
+- A tree shaped like backlog #746: `w746auto` builds with `w746help`,
+  which needs `w746loc` at run time, which needs `w746get`.
+
+## fn a_sub_slot_change_rebuilds_the_slot_operator_consumers_only
+
+- PMS `dependencies.tex`, `sec:slot-dep`: a consumer is rebuilt when the
+  plan moves the sub-slot its `:=` dependency recorded, and when the
+  recorded sub-slot already differs from the installed provider's (an
+  earlier move the plan leaves alone, backlog #741); a `:*` consumer,
+  and one whose other recorded pins forbid the plan, are not.

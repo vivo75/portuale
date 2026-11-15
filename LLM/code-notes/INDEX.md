@@ -201,6 +201,7 @@
 - [crates/portage-repo/src/tests/bind.rs](portage-repo/tests/bind.md) — Slot-operator binder unit tests: prune-rebuilds latch and token binding order.
 - [crates/portage-repo/src/tests/binpkg_use.rs](portage-repo/tests/binpkg_use.md) — `binpkg_respect_use_ok` tests: ebuild comparison, memo keys, force/mask handling.
 - [crates/portage-repo/src/tests/blockers.rs](portage-repo/tests/blockers.md) — Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification.
+- [crates/portage-repo/src/tests/bootstrap.rs](portage-repo/tests/bootstrap.md) — Comment text moved out of the source (review of branch `opencode`, backlog #763).
 - [crates/portage-repo/src/tests/complete_graph.rs](portage-repo/tests/complete_graph.md) — Complete-graph mode tests: the missing deep dep is never merged.
 - [crates/portage-repo/src/tests/conflict_use_display.rs](portage-repo/tests/conflict_use_display.md) — Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
 - [crates/portage-repo/src/tests/cycle_report.rs](portage-repo/tests/cycle_report.md) — Circular-dependency report pins against Portage captures.
@@ -390,6 +391,7 @@
 - [crates/portuale/src/emerge_build/scheduler.rs](portuale/emerge_build/scheduler.md) — The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized vdb merges.
 - [crates/portuale/src/emerge_build/source_merge.rs](portuale/emerge_build/source_merge.md) — The source-merge loop: build, then merge, one entry at a time (serial), or via the parallel scheduler.
 - [crates/portuale/src/emerge_build/status.rs](portuale/emerge_build/status.md) — Progress and status lines of the build scheduler: counters, background mode, `>>> Jobs:` and progress lines.
+- [crates/portuale/src/emerge_build/tests/bootstrap_merge.rs](portuale/emerge_build/tests/bootstrap_merge.md) — Comment text moved out of the source (review of branch `opencode`, backlog #763).
 - [crates/portuale/src/emerge_build/tests/buildpkgonly.rs](portuale/emerge_build/tests/buildpkgonly.md) — `--buildpkgonly` execution tests (end-to-end builds plus failure-mode pins).
 - [crates/portuale/src/emerge_build/tests/entry_env.rs](portuale/emerge_build/tests/entry_env.md) — Per-entry environment unit tests.
 - [crates/portuale/src/emerge_build/tests/logs.rs](portuale/emerge_build/tests/logs.md) — Build-log path, `PORTAGE_LOGDIR` symlink, and capture tests.
@@ -478,6 +480,7 @@
 - [crates/portuale/src/pretend/tests/gates.rs](portuale/pretend/tests/gates.md) — Display and early-return gates for non-pretend runs.
 - [crates/portuale/src/pretend/tests/global_updates.rs](portuale/pretend/tests/global_updates.md) — Global-updates AUTOCLEAN force pins (#562).
 - [crates/portuale/src/pretend/tests/info.rs](portuale/pretend/tests/info.md) — `emerge --info` field pins (#504).
+- [crates/portuale/src/pretend/tests/json.rs](portuale/pretend/tests/json.md) — Comment text moved out of the source (review of branch `opencode`, backlog #763).
 - [crates/portuale/src/pretend/tests/mod.rs](portuale/pretend/tests/mod.md) — Shared fixtures and pty helpers for the pretend tests.
 - [crates/portuale/src/pretend/tests/new_options.rs](portuale/pretend/tests/new_options.md) — New-option parsing pins (#503).
 - [crates/portuale/src/pretend/tests/news.rs](portuale/pretend/tests/news.md) — News parsing, selection, notices, and the read-news prompt arms.

@@ -109,13 +109,9 @@ pub(crate) fn print_tree(args: PrintTreeArgs<'_>) -> Vec<(usize, bool)> {
     // the forward walk already narrowed those edges and a second cp-keyed
     // pass would over-connect (multi-slot cps, `||` branches).
     //
-    // `required_by` is cp-keyed, so an owner whose own atom already resolved
-    // to one instance of this cp must not gain an edge to the others —
-    // except a charter 2a boot row (backlog #753): its sibling is the same
-    // slot's definitive rebuild, so the multi-slot ambiguity the guard
-    // protects against cannot arise, and without the edge the boot row
-    // would hang parentless off the tree instead of rendering as a real
-    // node under the owners that build against it.
+    // `required_by` is cp-keyed, so an owner whose own atom already resolved to one
+    // instance of this cp gains no edge to the others, except a charter 2a boot row
+    // (its sibling is the same slot's definitive rebuild).
     for (i, e) in entries.iter().enumerate() {
         if !e.deps.is_empty() {
             continue;

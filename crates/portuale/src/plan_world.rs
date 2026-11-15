@@ -1,21 +1,14 @@
 //! `mrg --plan-world[=update|emptytree] [--sort alpha|depend|resolver]`: what
 //! `emerge -uDNp @world` (or, with `emptytree`, `emerge -pe @world`) would
-//! install, worked out by `portage-world` instead of the resolver. One
-//! row per slot whose best visible version is not the installed one, and an `R`
-//! row for a kept package whose recorded `:slot/sub-slot=` dependency the plan
-//! breaks or that is already stale (with `plan-world-newuse`, also one whose
-//! USE changed). A stale binding the plan cannot repair is named on stderr
-//! instead of gaining a row. It sees no blockers
-//! and no `REQUIRED_USE`, so it can list less or more than the resolver; `--sort resolver` shows the
-//! resolver's own order for the same rows. `--sort depend` puts a package
-//! after what it needs before it is merged or usable: a runtime edge out of
-//! a package the plan builds with still orders (PMS 8.1, backlog #746), and
-//! a cycle with no cuttable edge is reported, never papered over
-//! (charter 2a, backlog #749) — except the charter 2a bootstrap, which
-//! serializes the one shape a single USE-flag reduction breaks (backlog
-//! #753): the boot row (reduced USE, temporary, marked) plus the definitive
-//! rebuild with the declared USE. A `PDEPEND` orders nothing (PMS). One row
-//! per slot, always, plus the boot row when a cycle bootstraps.
+//! install, worked out by `portage-world` instead of the resolver. One row per
+//! slot whose best visible version is not the installed one, and an `R` row for
+//! a kept package whose recorded `:slot/sub-slot=` dependency the plan breaks or
+//! that is already stale. A stale binding the plan cannot repair is named on
+//! stderr instead of gaining a row. It sees no blockers and no `REQUIRED_USE`;
+//! `--sort resolver` shows the resolver's own order for the same rows. `--sort
+//! depend` puts a package after what it needs (PMS 8.1); a cycle with no
+//! cuttable edge is reported, except the charter 2a bootstrap: one row per slot
+//! plus a boot row (reduced USE, marked) when a single flag breaks the cycle.
 
 use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
@@ -78,7 +71,7 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         let mut chain = cycle.to_vec();
         chain.extend(cycle.first().cloned());
         let mut line = format!(
-            "plan-world: build cycle with no serial order: {} (breakable only by a bootstrap variant with reduced USE; see backlog #753",
+            "plan-world: build cycle with no serial order: {} (no order satisfies it; disable a USE flag on one of these packages to break the cycle",
             chain.join(" -> ")
         );
         if let Some(boot) = plan.bootstrap.filter(|b| b.breaks(cycle)) {
@@ -630,11 +623,9 @@ mod tests {
         report.into_owned()
     }
 
-    /// The #746 shape: `w746auto` builds with the kept `w746help`, whose
-    /// `RDEPEND` needs the rebuilt `w746loc`; `w746get` and the new `w746icu`
-    /// close the cycle back to `w746auto`. The installed `w746loc` records a
-    /// stale `:=` on `w746prov` (installed `0/2`, recorded `0/1=`), so the
-    /// plan rebuilds it without moving the provider (backlog #741).
+    /// `w746auto` builds with the kept `w746help`, whose `RDEPEND` needs the rebuilt
+    /// `w746loc`; `w746get` and `w746icu` close the cycle. `w746loc` records a stale
+    /// `:=` on `w746prov`, so the plan rebuilds it without moving the provider.
     fn kept_middle_tree(root: &Path) {
         add_ebuild(
             root,
@@ -688,9 +679,9 @@ mod tests {
         add_installed(root, "dev-libs/w746prov-2", "0/2", &[]);
     }
 
-    /// Charter property 2 (PMS 8.1: a build tool must be usable, backlog
-    /// #746): the repaired provider is ordered before the package that builds
-    /// with the tool needing it, and the checker reports no `build-order`.
+    /// Charter property 2 (PMS 8.1): the repaired provider is ordered before the
+    /// package that builds with the tool needing it; the checker reports no
+    /// `build-order`.
     #[test]
     fn a_cycle_through_a_kept_package_orders_the_repaired_provider_first() {
         let world = ["dev-libs/w746auto"];
@@ -724,13 +715,9 @@ mod tests {
         );
     }
 
-    /// Charter property 2a (backlog #753): the owner's USE-conditional pair
-    /// bootstraps to three rows — the reduced-USE boot build, the middle,
-    /// the definitive rebuild with the declared USE — with the `bootstrap`
-    /// marker and suffix on the boot row only, rc 0, and the report line
-    /// naming the reduction. The failure the checker reports on the same
-    /// plan without the bootstrap is still pinned in pmtest
-    /// (`test_use_conditional_build_cycle_fails`).
+    /// Charter property 2a: the owner's USE-conditional pair bootstraps to three rows
+    /// (boot build, middle, definitive rebuild) with the marker and suffix on the
+    /// boot row only, rc 0, and a report line naming the reduction.
     #[test]
     fn a_genuine_build_cycle_bootstraps_with_a_marked_boot_row() {
         fn genuine_cycle_tree(root: &Path) {
@@ -773,7 +760,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            err.contains("plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753; bootstrap with USE=\"-useboh\" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)"),
+            err.contains("plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE=\"-useboh\" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)"),
             "{err}"
         );
         assert!(
@@ -859,10 +846,8 @@ mod tests {
         );
     }
 
-    /// Resolver/fast-plan agreement (backlog #753, S1.4): both emitters call
-    /// the shared leaf with the same cycles + guard map, so the same tree
-    /// yields the same affected-slot rows — same order, same USE sets, same
-    /// markers. No new sort, no new tie-break anywhere.
+    /// Resolver/fast-plan agreement: both emitters call the shared leaf, so the same
+    /// tree yields the same affected-slot rows, order, USE sets and markers.
     #[test]
     fn resolver_and_fast_plan_agree_on_the_bootstrap_rows() {
         use std::collections::{BTreeSet, HashMap};
@@ -953,9 +938,7 @@ mod tests {
                 assert!(fast_use.contains(&flag), "{cp}: {flag}");
             }
         }
-        // Reversed argv must agree row-for-row: member order is name order
-        // inside `bootstrap_reduction`, so the insertion-order walk cannot
-        // flip the pick (backlog #753 I2).
+        // Reversed argv must agree row-for-row: member order is name order.
         let reversed: Vec<String> = atoms.iter().rev().map(|s| s.to_string()).collect();
         let resolved_rev = portage_repo::ResolveRequest::new(
             &root,
@@ -1056,11 +1039,8 @@ mod tests {
         );
     }
 
-    /// Charter property 2 (backlog #749): the mixed `R/B/R` #745 shape is a
-    /// runtime-closed cycle, not a genuine build-time one — every build
-    /// atom is satisfied at start, so one row per slot and no finding at
-    /// all. No report line either: the `prov -> base` half is `RDEPEND`,
-    /// so the report reads nothing here.
+    /// Charter property 2: the mixed `R/B/R` shape is a runtime-closed cycle, not a
+    /// genuine build-time one: one row per slot, no finding, no report line.
     #[test]
     fn a_runtime_cycle_is_one_row_per_slot() {
         fn runtime_cycle_tree(root: &Path) {
@@ -1146,20 +1126,10 @@ mod tests {
         assert!(!report.contains("cycle-noted"), "{report}");
     }
 
-    /// Charter property 2 (PMS 8.1; backlog #751, plan `02.751` §6-A): the
-    /// S0 probe tree — kept `virtual/w751virt`, installed `w751prov-1`
-    /// with a stale `w751base:0/1=` binding rebuilt as `w751prov-2`,
-    /// `w751base-2` with `BDEPEND w751prov` (so the virtual's provider
-    /// edge is the cycle's only cut), consumer `w751user-1` with
-    /// `BDEPEND virtual/w751virt`. The rows keep today's cut and order —
-    /// one row per slot (backlog #749: the `prov`/`user` duplicates are
-    /// gone), the virtual never a merge — and the checker reports no
-    /// `build-order`. No report line either: the `base <-> prov` pair is
-    /// runtime-closed, not a build-time cycle. Limitation: a kept
-    /// virtual's stale provider rebuilds after the consumer that builds
-    /// with it, yet nothing exhibits a consumer building against a
-    /// broken copy (here the installed copy is still usable at the
-    /// consumer's build) — theoretical, pinned, not proven safe.
+    /// Charter property 2 (PMS 8.1): a kept `virtual/w751virt` whose provider has a
+    /// stale binding. The rows keep one row per slot, the virtual never merges, and
+    /// the checker reports no `build-order`. Limitation: the stale provider rebuilds
+    /// after the consumer that builds with it; theoretical, pinned, not proven safe.
     #[test]
     fn a_kept_virtual_with_a_stale_provider_keeps_todays_cut_and_order() {
         fn stale_virtual_tree(root: &Path) {
@@ -1294,9 +1264,8 @@ mod tests {
         );
     }
 
-    /// Charter property 3 (plan 02.740): the fast plan takes the `||` arm
-    /// whose atoms the best visible candidates match, so the compat package
-    /// is new and the provider upgrades instead of staying pinned.
+    /// Charter property 3: the fast plan takes the `||` arm the best visible
+    /// candidates match, so the provider upgrades instead of staying pinned.
     #[test]
     fn the_fast_plan_takes_the_newest_arm_of_a_disjunctive_dependency() {
         fn newest_arm_tree(root: &Path) {

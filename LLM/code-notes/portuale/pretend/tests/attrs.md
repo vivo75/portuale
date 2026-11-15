@@ -27,3 +27,8 @@ Root suffixes, the mask column, USE suffixes, and nomerge rows.
 
 ## fn nomerge_row_colours_word_and_package_with_the_row_colour
 - Portage `Display.pkgprint`: `[` + colour("nomerge".ljust(13)) + " ] " + colour(pkg); `PKG_NOMERGE` is teal (oracle `LLM/evidence/2026-10-23-506/`, shape 02, `ROOT=/` so the tail is the bare space before oldbest).
+
+## fn bootstrap_suffix_marks_only_the_boot_row
+
+- Charter 2a (backlog #753): the boot row's text suffix names the removed
+  flag and the coming rebuild; every other row renders no suffix.

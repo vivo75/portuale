@@ -817,13 +817,9 @@ fn next_alternative<'a>(
 /// The enum is ordered by bin ordinal (higher discriminant = more
 /// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`].
 /// Deriving `Ord` gives selection exactly the bin-order in either pass.
-///
-/// `BestVisibleAvailable` and `BestVisibleInstalled` are portuale's own, not
-/// Portage's: in plan mode a branch every atom of which the best visible
-/// candidate of its slot matches outranks a merely installed one, so the plan
-/// takes the arm that admits the newest version (charter property 3). The
-/// installed bit stays the tie-break, so two best-visible arms still prefer
-/// the installed one and nothing churns.
+/// `BestVisibleAvailable` and `BestVisibleInstalled` are portuale's own: in plan
+/// mode a branch the best visible candidates match outranks a merely installed
+/// one (charter property 3); the installed bit stays the tie-break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum AltPreference {
     /// No atom in this alternative resolves at all (portuale's guard only).
@@ -1459,8 +1455,7 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    /// Charter property 3 (plan 02.740): a best-visible first branch beats an
-    /// installed-only second one in the first pass, so the rank is selectable.
+    /// Charter property 3: a best-visible first branch beats an installed-only second one.
     #[test]
     fn a_selectable_best_visible_alternative_beats_an_installed_one() {
         // Branch 1 is best-visible but uninstalled; branch 2 merely
@@ -1771,10 +1766,8 @@ mod tests {
     }
 }
 
-/// The mark a bootstrap (reduced-USE first) build carries: the single USE
-/// flag removed relative to the declared build, and the declared USE itself.
-/// Charter 2a: a boot row is never a second identical row (that is what #749
-/// removed) — the marker, not the outcome, distinguishes the rows.
+/// The mark a bootstrap (reduced-USE first) build carries: the single flag
+/// removed and the declared USE. The marker, not the outcome, tells the rows apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapUse {
     /// The one flag forced off for the boot build (stored bare: `useboh`).
@@ -1790,17 +1783,11 @@ pub struct BootstrapUse {
 /// which side built them.
 pub const BUILD_KIND_MASK: u8 = 0b11001;
 
-/// Each atom occurrence of `dep_str` with the positive USE flags guarding
-/// it: the active `flag?` stack at its position (nested conditionals
-/// accumulate), in string order. Occurrences — not distinct atoms — are
-/// the unit: the bootstrap rule universally quantifies over them, so an
-/// unguarded second arm keeps the edge even when the first is guarded
-/// (backlog #506: `unrelated? ( X ) X`, `doc? ( X ) nls? ( X )`).
-/// A negated `!flag?` arm guards nothing here: removing it means forcing
-/// the flag on, which the single-flag `USE = declared − flag` boot shape
-/// cannot express, so such an arm counts as unconditional (never reduced).
-/// `||` markers and grouping parens carry no atoms and contribute none.
-/// Best-effort: unbalanced input yields the guards seen before the break.
+/// Each atom occurrence of `dep_str` with the positive USE flags guarding it
+/// (nested conditionals accumulate), in string order. Occurrences, not distinct
+/// atoms, are the unit: an unguarded second arm keeps the edge. A negated
+/// `!flag?` arm guards nothing here (the single-flag boot shape cannot express
+/// it). Best-effort: unbalanced input yields the guards seen before the break.
 pub fn conditional_guards(dep_str: &str) -> Vec<(String, BTreeSet<String>)> {
     let mut out: Vec<(String, BTreeSet<String>)> = Vec::new();
     let mut active: Vec<String> = Vec::new();
@@ -1832,20 +1819,12 @@ pub fn conditional_guards(dep_str: &str) -> Vec<(String, BTreeSet<String>)> {
     out
 }
 
-/// The smallest deterministic single-flag reduction breaking a reported
-/// cycle set: `(boot slot, flag to force off)`, or `None` when no single
-/// flag breaks any reported cycle (callers keep today's report, never
-/// enumerate flag combinations). `cycles` arrive in reported order with
-/// walk-order members; `edges` is the adjacency they were reported over;
-/// `kinds` carries the `*DEPEND` bits behind each edge in `DEP_KEYS`
-/// layout (a missing entry counts as build-time); `use_guards` maps each
-/// directed edge to the USE flags whose removal drops it. Tie-breaks, in
-/// order: a flag breaking more than one reported cycle in the same pass
-/// wins; then reported-cycle order; then member order within the cycle;
-/// then the lexicographically first flag. A USE-gated self-loop is an
-/// ordinary one-member cycle under this rule. Member order is name order:
-/// each reported cycle is sorted first, so both emitters agree no matter
-/// which walk order reported it (reversed argv picks the same reduction).
+/// The smallest deterministic single-flag reduction breaking a reported cycle
+/// set: `(boot slot, flag to force off)`, or `None` when no single flag breaks
+/// any reported cycle. `use_guards` maps each directed edge to the USE flags
+/// whose removal drops it; `kinds` carries the `*DEPEND` bits per edge. Ties:
+/// more cycles broken, then reported-cycle order, member (name) order, then the
+/// first flag. `eligible(boot slot, flag)` filters candidates before the ties.
 /// `eligible(boot slot, flag)` filters the candidates before the tie-breaks,
 /// so a refused flag hands the choice to the next one.
 pub fn bootstrap_reduction(
@@ -2009,8 +1988,7 @@ mod bootstrap_tests {
             .collect()
     }
 
-    /// Charter 2a (backlog #753): the owner's pair reduces to the owner's
-    /// own choice — `otherpkg` with `-useboh`.
+    /// Charter 2a: the owner's pair reduces to `otherpkg` with `-useboh`.
     #[test]
     fn a_bootstrap_reduction_picks_useboh_on_otherpkg() {
         let other = "dev-libs/w749otherpkg:0";
@@ -2205,8 +2183,7 @@ mod bootstrap_tests {
             vec![BTreeSet::from(["a".to_string(), "b".to_string()])]
         );
         assert_eq!(nof("dev-libs/y"), vec![BTreeSet::from(["a".to_string()])]);
-        // Backlog #506: a repeated atom keeps both occurrences — the
-        // unguarded arm is what keeps the edge under either flag.
+        // A repeated atom keeps both occurrences: the unguarded arm keeps the edge.
         let repeated = conditional_guards("doc? ( dev-libs/x ) nls? ( dev-libs/x )");
         assert_eq!(
             repeated

@@ -115,7 +115,7 @@ the middle, the definitive rebuild with the declared USE) and the report
 line names the reduction:
 
 ```
-plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (breakable only by a bootstrap variant with reduced USE; see backlog #753; bootstrap with USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)
+plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)
 [ebuild  N     ] dev-libs/w749otherpkg-1:0 (bootstrap: USE="-useboh" temporary — will be rebuilt with the declared USE)
 [ebuild  N     ] dev-libs/w749pkgnew-1:0
 [ebuild  N     ] dev-libs/w749otherpkg-1:0

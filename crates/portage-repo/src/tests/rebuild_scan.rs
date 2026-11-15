@@ -1970,8 +1970,8 @@ fn slot_operator_rebuild_scan_non_deep_keeps_a_walked_consumer_out() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// The #744 shape without `--deep`: a consumer outside the walk whose
-/// provider the plan moves is rebuilt.
+/// Without `--deep`: a consumer outside the walk whose provider the plan moves
+/// is rebuilt.
 #[test]
 fn slot_operator_rebuild_scan_schedules_an_outside_consumer_whose_provider_moves_without_deep() {
     let (base, repos) = stale_pin_base("5.42", "0/5.42", "dev-libs/prov:0/5.42=");
@@ -2130,26 +2130,12 @@ fn slot_operator_rebuild_scan_considers_every_stale_provider() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// Backlog #738 as a plan-level pin: the host `pvuDN @world` shape after
-/// #741/#744. `w738prov` is installed at sub-slot 3 with 4 visible;
-/// `w738cons` is installed bound to `w738prov:0/3=` while its tree ebuild
-/// carries the unversioned `w738prov:=`; a binary of the consumer built
-/// against `0/3=` sits in the pool. A `--update --deep --usepkg` request
-/// for the provider must settle with no slot conflict, one merge-bound
-/// entry per `(category, package, slot)`, the provider upgraded 3 -> 4,
-/// and the consumer rebuilt (charter property 1: the stale binding
-/// repairs instead of conflicting). The consumer stays outside the walk
-/// here, so the #741 stale-pin arm files the schedule: the `abi_rebuilds`
-/// pair and the `slot_operator_rebuild` row marker pin that path, unlike
-/// the in-walk repair a world-member consumer takes. The rebuild keeps
-/// the pool binary: `--binpkg-changed-deps` strips `:slot/sub=` on both
-/// sides before comparing, exactly like Portage's `strip_slots` in
-/// `_changed_deps` (`_emerge/depgraph.py`, `_changed_deps` / `strip_slots`), so a sub-slot-only
-/// drift is invisible to it in both implementations (on the host the
-/// pool serves freshly built binaries, so the same rows land
-/// consistent there). The scan-level scheduling is pinned by
-/// `slot_operator_rebuild_scan_schedules_an_outside_consumer_whose_provider_moves_without_deep`
-/// and its deep siblings; this pins the assembled plan.
+/// Plan-level pin of the host `pvuDN @world` shape: a consumer outside the walk
+/// bound to `w738prov:0/3=` while the provider upgrades 3 -> 4 settles with no
+/// slot conflict, one merge-bound entry per slot, and the consumer rebuilt
+/// (charter property 1: a stale binding repairs instead of conflicting). The
+/// rebuild keeps the pool binary: `--binpkg-changed-deps` strips `:slot/sub=`
+/// before comparing.
 #[test]
 fn stale_pin_stale_bound_consumer_rebuilds_with_one_entry_per_slot() {
     use super::tests_consumer_pin_conflict::{hermetic_root, request_in};

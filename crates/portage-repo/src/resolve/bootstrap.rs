@@ -39,13 +39,9 @@ fn token_cp(token: &str) -> Option<(String, String)> {
 }
 
 /// Whether removing `flag` drops every build-time arm of `metadata` naming
-/// `dep_cp`: every raw atom with that `cp` sits under the flag
-/// (universally quantified, so an unguarded `||` alternative keeps the edge
-/// and the STOP-2 re-check below refuses instead of dropping a live need).
-/// A `[flag?]` USE-conditional atom counts as unguarded: the single-flag
-/// boot shape cannot express it, so such an edge is never reduced. One
-/// shared predicate for the guard map and the `deps` filter, so the two
-/// cannot disagree.
+/// `dep_cp`. Universally quantified: an unguarded `||` alternative or a
+/// `[flag?]` atom keeps the edge. One predicate for the guard map and the
+/// `deps` filter, so the two cannot disagree.
 fn edge_drops_without_flag(
     metadata: &HashMap<String, String>,
     dep_cp: &(String, String),
@@ -304,14 +300,9 @@ pub fn bootstrap_flag_eligible(
         && (!keep_required_use || required_use_holds_without(metadata, use_flags, flag))
 }
 
-/// The boot row for the definitive entry with `flag` forced off: the
-/// entry cloned variant-for-variant (the marker, not the outcome,
-/// distinguishes the rows), USE displays recomputed with the flag off,
-/// `deps` the reduced closure (the build-time `DepEdge`s to cycle members
-/// whose arm the flag guards are gone), `dep_input` re-pointed at the
-/// reduced evaluation. `blockers` ride along as filed under the declared
-/// USE (no fixture conditions a blocker on the reduced flag; re-evaluating
-/// them under boot USE is open work, not a known divergence).
+/// The boot row for the definitive entry with `flag` forced off: the entry
+/// cloned (the marker distinguishes the rows), USE recomputed without the flag,
+/// `deps` the reduced closure, `dep_input` re-pointed at the reduced evaluation.
 #[allow(clippy::too_many_arguments)]
 fn boot_row(
     definitive: &GraphEntry,
@@ -506,14 +497,8 @@ pub(crate) fn maybe_bootstrap(
             *hard = false;
         }
     }
-    // Rewrite rule on the sorted vec: the boot row takes the earliest of
-    // the boot slot's own position and its transitive dependents (it must
-    // precede everything needing it), and the definitive entry moves to
-    // immediately after the last entry that transitively build-depends on
-    // the boot slot (reduced build graph).
-    // Every entry that transitively build-depends on the boot slot: the
-    // boot row precedes the earliest of them, the definitive entry follows
-    // the latest.
+    // Boot row: before the earliest entry that transitively build-depends on the
+    // boot slot; definitive entry: right after the latest one (reduced build graph).
     let merge_index = merge_bound_index(&pass.entries);
     let mut dependents: BTreeSet<usize> = BTreeSet::new();
     for (i, e) in pass.entries.iter().enumerate() {
