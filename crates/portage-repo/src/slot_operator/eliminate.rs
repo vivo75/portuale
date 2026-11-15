@@ -211,8 +211,8 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) usepkg: bool,
 }
 
-/// Legacy path for the `--solver=pubgrub` / `--solver=resolvo` bridges only:
-/// those engines re-drive no pass, so they keep the post-pass synthesiser --
+/// Legacy path for the `--solver=pubgrub` bridge only:
+/// the engine re-drives no pass, so it keeps the post-pass synthesiser --
 /// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
 /// iterated until the set stops growing. The default solver path seeds the
 /// consumer as a walked node instead.

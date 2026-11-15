@@ -4,7 +4,7 @@ use crate::*;
 
 /// Which dependency-solving algorithm answers a [`ResolveRequest`].
 /// Portuale-only (Portage's `emerge` has no `--solver`): `Portage` is the
-/// backtracking walk; `PubGrub`/`Resolvo` drive lu-zero's bridges (see
+/// backtracking walk; `PubGrub` drives lu-zero's bridge (see
 /// `solver_bridge.rs`). The selection rides inside [`ResolveRequest`] so a
 /// [`Resolver`] stays a `Box<dyn Resolver>` picked at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -14,8 +14,6 @@ pub enum SolverKind {
     Portage,
     /// PubGrub version solving over the same repo facts.
     PubGrub,
-    /// resolvo CDCL SAT solving over the same repo facts.
-    Resolvo,
 }
 
 impl SolverKind {
@@ -25,7 +23,6 @@ impl SolverKind {
         match value {
             "portage" => Some(SolverKind::Portage),
             "pubgrub" => Some(SolverKind::PubGrub),
-            "resolvo" => Some(SolverKind::Resolvo),
             _ => None,
         }
     }
@@ -36,7 +33,6 @@ impl SolverKind {
         match self {
             SolverKind::Portage => "portage",
             SolverKind::PubGrub => "pubgrub",
-            SolverKind::Resolvo => "resolvo",
         }
     }
 }
@@ -78,6 +74,5 @@ pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
     match kind {
         SolverKind::Portage => Box::new(BacktrackingResolver),
         SolverKind::PubGrub => Box::new(solver_bridge::PubGrubResolver),
-        SolverKind::Resolvo => Box::new(solver_bridge::ResolvoResolver),
     }
 }

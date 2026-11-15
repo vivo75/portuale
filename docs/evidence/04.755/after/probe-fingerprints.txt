@@ -1,0 +1,38 @@
+argv: emerge --pretend dev-libs/newpkg
+rc=0 stdout=cf37e5ed654726db3aeebff5f00c0545defb4068fec2dabd17c2c740f73a1d1f stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/newpkg
+rc=0 stdout=cf37e5ed654726db3aeebff5f00c0545defb4068fec2dabd17c2c740f73a1d1f stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/diamond
+rc=0 stdout=619ef6e3977941e9fadebec33c4eac51e3c15fd3d5d1af8c3cdfb0edcc45a5ad stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend dev-libs/diamond
+rc=0 stdout=619ef6e3977941e9fadebec33c4eac51e3c15fd3d5d1af8c3cdfb0edcc45a5ad stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/slotconfgroup
+rc=1 stdout=d857c310bbc35eefaa47b548f6f31dbc60158318debc181100d9240fffd22666 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/maskedpkg
+rc=1 stdout=7a9f6b3f6cfb21380c6ee710fd9f324771d7e6bff273385924e22441850f83de stderr=5fb462661d1237be50157656b6f45143d475e267dd20eee12dec168f5a0acade
+
+argv: emerge --pretend --solver=pubgrub dev-libs/graphblockerparent
+rc=1 stdout=7fa202a24cc8c039dd6134fe2e0ce1d3dfe3c456dfb54daa0e894f91a09f1eea stderr=c9aeb8a0ede2f1469c7b0b828f62483fbc73fcc5e5f3ad99828a2ac53796d66f
+
+argv: emerge --pretend --solver=pubgrub dev-libs/blockerpkg
+rc=0 stdout=d5a56f3a5cdc5e2f3f039f9033df74ce31bb74996df9e318cf53814a5c1f464f stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/hardcyclea
+rc=1 stdout=c3e65142f6242c3f4d5d7b21b4cc0ad208c7f2187a2089ec12b9d9245684a439 stderr=3fbaadcb3fe4d2d625720296f3c3cb7362d29fc767f33ef6bbca54fadcbb6daf
+
+argv: emerge --pretend --solver=pubgrub dev-libs/slotconflicttarget
+rc=0 stdout=b2660da15d3a205221240185ad23e90f4227810a95832f6068df027c05dd1b59 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend -v --solver=pubgrub dev-libs/pkgusemaskforcepkg
+rc=0 stdout=398891ef05fce71c9f672b369471de99c55fa63cea162b5513566cc2edd43b95 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend dev-libs/slotconfgroup
+rc=1 stdout=d857c310bbc35eefaa47b548f6f31dbc60158318debc181100d9240fffd22666 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+argv: emerge --pretend --solver=pubgrub dev-libs/p569prov
+rc=0 stdout=9d5086ada6953d7b182a10f7f0226757102bff9eef3cf5fd0404df7c2b0cadf2 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

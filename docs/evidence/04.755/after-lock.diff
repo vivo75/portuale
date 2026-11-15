@@ -1,0 +1,261 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 4172d755..5c2fb77e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -15,7 +15,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+ dependencies = [
+  "cfg-if",
+- "getrandom 0.3.4",
+  "once_cell",
+  "version_check",
+  "zerocopy",
+@@ -278,7 +277,7 @@ dependencies = [
+  "command-fds",
+  "fancy-regex",
+  "futures",
+- "getrandom 0.4.3",
++ "getrandom",
+  "hostname",
+  "inherent",
+  "itertools 0.14.0",
+@@ -305,7 +304,7 @@ source = "git+https://github.com/vivo75/brush?rev=eb3b6c7bfdc3720ae5329f9d3336bb
+ dependencies = [
+  "bon",
+  "cached",
+- "getrandom 0.4.3",
++ "getrandom",
+  "peg",
+  "thiserror",
+  "tracing",
+@@ -652,15 +651,6 @@ version = "1.19.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+ 
+-[[package]]
+-name = "elsa"
+-version = "1.11.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "9abf33c656a7256451ebb7d0082c5a471820c31269e49d807c538c252352186e"
+-dependencies = [
+- "stable_deref_trait",
+-]
+-
+ [[package]]
+ name = "equivalent"
+ version = "1.0.3"
+@@ -677,16 +667,6 @@ dependencies = [
+  "windows-sys",
+ ]
+ 
+-[[package]]
+-name = "event-listener"
+-version = "5.4.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
+-dependencies = [
+- "parking",
+- "pin-project-lite",
+-]
+-
+ [[package]]
+ name = "experiment-tree-diagram"
+ version = "300.83.0"
+@@ -740,12 +720,6 @@ version = "0.1.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+ 
+-[[package]]
+-name = "fixedbitset"
+-version = "0.5.9"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
+-
+ [[package]]
+ name = "flate2"
+ version = "1.1.11"
+@@ -808,12 +782,6 @@ version = "1.0.7"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+ 
+-[[package]]
+-name = "foldhash"
+-version = "0.1.5"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+-
+ [[package]]
+ name = "foldhash"
+ version = "0.2.0"
+@@ -940,18 +908,6 @@ dependencies = [
+  "parking_lot",
+ ]
+ 
+-[[package]]
+-name = "getrandom"
+-version = "0.3.4"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+-dependencies = [
+- "cfg-if",
+- "libc",
+- "r-efi 5.3.0",
+- "wasip2",
+-]
+-
+ [[package]]
+ name = "getrandom"
+ version = "0.4.3"
+@@ -961,7 +917,7 @@ dependencies = [
+  "cfg-if",
+  "js-sys",
+  "libc",
+- "r-efi 6.0.0",
++ "r-efi",
+  "rand_core 0.10.1",
+  "wasm-bindgen",
+ ]
+@@ -985,15 +941,6 @@ dependencies = [
+  "ahash",
+ ]
+ 
+-[[package]]
+-name = "hashbrown"
+-version = "0.15.5"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+-dependencies = [
+- "foldhash 0.1.5",
+-]
+-
+ [[package]]
+ name = "hashbrown"
+ version = "0.16.1"
+@@ -1002,7 +949,7 @@ checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+ dependencies = [
+  "allocator-api2",
+  "equivalent",
+- "foldhash 0.2.0",
++ "foldhash",
+ ]
+ 
+ [[package]]
+@@ -1519,12 +1466,6 @@ dependencies = [
+  "seize",
+ ]
+ 
+-[[package]]
+-name = "parking"
+-version = "2.2.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
+-
+ [[package]]
+ name = "parking_lot"
+ version = "0.12.5"
+@@ -1575,18 +1516,6 @@ version = "0.8.6"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7011d97b484a5ebdc4b1fdb3b12d5e4bbbea56e9d22b688f2e79e04b65a7d8a6"
+ 
+-[[package]]
+-name = "petgraph"
+-version = "0.8.3"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
+-dependencies = [
+- "fixedbitset",
+- "hashbrown 0.15.5",
+- "indexmap",
+- "serde",
+-]
+-
+ [[package]]
+ name = "phf"
+ version = "0.11.3"
+@@ -1663,16 +1592,6 @@ dependencies = [
+  "version-ranges",
+ ]
+ 
+-[[package]]
+-name = "portage-atom-resolvo"
+-version = "0.8.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "72c91698ccc730567ceb639f32b80471f2d421bc507e0c4ed2b3bb67d0c31921"
+-dependencies = [
+- "portage-atom",
+- "resolvo",
+-]
+-
+ [[package]]
+ name = "portage-dep"
+ version = "300.83.0"
+@@ -1710,7 +1629,6 @@ dependencies = [
+  "md-5",
+  "portage-atom",
+  "portage-atom-pubgrub",
+- "portage-atom-resolvo",
+  "portage-dep",
+  "portage-fetch",
+  "portage-profile",
+@@ -1720,7 +1638,6 @@ dependencies = [
+  "portage-util",
+  "portage-vdb",
+  "portage-versions",
+- "resolvo",
+ ]
+ 
+ [[package]]
+@@ -1914,12 +1831,6 @@ dependencies = [
+  "proc-macro2",
+ ]
+ 
+-[[package]]
+-name = "r-efi"
+-version = "5.3.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+-
+ [[package]]
+ name = "r-efi"
+ version = "6.0.0"
+@@ -1942,7 +1853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+ dependencies = [
+  "chacha20",
+- "getrandom 0.4.3",
++ "getrandom",
+  "rand_core 0.10.1",
+ ]
+ 
+@@ -2033,22 +1944,6 @@ dependencies = [
+  "portage-required-use",
+ ]
+ 
+-[[package]]
+-name = "resolvo"
+-version = "0.12.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a5d0149e99c7af5382e3da8bb05b23089cf0398e66509f724453ff903004541e"
+-dependencies = [
+- "ahash",
+- "elsa",
+- "event-listener",
+- "futures",
+- "indexmap",
+- "itertools 0.15.0",
+- "petgraph",
+- "tracing",
+-]
+-
+ [[package]]
+ name = "ripemd"
+ version = "0.2.0"
+@@ -2356,7 +2251,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+ dependencies = [
+  "fastrand",
+- "getrandom 0.4.3",
++ "getrandom",
+  "once_cell",
+  "rustix",
+  "windows-sys",

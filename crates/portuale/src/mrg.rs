@@ -687,7 +687,7 @@ const OPTIONS: &[Opt] = &[
         alias: None,
         short: None,
         kind: Kind::Value,
-        choices: &["portage", "pubgrub", "resolvo"],
+        choices: &["portage", "pubgrub"],
         missing: "",
         help: "which dependency solver resolves the graph (default portage)",
     },
@@ -2017,13 +2017,13 @@ mod tests {
         }
     }
 
-    /// `--solver=` (portuale-only) accepts exactly the three solvers and
+    /// `--solver=` (portuale-only) accepts exactly the two solvers and
     /// forwards `--solver=<value>` to the emerge codepath; anything else
     /// is a clap usage error, and omitting it forwards nothing (the
     /// codepath defaults to portage).
     #[test]
     fn solver_value_forwards_to_the_emerge_codepath() {
-        for value in ["portage", "pubgrub", "resolvo"] {
+        for value in ["portage", "pubgrub"] {
             let m = parse(&["--pretend", &format!("--solver={value}"), "cat/pkg"]).unwrap();
             assert_eq!(
                 m.get_one::<String>("solver").map(String::as_str),

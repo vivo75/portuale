@@ -1,0 +1,22 @@
+S1/S3 after-state (plan 04.755, branch backlog/755-remove-resolvo).
+Binary: target/release/portuale rebuilt from the S1 tree (REGEN_EXIT 0).
+Suite: scripts/pytest-parallel.sh -n8, PMTEST_BASETEMP=/var/tmp/pytest-755d,
+  log after/suite.log, junit /var/tmp/755-after.xml.
+  Result: 1 failed, 4958 passed, 2 skipped, 2 xfailed in 393.10s (4963 nodes:
+  4964 baseline minus the deleted test_702).
+  The single failure is test_733_tree_does_not_nest_a_row_under_a_hidden_leaf[pubgrub],
+  a shutil.Error copying the flickering fixtures/var/db/.pkg.portage_lockfile
+  (the #754 race in _698_root's bare copytree, a helper the #754 fix did not cover).
+  It passes solo (2 passed, 0.84s) on the new binary; the [portage] param passed in-suite.
+  Baseline's own single failure (check-world mtimedb flicker, same family) passes here.
+  Per-test set diff (after/suite-set.diff): only the deleted test_702 plus the two
+  suite-run flakes, which swap sides (each fails once, passes solo and in the other run).
+  All 4961 other tests: identical status. No STOP-1.
+D4 probes: after/probe-fingerprints.txt — 13/13 byte-identical to before (see diff below:
+  no output). The enumerated exceptions verified in after/ captures:
+  --solver=sat and --solver=resolvo both exit 2 with the two-value message;
+  --help lists "portage (default) or pubgrub".
+Corpus: the suite reports CorpusDrift on test_solver_portage_matches_the_default_resolution#2
+  (stderr changed: the unknown-value text) — the 3 resolvo-naming blobs found in the
+  pre-change corpus check (blobs 601ea1/e75909/fcb7a76). Expected (D4 exception list:
+  error/help text). NOT blessed, corpus NOT edited — bless is the owner's call.

@@ -343,7 +343,7 @@ impl<'a> Default for EmergeOpts<'a> {
             // --backtrack=COUNT: the resolver's retry ceiling after a solvable slot
             // conflict (`--backtrack=0` disables backtracking).
             backtrack_max: DEFAULT_BACKTRACK_MAX,
-            // --solver=<portage|pubgrub|resolvo>: portuale-only pick of the solving
+            // --solver=<portage|pubgrub>: portuale-only pick of the solving
             // algorithm (default: the backtracking walk Portage runs).
             solver: portage_repo::SolverKind::Portage,
             // --verbose-conflicts: show *every* parent atom of a slot conflict.
@@ -1155,15 +1155,13 @@ fn parse_graph_opts<'a>(
             *idx += 2;
             v.clone()
         } else {
-            eprintln!("emerge: option '--solver' requires a value (portage, pubgrub or resolvo)");
+            eprintln!("emerge: option '--solver' requires a value (portage or pubgrub)");
             return Err(ExitCode::from(2));
         };
         opts.solver = match portage_repo::SolverKind::parse(&value) {
             Some(kind) => kind,
             None => {
-                eprintln!(
-                    "emerge: --solver: {value:?} is not \"portage\", \"pubgrub\" or \"resolvo\""
-                );
+                eprintln!("emerge: --solver: {value:?} is not \"portage\" or \"pubgrub\"");
                 return Err(ExitCode::from(2));
             }
         };

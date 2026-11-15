@@ -192,7 +192,7 @@
 - [crates/portage-repo/src/slot_operator/installed_parent_update_probe.rs](portage-repo/slot_operator/installed_parent_update_probe.md) — The update probe for an installed parent (the `_slot_operator_replace_installed` seed).
 - [crates/portage-repo/src/slot_operator/rebuild_scan.rs](portage-repo/slot_operator/rebuild_scan.md) — Rebuilds triggered by slot-operator dependencies.
 - [crates/portage-repo/src/slot_operator/unsat_probe.rs](portage-repo/slot_operator/unsat_probe.md) — The unsatisfied slot-operator dependency probe.
-- [crates/portage-repo/src/solver_bridge.rs](portage-repo/solver_bridge.md) — Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
+- [crates/portage-repo/src/solver_bridge.rs](portage-repo/solver_bridge.md) — Alternate `--solver=` backend: PubGrub over the same repo facts.
 - [crates/portage-repo/src/tests/abi_probe.rs](portage-repo/tests/abi_probe.md) — ABI conflict probe tests: rebuild-vs-report gates and display continuity.
 - [crates/portage-repo/src/tests/autounmask.rs](portage-repo/tests/autounmask.md) — Autounmask suggestion, abort-path, cascade, and breakage tests.
 - [crates/portage-repo/src/tests/backtrack_params.rs](portage-repo/tests/backtrack_params.md) — `slot_conflict_mask_choices` unit tests: missed-update sibling grouping.
