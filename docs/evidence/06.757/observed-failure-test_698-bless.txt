@@ -1,0 +1,31 @@
+........................................................................ [ 97%]
+........................................................................ [ 98%]
+...................................................................      [100%]
+=================================== FAILURES ===================================
+____ test_698_a_holder_without_a_route_still_withholds_the_upgrade[portage] ____
+[gw1] linux -- Python 3.14.10 /var/tmp/pxvenv/bin/python
+
+emerge_binary = PosixPath('/var/tmp/pytest-parallel/popen-gw1/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'COLORTERM': 'truecolor', 'REA_KUNA_COMMAND': '/home/vivo/.local/bin/kuna', 'XDG_CONFIG_DIRS': '/etc/xdg', ...}
+tmp_path = PosixPath('/var/tmp/pytest-parallel/popen-gw1/test_698_a_holder_without_a_ro0')
+solver = 'portage'
+
+    @pytest.mark.parametrize("solver", ["portage", "pubgrub"])
+    def test_698_a_holder_without_a_route_still_withholds_the_upgrade(
+        emerge_binary, fixture_env, tmp_path, solver
+    ):
+        """Counter-example of the test above: `p573virt` (installed @world, its
+        tree ebuild still pins `=p569prov-5.42*`) cannot follow, so the provider
+        stays at 5.42 with both solvers; the default solver also prints the
+        skipped-update block (the bridge prints none, #431 S1). Backlog #703, charter
+        property 5 (messages help): where no such block exists (pubgrub) a NOTE names the one
+        holder that cannot follow (`p573virt`, not `p698rebuild`, which can); the default solver's
+        block already names it, so no second NOTE (duplicate text is noise). Portage prints the
+        skipped-update block only (comparison, `LLM/portage-quirks.md` Q31)."""
+>       env = _698_root(fixture_env, tmp_path, ["dev-libs/p698rebuild", "dev-libs/p573virt"],
+                        [("dev-libs/p573virt-1", "=dev-libs/p569prov-5.42* dev-libs/p569prov:0/5.42=")])
+
+pytests-contract-suite/test_emerge_pretend_contract.py:39958: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+pytests-contract-suite/test_emerge_pretend_contract.py:39886: in _698_root
+    shutil.copytree(Path(fixture_env["ROOT"]) / "var", root / "var", symlinks=True)
