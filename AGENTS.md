@@ -23,10 +23,11 @@ Humans new to the tree start with
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) (build, test, comments,
 commits).
 
-Paths under `LLM/` that older text cites but the tree no longer has (finished
-plans, reviews, `LLM/evidence/…`) are in the archive: see
+Some paths under `LLM/` that older text cites but the tree no longer has 
+(finished plans, reviews, `LLM/evidence/…`) are in the archive: see
 [`LLM/ARCHIVE.md`](LLM/ARCHIVE.md) and `LLM/ARCHIVE.manifest.tsv`. Do not
-repoint those citations; they are history.
+repoint those citations; they are history. Newer sessions may create
+plans, reviews and evidence.
 
 ## The "next slice" workflow
 
