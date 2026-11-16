@@ -1,0 +1,12 @@
+Classification of every difference in compare.txt / compare-usepkg.txt (consumer cp key; fast = mrg --plan-world, df = default solver, pg = pubgrub).
+Roots ctl, r703: both sides empty, df == pg. No difference.
+prov: consumer cp {p569virt} on both; row text differs: fast (BIND, null) vs resolver (=5.42*, 5.44)  -> D1 (fast plan refuses an unreached consumer with provider null, reason "no visible ebuild"). Agreement at the consumer key, non-empty.
+bdw: consumer cp {p569virt} on both (D1 row text); reinstalls {p698rebuild} on both. Agreement, non-empty (DEPEND read for a walked consumer on both).
+bdw --usepkg: fast reinstalls {p698rebuild}; resolver {} on both solvers -> A4 (bdeps off, DEPEND not read).
+r698: fast refuses p698reinst (=5.42*, 5.44) with no reinstall row; resolver reinstalls it (holder route), both solvers -> D-698. p569virt row -> D1. p698rebuild reinstalled by both.
+gone: fast also names p766gone (BIND, null), resolver silent -> A1.
+unred: fast refuses p698rebuild (BIND, 5.44) "not satisfied" with no reinstall; resolver silent on the refusal and reinstalls p698rebuild on both solvers -> A3/A3b. p569virt -> D1.
+bdout: fast also names p698rebuild (BIND, null), resolver silent -> D1 hides A4 (consumer outside the walk); record only.
+virtw, vw2: provider version differs (fast p569prov 5.44 + reinstall p569virt, resolver keeps 5.42) -> version-choice difference (Q4 G3), not a rule difference; record only.
+pull: both plans name p573virt (consumer key; D1 row text); both reinstall p569virt on df/fast (agreement); pg reinstalls {} -> class S (pubgrub does not schedule the rebuild the default solver files for a walked stale consumer). Cause by source: grep -c installed_walked crates/portage-repo/src/solver_bridge.rs = 0, i.e. #598's walked-consumer scope (default solver) is not an input of bridge_slot_operator_rebuilds; the p569virt consumer is then neither rebuilt nor named in pubgrub's NOTE. Not documented as a cut in code-notes/solver_bridge.md. Pinned exactly; residue #770.
+Nothing unclassified. All proven claims of plan 0.4-0.5 (D1 on prov, D-698 on r698) reproduced.

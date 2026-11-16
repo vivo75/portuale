@@ -1,0 +1,58 @@
+crates/portage-world/src/rebuild.rs:54:pub struct RefusedBinding {
+crates/portage-world/src/rebuild.rs:69:    pub(crate) refused: Vec<RefusedBinding>,
+crates/portage-world/src/rebuild.rs:181:) -> RefusedBinding {
+crates/portage-world/src/rebuild.rs:182:    RefusedBinding {
+crates/portage-world/src/rebuild.rs:269:    ) -> Option<RefusedBinding> {
+crates/portage-world/src/rebuild.rs:312:    ) -> Result<bool, RefusedBinding> {
+crates/portage-world/src/rebuild.rs:400:pub(crate) fn slot_operator(
+crates/portage-world/src/rebuild.rs:422:    let mut refused: Vec<RefusedBinding> = Vec::new();
+crates/portage-world/src/lib.rs:91:pub use rebuild::RefusedBinding;
+crates/portage-world/src/lib.rs:518:    /// ([`RefusedBinding`]): kept consumers the scan refused, each named once.
+crates/portage-world/src/lib.rs:519:    pub refused: Vec<RefusedBinding>,
+crates/portage-world/src/lib.rs:1469:            let expected: Vec<crate::rebuild::RefusedBinding> = refusal
+crates/portage-world/src/lib.rs:1471:                .map(|(atom, provider)| crate::rebuild::RefusedBinding {
+crates/portuale/src/plan_world.rs:198:    // The checker reads `entries` and `kept`; `stale-bindings` rides along
+crates/portuale/src/plan_world.rs:204:        format!("\"stale-bindings\":[{}],", stale.join(","))
+crates/portuale/src/plan_world.rs:274:fn refusal_reason(refusal: &portage_world::RefusedBinding) -> String {
+crates/portuale/src/plan_world.rs:1262:            out.contains("\"stale-bindings\":[{\"consumer\":\"dev-libs/w741user\",\"atom\":\"=dev-libs/w741prov-1*\",\"provider\":\"dev-libs/w741prov-2\""),
+crates/portuale/src/pretend/json.rs:549:    pub(crate) stale_pin_refusals: &'a [portage_repo::StalePinRefusal],
+crates/portuale/src/pretend/json.rs:625:    // `stale-bindings` rides along only when a binding is left unrepaired, so
+crates/portuale/src/pretend/json.rs:641:        format!(",\"stale-bindings\":[{}]", rows.join(","))
+crates/portage-repo/src/slot_operator/eliminate.rs:218:    pub(crate) refused: Vec<StalePinRefusal>,
+crates/portage-repo/src/slot_operator/eliminate.rs:247:    let mut refused: Vec<StalePinRefusal>;
+crates/portage-repo/src/tests/eliminate.rs:783:        vec![StalePinRefusal {
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:13:    pub(crate) refused: Vec<StalePinRefusal>,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:162:    let mut refused: Vec<StalePinRefusal> = Vec::new();
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:344:                    stale_pin_for_consumer(
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:416:    refused: &'a mut Vec<StalePinRefusal>,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:503:    fn held_back(&self, pkg: &InstalledPackage, keyed: &[Vec<String>]) -> Option<StalePinRefusal> {
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:526:                return Some(StalePinRefusal {
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:628:fn stale_pin_for_consumer(
+crates/portage-repo/src/tests/rebuild_scan.rs:1936:        vec![StalePinRefusal {
+crates/portage-repo/src/tests/rebuild_scan.rs:2289:        vec![StalePinRefusal {
+crates/portage-repo/src/resolve/skipped.rs:71:pub struct StalePinRefusal {
+crates/portage-repo/src/solver_bridge.rs:10279:            vec![super::super::StalePinRefusal {
+crates/portage-repo/src/resolve/pass_state.rs:52:    pub(crate) stale_pin_refusals: Vec<StalePinRefusal>,
+crates/portage-repo/src/resolve/result.rs:285:    /// [`StalePinRefusal`]); a note the renderer prints, rc untouched.
+crates/portage-repo/src/resolve/result.rs:286:    pub stale_pin_refusals: Vec<StalePinRefusal>,
+../pmtest/pytests-contract-suite/test_world_crosscheck.py:84:    fast = {"entries": [], "kept": [], "stale-bindings": [stale], "aborted": None}
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40397:    hides it, and `--json` carries it as `stale-bindings` only when there is one."""
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40412:    assert doc["stale-bindings"] == [
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40420:    assert "stale-bindings" not in plain, plain
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40441:    `--quiet` hides it, `--json` carries `stale-bindings` only when there is one. The pubgrub
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40455:    assert doc["stale-bindings"] == [
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:40463:    assert "stale-bindings" not in plain, plain
+LLM/code-notes/portage-repo/slot_operator/eliminate.md:17:- #765: returns `SlotOperatorRebuilds { entries, abi_rebuilds, refused }`; `refused` is the last (settled) scan's stale pins the rebuild could not repair, which the bridge puts in `GraphResult::stale_pin_refusals` so `--solver=pubgrub` prints the same NOTE and `--json` `stale-bindings` as the default solver. The scan arguments stay the bridge's (`effective`/`scope` `None`, empty `walked_installed`/`undone`), so the refusals can differ from the default path's on shapes the bridge sees wider or narrower (without `--update` or with `@world` seeds it judges a superset; under `--update` without seeds a subset).
+LLM/code-notes/portuale/pretend/problem_reports.md:80:- #761 (charter property 5): `SlotOpRebuildScan.refused` was read only by tests, so a consumer whose recorded versioned pin (`=dev-libs/prov-5.42*`) forbids the provider version the plan installs stayed stale and the user was told nothing. The scan's refusals reach `GraphResult::stale_pin_refusals` (the settling pass's scan, in `unsatisfied_dead_end` or `assemble_result`) and print as a NOTE after the held-back notes: consumer cpv, the atom that forbids the repair, the provider version, and what to do. Exit code untouched; `--quiet` hides it like its neighbours; `--json` carries `stale-bindings` only when non-empty so other documents stay byte-identical. The wording follows the fast plan's `plan-world` refusal (`portage-world` `RefusedBinding`, `plan_world.rs` `refused_line`), which names the same refusal. The pubgrub bridge (`--solver=pubgrub`) runs the same scan through `slot_operator_rebuild_entries` and files the same refusals (#765; it used to drop them, and the NOTE was missing under that solver; its scan arguments differ from the default path's: `effective: None`, `scope: None`, empty `walked_installed`). A consumer with no visible tree candidate stays silent here although the fast plan reports it (`no visible ebuild`); a follow-up if wanted.
+LLM/code-notes/portage-repo/tests/eliminate.md:26:- #765: the p573virt shape through `stale_pin_base` (shared with `tests/rebuild_scan.rs`, hence `pub(super)`): the provider moves 5.42 -> 5.44 past the consumer's recorded `=dev-libs/prov-5.42*`, so nothing is scheduled and the one `StalePinRefusal` comes back. The solver-level twin is `solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal`.
+../pmtest/differential-test-bed/compare/world-crosscheck.py:23:                                     not repair (one `stale-bindings` row)
+../pmtest/differential-test-bed/compare/world-crosscheck.py:141:    for stale in fast.get("stale-bindings", []):
+LLM/code-notes/portage-world/rebuild.md:5:## fn slot_operator
+LLM/code-notes/portage-world/rebuild.md:10:- Returns `StaleBindings` (`rebuild` set plus `refused` list) instead of a bare set, so the refusal is explicit. `World.refused` carries the refusals to `plan_world`, which names each once on stderr (property 5) and in `--json` as `stale-bindings`. Refusals sort by `(consumer, atom)`; the scan otherwise collects into `BTreeSet`s (no hash iteration in any order).
+LLM/code-notes/portage-world/rebuild.md:28:- See `## fn slot_operator`: `(node, InstalledPackage)` pairs in VDB order for every installed package the plan does not replace. `plan_json` renders `kept` from it, so the JSON is byte-identical to the old inline filter (verified by `json_rows_equal_text_rows_in_order` and the host kept count 1925 -> 1905, exactly the 20 new rows).
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:80:## fn stale_pin_for_consumer (multi-provider)
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:83:## fn stale_pin_for_consumer
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:92:- #741/#744 S2: the former 3-tuple is a struct with `scheduled`, `abi_rebuilds`, `masked`, and `refused` (`Vec<StalePinRefusal>`), so the refusal is a named field rather than a fourth tuple slot. #761: `refused` now reaches `GraphResult::stale_pin_refusals` and the pretend NOTE (a refused consumer is still not scheduled). #765: the pubgrub bridge's `slot_operator_rebuild_entries` keeps the settled scan's `refused` too. Five call sites updated (`assemble`, `slot_conflict_backtrack`, `unsatisfied_dead_end`, `eliminate`, `tests/eliminate`) plus the `tests/rebuild_scan.rs` destructures, mechanically mapped positionally (`scheduled`, `abi_rebuilds`, `masked`).
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:95:- #761 split of the former ~230-line `stale_pin_for_consumer` behind a 25-field argument struct: `StalePinCtx` holds what one scan pass knows (shared with `installed_final`, the former free `stale_installed_final`), `StalePinOut` what the arm files, and the steps are methods (`stale_edges`, `held_back`, `repairable`, `file_pairs`). `run_move` is the hoisted `new_slot.get(cp).or_else(|| new_slot_fresh.get(cp))`, which also removed the `.expect("provider moves this run")` in the hold-back loop. No output moved. Where the old comments carried history: the `--emptytree` exclusion is Portage `depgraph.py:7917-7925` (no slot-operator rebuild is filed there); the oneshot-argument half of the with-bdeps oracle and the 23 `go` holders explain the build-time key rule above; the p573virt shape (`slot_operator_rebuild_scan_does_not_schedule_a_consumer_whose_dependency_forbids_the_new_version`) is the hold-back refusal; the #744 shape is the "outside the walk, provider moves" case.
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:96:- `held_back` is the Section 2.3 check: a rebuild may not hold a package back, so every recorded non-`:=` atom naming a provider this run moves must match the final version, and the first that does not is the refusal (`StalePinRefusal`).
+LLM/code-notes/portage-repo/solver_bridge.md:71:- ABI rebuilds (H.15, last slice): the walk's own gate (`rebuild_if_new_slot`, not `ignore_built_slot_operator_deps`) and complete-mode reachability (empty outside complete mode suppresses the scan, like a plain non-complete walk). The `(provider, consumer)` pairs feed `_show_abi_rebuild_info`. #765: the same call's refused stale pins fill `GraphResult::stale_pin_refusals` (the NOTE and `stale-bindings`); `holder_fix` does not call the scan, and its #703 note and this one name different consumers.

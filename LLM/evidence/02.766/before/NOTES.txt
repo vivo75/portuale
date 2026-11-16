@@ -1,0 +1,11 @@
+S0 notes (plan LLM/02.766-stale-rule-one-place.opus.md), 2026-11-16
+binary: /tmp/opencode/766bin/portuale (copy of target/release/portuale) sha256=1a37cbaee5796e8453886f79823bb870d062890655141a2c30cbd884665d76b6
+portuale HEAD: a316f686fecfaf1327d67fdd0c7dadec72e00c34 (backlog/766-stale-rule-one-place); pmtest HEAD: 9161c2b1342fe856cff766fd4c2c27dc3480d4f1 (backlog/766-stale-rule-one-place)
+frozen fixtures: /var/tmp/766fx (cp -a of ../pmtest/fixtures); roots: /var/tmp/766roots (LLM/evidence/02.766/mkroots.sh; updates record seeded by seed_updates.py so --pretend applies no global update: without it the first run on a root moves newmovepkg and the JSON differs between runs)
+env: ROOT=/var/tmp/766roots/<root> PORTAGE_RUNNING_ROOT=$ROOT PORTAGE_CONFIGROOT=/var/tmp/766fx DISTDIR=/var/tmp/766fx/distfiles PORTAGE_REPOSITORIES=cat of /var/tmp/766fx/etc/portage/repos.conf/* (as probe.sh)
+/etc/make.local: 0 bytes (empty)
+effective resolver argv: emerge [--solver=pubgrub] --json|-- --pretend --update --deep --newuse --getbinpkg=n [--usepkg: usepkg run only] @world ; PORTUALE_PG_TRACE=1 on the pubgrub runs
+fast argv: mrg --plan-world [--json] --sort depend
+raw output: /var/tmp/766raw/{before1,before2,usepkg} (not committed); hashes in probes.txt, probes-2.txt, probes-usepkg.txt (before1 vs before2: identical; every pg row has pg_lines>0, every other row 0)
+S0.1 inventory: inventory.txt; files outside the plan's lists: crates/portage-world/src/lib.rs (the caller of the fast scan, plan 0.1 site lib.rs:582-606; a carrier of world.refused, renders nothing). No other reader.
+suite baseline: 5008 passed, 2 skipped, 2 xfailed (junit /var/tmp/766-base.xml); cargo: passed 3575 failed 0 ignored 5

@@ -1,0 +1,16 @@
+== l0-health-20261116T110034Z WORLD_resolver-nobin vs FAST_world
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []
+== l0-health-20261116T110034Z MULTI_deep-update-world vs FAST_world
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []
+== l0-health-20261116T110210Z WORLD_resolver-nobin vs FAST_world
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []
+== l0-health-20261116T110210Z MULTI_deep-update-world vs FAST_world
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []
