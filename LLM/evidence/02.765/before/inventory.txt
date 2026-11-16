@@ -1,0 +1,56 @@
+crates/portuale/src/pretend/json.rs:549:    pub(crate) stale_pin_refusals: &'a [portage_repo::StalePinRefusal],
+crates/portuale/src/pretend/json.rs:580:        stale_pin_refusals,
+crates/portuale/src/pretend/json.rs:627:    let stale_json = if stale_pin_refusals.is_empty() {
+crates/portuale/src/pretend/json.rs:630:        let rows: Vec<String> = stale_pin_refusals
+crates/portuale/src/pretend/merge_list.rs:815:            stale_pin_refusals: &result.stale_pin_refusals,
+crates/portuale/src/pretend/mod.rs:608:    show_stale_pin_refusals(opts.quiet, opts.debug, result);
+crates/portuale/src/pretend/problem_reports.rs:265:pub(crate) fn show_stale_pin_refusals(quiet: bool, debug: bool, result: &GraphResult) {
+crates/portuale/src/pretend/problem_reports.rs:266:    if (quiet && !debug) || result.stale_pin_refusals.is_empty() {
+crates/portuale/src/pretend/problem_reports.rs:274:    for r in &result.stale_pin_refusals {
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:674:        out.refused.push(refusal);
+crates/portage-repo/src/tests/eliminate.rs:66:    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:90:    let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:174:fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
+crates/portage-repo/src/tests/eliminate.rs:198:    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:223:fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
+crates/portage-repo/src/tests/eliminate.rs:247:    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/solver_bridge.rs:952:        stale_pin_refusals: Vec::new(),
+crates/portage-repo/src/solver_bridge.rs:1590:        super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/tests_163.rs:2602:        stale_pin_refusals: Vec::new(),
+crates/portage-repo/src/resolve/pass_state.rs:52:    pub(crate) stale_pin_refusals: Vec<StalePinRefusal>,
+crates/portage-repo/src/tests/mod.rs:1754:        stale_pin_refusals: Vec::new(),
+crates/portage-repo/src/resolve/assemble.rs:33:    let mut stale_pin_refusals = std::mem::take(&mut pass.stale_pin_refusals);
+crates/portage-repo/src/resolve/assemble.rs:68:            stale_pin_refusals = scan.refused;
+crates/portage-repo/src/resolve/assemble.rs:381:        stale_pin_refusals,
+crates/portage-repo/src/resolve/result.rs:286:    pub stale_pin_refusals: Vec<StalePinRefusal>,
+crates/portage-repo/src/resolve/pass/assemble_pass.rs:57:        stale_pin_refusals: Vec::new(),
+crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs:64:        pass.stale_pin_refusals = scan.refused;
+LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:92:- #741/#744 S2: the former 3-tuple is a struct with `scheduled`, `abi_rebuilds`, `masked`, and `refused` (`Vec<StalePinRefusal>`), so the refusal is a named field rather than a fourth tuple slot. #761: `refused` now reaches `GraphResult::stale_pin_refusals` and the pretend NOTE (a refused consumer is still not scheduled). Five call sites updated (`assemble`, `slot_conflict_backtrack`, `unsatisfied_dead_end`, `eliminate`, `tests/eliminate`) plus the `tests/rebuild_scan.rs` destructures, mechanically mapped positionally (`scheduled`, `abi_rebuilds`, `masked`).
+LLM/code-notes/portage-repo/solver_bridge.md:9:- Deliberate v1 cuts (each its own slice): no autounmask relaxation levels (the pool is visibility-filtered with the walk's own `is_visible`, so an invisible version is never offered -- but unlike the walk, a candidate that would need a `--autounmask*` flip (a `~arch` keyword, a license, a `package.mask`) simply fails to resolve rather than producing the flip suggestion); notices wired where the bridge result admits them (blockers via the walk's `resolve_blockers` (H.15c), ABI rebuilds via `slot_operator_rebuild_entries` (H.15), circular deps via `find_hard_cycles` (J), USE display with Portage's forced/masked `( )` markers (J)); merge order is the walk's `topological_merge_order` over Portage's `deps` edges rebuilt from raw dep strings plus resolved USE (H.15b).
+LLM/code-notes/portage-repo/solver_bridge.md:58:- ABI rebuilds: an installed consumer whose built `cat/pkg:S/SS=` dep no longer matches how this plan leaves that slot is scheduled for a reinstall, via the walk's own `slot_operator_rebuild_entries` fixpoint; entries are extended before the merge-order sort so rebuilds land dependency-first like every other entry.
+LLM/code-notes/portage-repo/slot_operator/eliminate.md:14:## fn slot_operator_rebuild_entries
+LLM/code-notes/portage-repo/slot_operator/eliminate.md:37:- `--rebuild-exclude ATOMS` matches the *parent* (skip rebuilding it); `--rebuild-ignore ATOMS` matches the *dep* (it never triggers a rebuild) -- both the same two-tier `matches_config_entry` matcher `excluded` uses. Structurally a sibling of `slot_operator_rebuild_entries` above (same `all_installed_packages` scan, same `Reinstall` rebuild-entry shape) -- `--rebuild-if-new-slot` stays that function's job.
+LLM/code-notes/portage-repo/resolve/request.md:75:- Same net effect here: when set, the `slot_operator_rebuild_entries` post-pass is skipped entirely.
+LLM/code-notes/portuale/pretend/problem_reports.md:79:## fn show_stale_pin_refusals
+LLM/code-notes/portage-repo/resolve/outcome.md:7:- `Reinstall::slot_operator_rebuild` is Portage depgraph's own `_slot_operator_trigger_reinstalls` / the `@__auto_slot_operator_replace_installed__` set: this installed package's vdb `*DEPEND` carries a *built* slot-operator atom (`cat/pkg:S/SS=`) whose bound `S/SS` no longer matches how this run leaves `cat/pkg` in that slot, so it must be rebuilt against the new ABI (`slot_operator_rebuild_entries`, a single-pass v1 -- see its own notes). Never combined with the other five in portuale: the post-pass only ever constructs it standalone.
+LLM/code-notes/portage-repo/resolve/rev_dep.md:6:- Portage keeps the recorded atom as written, with one exception: a parent whose atom is a **built** slot-operator atom (`cat/pkg:S/SS=` -- operator `=` with both slot and sub-slot present, Portage `Atom.slot_operator_built`) "may need to be rebuilt, therefore discard its soname and built slot operator dependency components which are not necessarily relevant" (`depgraph.py:2494-2502`), which it does with `atom.with_slot("=")` -- keeping the version bound and dropping the slot/sub-slot. That distinction is the whole difference between "this upgrade needs a consumer rebuild" (fine, and what `slot_operator_rebuild_entries` already schedules) and "this upgrade breaks a consumer outright" (not fine).
+LLM/code-notes/portage-repo/tests/eliminate.md:10:## fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo
+LLM/code-notes/portage-repo/tests/eliminate.md:13:## fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest
+crates/portage-repo/src/slot_operator/eliminate.rs:196:/// Arguments of [`slot_operator_rebuild_entries`].
+crates/portage-repo/src/slot_operator/eliminate.rs:218:pub(crate) fn slot_operator_rebuild_entries(
+crates/portage-repo/src/slot_operator/eliminate.rs:400:/// `slot_operator_rebuild_entries`: Portage only slot-op-rebuilds a consumer
+crates/portage-repo/src/tests/rebuild_scan.rs:254:    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/rebuild_scan.rs:1899:    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:1932:    assert_eq!(scan.refused.len(), 1, "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:1934:        scan.refused,
+crates/portage-repo/src/tests/rebuild_scan.rs:1969:    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:2005:    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:2039:    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:2129:    assert!(scan.refused.is_empty(), "{:?}", scan.refused);
+crates/portage-repo/src/tests/rebuild_scan.rs:2287:        result.stale_pin_refusals,
+
+# S0 reading (filtered: portage-world and plan_world `.refused` are the fast plan's own RefusedBinding, unrelated; the code-notes hits are doc lines).
+# Production caller of slot_operator_rebuild_entries: solver_bridge.rs:1590 only. Tuple call sites (`let (x, _) =`): tests/eliminate.rs 66/90/198/247 and tests/rebuild_scan.rs:254 (6 sites in total with the bridge).
+# GraphResult.stale_pin_refusals: hard-coded Vec::new() at solver_bridge.rs:952; default path fills it at resolve/assemble.rs:68 and feedback/unsatisfied_dead_end.rs:64; readers pretend/problem_reports.rs:265+, pretend/json.rs:549-630, pretend/merge_list.rs:815.
+# No other caller of slot_operator_rebuild_entries exists: STOP-1 does not fire.
+# Stale doc lines: LLM/code-notes/portuale/pretend/problem_reports.md:80 ("never runs this scan"), LLM/code-notes/portage-repo/slot_operator/rebuild_scan.md:92, slot_operator/eliminate.md (no word on the dropped refusals).

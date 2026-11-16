@@ -1,0 +1,21 @@
+S0 before-state, plan 02.765, branch backlog/765-pubgrub-stale-scan, tree f3ad4f12 + untracked plan/review (no source diff).
+Probe script: LLM/evidence/02.765/probe.sh OUTFILE (same script before and after); scratch roots: LLM/evidence/02.765/mkroots.sh.
+Env: PORTAGE_CONFIGROOT=/var/tmp/765fx (frozen cp -a of ../pmtest/fixtures); ROOT=PORTAGE_RUNNING_ROOT=that or /var/tmp/765roots/{r698,r703}; DISTDIR=765fx/distfiles; PORTAGE_REPOSITORIES = concatenated sorted repos.conf.
+ r698 = pmtest _698_root with world p698rebuild/p698reinst/p698upg (the test_727_* ROOT: every holder has a route).
+ r703 = world p698rebuild + p573virt, extra vdb p573virt-1 (the test_698_a_holder_without_a_route / test_703_* ROOT: holder_fix withholds the provider).
+Binary: /tmp/opencode/765bin/emerge -> portuale (copy of target/release/portuale built from f3ad4f12). argv0 emerge.
+40 argv x 2 solvers (df = default, pg = --solver=pubgrub) + 1 PORTUALE_PG_TRACE=1 probe (trace_lines=1662: the bridge ran). Two consecutive runs byte-identical.
+Format: rc, sha256 of stdout and stderr, note= count of the stale-binding NOTE, jsonkey= count of "stale-bindings", then the NOTE block when present.
+RED FACT: [fx/df] --pretend --update dev-libs/p569prov prints the NOTE naming dev-libs/p569virt-1; [fx/pg] prints none (note=0); same for --json (df jsonkey=1, pg 0).
+DELIBERATE (default prints the NOTE now, pubgrub must print it after S1, same consumer line):
+  fx:   --update p569prov ; p569prov ; --deep p569prov ; --update --deep p569prov ; --json --update p569prov (stale-bindings key)
+  r698: p727top p569prov ; --update --deep p727top ; --update p569prov ; --update --deep @world ; p569prov
+NO NOTE from the default (a NOTE appearing on pubgrub = false NOTE, STOP-4):
+  fx: --quiet --update p569prov ; --emptytree p569prov ; p569pull p569prov (also --update, --update --deep) ; p569prov p569core ; --update --deep @world ; --update --deep p569core ; all 04.755/02.767 controls
+  r698: p727top ; p727top2 ; r703: every probe (p569prov, --update, --quiet, --update --deep @world, --json)
+G2 probes: walked consumer without --update = "p569pull p569prov", "p569prov p569core", "p569prov" ; @world seeds = "--update --deep @world" on fx, r698, r703.
+No consumer is named by both the holder_fix #703 note and the stale NOTE: r703 shows no stale NOTE under either solver today; checked again after S1.
+Suite baseline (0 code change, tree f3ad4f12): 5005 passed, 2 skipped, 2 xfailed, 0 failed (the known flaky test_a_mutation_that_changes_nothing_is_an_error_not_a_kill passed this time); result set in suite-result-set.txt (xml2set.py of --junitxml); no corpus drift reported.
+cargo test --release --workspace: 35 binaries, 3573 passed, 0 failed (cargo.txt).
+L0 baseline: L0_PORTUALE_OPTS=--solver=pubgrub (run-options.json confirms), report ../pmtest/differential-test-bed/logs/l0-20261116T035435Z, rc 0, 120 probes, 0 invariant violations, unexplained list empty; per-probe portuale outputs byte-identical to 02.767/after (cmp of the sha lists).
+Scratch dirs cleaned before the run: /var/tmp/pytest-767a, pytest-767b, gate.BHiJVl (finished 02.767 runs, ocgrep STOPPED).
