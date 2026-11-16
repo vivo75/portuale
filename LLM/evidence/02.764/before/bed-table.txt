@@ -1,0 +1,7 @@
+== /P/FAST_world.json
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0

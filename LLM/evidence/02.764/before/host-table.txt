@@ -1,0 +1,8 @@
+== /var/tmp/764/host/fast.json
+literal: 1
+  dev-util/cargo-c-0.10.25: RDEPEND not matched by any package in the final set
+binding-transition: 49
+depth1: 0
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0

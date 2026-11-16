@@ -1,7 +1,9 @@
 //! The order a list of slots is shown in: each slot after the slots it
 //! needs, one row per slot. A dependency cycle is cut at a cuttable
-//! runtime-only edge when it has one; a cycle with none is genuine and is
-//! ordered implicitly, then reported for the checker to fail (charter 2a).
+//! runtime-only edge when it has one; a cycle with only build-time edges is
+//! genuine and is ordered implicitly, then reported for the checker to fail
+//! (charter 2a). One that no runtime edge may be cut in only because of the
+//! build-used rule is ordered by the walk and not reported (#771).
 //! No [`Order`] lists a slot twice; the plan adds a charter 2a boot row on top.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -14,8 +16,9 @@ pub enum Order<'a> {
     Alpha,
     /// A slot after the slots it needs before it is merged or usable
     /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); `PDEPEND` alone orders nothing
-    /// (PMS). A cycle with no cuttable edge is genuine: [`build_time_cycles`] reports
-    /// it and it is never built twice (charter 2a).
+    /// (PMS). A cycle of build-time edges is genuine: [`build_time_cycles`] reports
+    /// it and it is never built twice (charter 2a); one uncuttable only because of
+    /// the build-used rule is ordered by the walk, unreported (#771).
     Depend,
     /// By the position in an order the caller got elsewhere (the resolver's
     /// merge list), keyed `cat/pkg:slot`; a slot not in it comes last, in
@@ -90,8 +93,9 @@ impl World {
 
 /// Every node of `edges` (and every node it points at), each after the
 /// nodes it points at. Walks in name order, so the result is the same on
-/// A cycle is cut at the first cuttable runtime-only edge; one with none is
-/// genuine and left to [`build_time_cycles`]. `kinds` carries the `*DEPEND` bits
+/// every run. A cycle is cut at the first cuttable runtime-only edge; one with
+/// none is left to the walk, and [`build_time_cycles`] reports it only when all
+/// its edges are build-time (#771). `kinds` carries the `*DEPEND` bits
 /// ([`crate::DEP_KEYS`]); an edge without one counts as build-time.
 pub(crate) fn depend_order(
     edges: &BTreeMap<String, BTreeSet<String>>,
@@ -156,9 +160,11 @@ fn is_runtime_edge(kinds: &BTreeMap<(String, String), u8>, edge: &(String, Strin
     kinds.get(edge).is_some_and(|mask| mask & build_mask() == 0)
 }
 
-/// The nodes the plan builds with: targets of a `DEPEND`, `BDEPEND` or `IDEPEND`
-/// edge, except `virtual/*` (PMS 8.1: such a package must be usable, so its
-/// `RDEPEND` closure constrains the order). One level only: known limitation, #764.
+/// The nodes the plan builds with: the direct targets of a `DEPEND`, `BDEPEND` or
+/// `IDEPEND` edge, except `virtual/*` (perl cluster, #751). Direct targets only: a
+/// tool's own `RDEPEND` edges still order, but deeper ones may be cut, so a tool's
+/// depth-2 runtime dependency can merge after its consumer. Documented limitation
+/// (owner ruling 2026-11-15, #764; charter 2a is literal).
 pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSet<String> {
     kinds
         .iter()
@@ -222,9 +228,9 @@ fn runtime_cut(
 /// What the cycle the walk just closed needs: the stack from `kid` (the
 /// ancestor the back edge points at) to the current node, closed by the back
 /// edge last. The first cuttable runtime-only edge in that order; the back
-/// edge itself when only it is cuttable; `None` when nothing is: no cuttable
-/// edge means the cycle is genuine, the walk below orders it implicitly and
-/// [`build_time_cycles`] reports it.
+/// edge itself when only it is cuttable; `None` when nothing is: the walk below
+/// orders the cycle implicitly, and [`build_time_cycles`] reports it only when
+/// all its edges are build-time (#771).
 fn cycle_cut(
     stack: &[(&String, Vec<&String>, usize)],
     kid: &String,
@@ -596,5 +602,80 @@ mod tests {
             ((virt, prov), "RDEPEND"),
         ]);
         assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
+    }
+
+    /// Backlog #764, shape V2: only the direct target `at` of `ab`'s `BDEPEND` is build-used, so the
+    /// runtime cycle `am -> au -> ax -> am` behind the tool is cut at `(am,au)` and `au`, the tool's
+    /// depth-2 runtime dependency, merges after the consumer `ab` (PMS 8.1 would want it first;
+    /// charter 2a as ruled by the owner on 2026-11-15 does not). Order derived by hand from the cut
+    /// rule (plan 02.764 sec. 1).
+    #[test]
+    fn w764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer() {
+        let (ab, at, am, au, ax) = (
+            "dev-libs/w764ab:0",
+            "dev-libs/w764at:0",
+            "dev-libs/w764am:0",
+            "dev-libs/w764au:0",
+            "dev-libs/w764ax:0",
+        );
+        let g = graph(&[
+            (ab, &[at]),
+            (at, &[am]),
+            (am, &[au]),
+            (au, &[ax]),
+            (ax, &[am]),
+        ]);
+        let kinds = kinds(&[
+            ((ab, at), "BDEPEND"),
+            ((at, am), "RDEPEND"),
+            ((am, au), "RDEPEND"),
+            ((au, ax), "RDEPEND"),
+            ((ax, am), "RDEPEND"),
+        ]);
+        assert_eq!(depend_order(&g, &kinds), [am, at, ab, ax, au]);
+    }
+
+    /// Backlog #764, shape V1: as V2, but `cu -B-> cb`, so `cu` after `cb` is the only legal order
+    /// and the one-level cut `(cm,cu)` gives it. Order derived by hand (plan 02.764 sec. 1).
+    #[test]
+    fn w764_an_unavoidable_late_tool_dependency_is_literal_legal() {
+        let (cb, ct, cm, cu) = (
+            "dev-libs/w764cb:0",
+            "dev-libs/w764ct:0",
+            "dev-libs/w764cm:0",
+            "dev-libs/w764cu:0",
+        );
+        let g = graph(&[(cb, &[ct]), (ct, &[cm]), (cm, &[cu]), (cu, &[cb])]);
+        let kinds = kinds(&[
+            ((cb, ct), "BDEPEND"),
+            ((ct, cm), "RDEPEND"),
+            ((cm, cu), "RDEPEND"),
+            ((cu, cb), "BDEPEND"),
+        ]);
+        assert_eq!(depend_order(&g, &kinds), [cm, ct, cb, cu]);
+    }
+
+    /// Backlog #764, shape V3, OBSERVED DEFECT pinned exactly (residue #771; the owner decided on
+    /// 2026-11-16 not to fix it in #764): `dt` is build-used so its runtime edge is not cuttable and
+    /// the cycle has no cuttable edge, yet `build_time_cycles` sees build edges only, so it is
+    /// neither cut nor reported. The walk orders `du, dt, db`, which breaks the literal edge
+    /// `du -B-> db`; `dt, db, du` would not.
+    #[test]
+    fn w764_an_uncuttable_runtime_cycle_is_left_to_the_walk() {
+        let (db, dt, du) = (
+            "dev-libs/w764db:0",
+            "dev-libs/w764dt:0",
+            "dev-libs/w764du:0",
+        );
+        let g = graph(&[(db, &[dt]), (dt, &[du]), (du, &[db])]);
+        let kinds = kinds(&[
+            ((db, dt), "BDEPEND"),
+            ((dt, du), "RDEPEND"),
+            ((du, db), "BDEPEND"),
+        ]);
+        let used = build_time_used(&kinds);
+        assert_eq!(runtime_cut(&g, &kinds, &used), None);
+        assert!(build_time_cycles(&g, &kinds).is_empty());
+        assert_eq!(depend_order(&g, &kinds), [du, dt, db]);
     }
 }

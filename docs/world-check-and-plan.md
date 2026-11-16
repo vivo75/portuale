@@ -106,10 +106,15 @@ row. A downgrade is shown as `D` and is not refused.
 nothing about build order. `depend` puts a package after the packages it needs
 before it is built or usable (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); a
 runtime-only edge out of a package the plan builds with still orders, because
-a build tool must be usable (PMS 8.1); a `PDEPEND` orders nothing, as the PMS
-says (`dependencies.tex`). A cycle that survives every cuttable runtime edge
-is genuine: no order satisfies it — except the charter 2a bootstrap, which
-serializes the one shape a single USE-flag reduction breaks. With a
+a build tool must be usable (PMS 8.1), but one level only: a tool's own
+runtime dependencies order, its dependencies' dependencies may be cut, so a
+runtime dependency two levels below a build tool can merge after the package
+built with it (a documented limitation, owner ruling 2026-11-15, #764; the
+charter's literal rule allows it); a cycle that no runtime edge may be cut in
+only because of that rule is ordered by the walk and is not reported (#771); a
+`PDEPEND` orders nothing, as the PMS says (`dependencies.tex`). A cycle of
+build-time edges that survives every cuttable runtime edge is genuine: no
+order satisfies it — except the charter 2a bootstrap, which serializes the one shape a single USE-flag reduction breaks. With a
 reduction the plan carries three rows (the boot row with the reduced USE,
 the middle, the definitive rebuild with the declared USE) and the report
 line names the reduction:

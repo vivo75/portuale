@@ -1,0 +1,10 @@
+[ebuild   R    ] dev-libs/w746loc-1:0
+[ebuild  N     ] dev-libs/w746auto-1:0
+[ebuild  N     ] dev-libs/w746icu-1:0
+== /var/tmp/764fxk.plan.out
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0

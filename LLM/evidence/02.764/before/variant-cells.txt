@@ -1,0 +1,58 @@
+identity: byte-equal
+-- v2 k1: w764am w764at w764ab w764ax w764au
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 1
+  dev-libs/w764ab-1: build-order: dev-libs/w764at via dev-libs/w764am-1; late dev-libs/w764au-1
+cycle-excused: 0
+other-build-order: 0
+-- v2 k2: w764au w764am w764at w764ab w764ax
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 1
+  dev-libs/w764ab-1: build-order: dev-libs/w764at via dev-libs/w764au-1; late dev-libs/w764ax-1
+cycle-excused: 0
+other-build-order: 0
+-- v2 kinf: w764ax w764au w764am w764at w764ab
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0
+-- v1 k1: w764cm w764ct w764cb w764cu
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 1
+  dev-libs/w764cb-1: cycle-noted: dev-libs/w764ct via dev-libs/w764cm-1; late a later package of the same cycle
+cycle-excused: 0
+other-build-order: 0
+-- v1 k2: w764cu w764cm w764ct w764cb
+literal: 1
+  dev-libs/w764cu-1: BDEPEND is met only by dev-libs/w764cb-1, merged later (#6 > #3): merge it first
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 1
+  dev-libs/w764cu-1: BDEPEND is only met by a later package of the same cycle
+other-build-order: 0
+-- v3 k1: w764du w764dt w764db
+literal: 1
+  dev-libs/w764du-1: BDEPEND is met only by dev-libs/w764db-1, merged later (#5 > #3): merge it first
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 1
+  dev-libs/w764du-1: BDEPEND is only met by a later package of the same cycle
+other-build-order: 0
+-- v3 v3fix: w764dt w764db w764du
+literal: 0
+binding-transition: 0
+depth1: 1
+  dev-libs/w764db-1: cycle-noted: dev-libs/w764dt via dev-libs/w764dt-1; late a later package of the same cycle
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0

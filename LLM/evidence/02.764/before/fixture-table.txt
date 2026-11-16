@@ -1,0 +1,36 @@
+## v1
+== /var/tmp/764/p1/v1.fast.out
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 1
+  dev-libs/w764cb-1: cycle-noted: dev-libs/w764ct via dev-libs/w764cm-1; late a later package of the same cycle
+cycle-excused: 0
+other-build-order: 0
+## v2
+== /var/tmp/764/p1/v2.fast.out
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 1
+  dev-libs/w764ab-1: build-order: dev-libs/w764at via dev-libs/w764am-1; late dev-libs/w764au-1
+cycle-excused: 0
+other-build-order: 0
+## v3
+== /var/tmp/764/p1/v3.fast.out
+literal: 1
+  dev-libs/w764du-1: BDEPEND is met only by dev-libs/w764db-1, merged later (#5 > #3): merge it first
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 1
+  dev-libs/w764du-1: BDEPEND is only met by a later package of the same cycle
+other-build-order: 0
+## ctl
+== /var/tmp/764/p1/ctl.fast.out
+literal: 0
+binding-transition: 0
+depth1: 0
+depth2+: 0
+cycle-excused: 0
+other-build-order: 0

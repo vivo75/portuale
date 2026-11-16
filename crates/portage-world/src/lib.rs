@@ -1491,8 +1491,9 @@ mod tests {
         add_ebuild(root, "dev-libs/w746get-1", "0", "");
     }
 
-    /// Charter property 2 (PMS 8.1: a build tool must be usable): a runtime edge out
-    /// of a package the plan builds with is a build-time need, so the cut spares it.
+    /// Charter property 2 (PMS 8.1: a build tool must be usable): a direct runtime edge
+    /// out of a package the plan builds with is a build-time need, so the cut spares it
+    /// (one level, #764).
     #[test]
     fn a_build_tool_makes_its_runtime_closure_build_time() {
         let tree = fixture_copy();

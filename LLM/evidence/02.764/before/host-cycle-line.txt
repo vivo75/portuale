@@ -1,0 +1,14 @@
+cycle members: 11 (11 edges)
+  dev-lang/python:3.14 -> sys-apps/util-linux:0: build atoms ['sys-apps/util-linux']; sys-apps/util-linux installed: True
+  sys-apps/util-linux:0 -> sys-apps/systemd:0: build atoms ['sys-apps/systemd']; sys-apps/systemd installed: True
+  sys-apps/systemd:0 -> app-crypt/tpm2-tss:0: build atoms ['app-crypt/tpm2-tss']; app-crypt/tpm2-tss installed: True
+  app-crypt/tpm2-tss:0 -> net-misc/curl:0: build atoms ['>=net-misc/curl-7.80.0[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]', '>=net-misc/curl-7.80.0']; net-misc/curl installed: True
+  net-misc/curl:0 -> net-libs/nghttp2:0: build atoms ['>=net-libs/nghttp2-1.15.0:=[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]', '>=net-libs/nghttp2-1.15.0:=[utils,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]', '>=net-libs/nghttp2-1.15.0:=[utils,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]']; net-libs/nghttp2 installed: True
+  net-libs/nghttp2:0 -> net-nds/openldap:0: build atoms none (runtime edge only or USE-conditional); net-nds/openldap installed: True
+  net-nds/openldap:0 -> dev-util/bpftool:0: build atoms none (runtime edge only or USE-conditional); dev-util/bpftool installed: True
+  dev-util/bpftool:0 -> dev-lang/python:3.15: build atoms ['dev-lang/python:3.15', 'dev-lang/python:3.14', 'dev-lang/python:3.13', 'dev-lang/python:3.12']; dev-lang/python installed: True
+  dev-lang/python:3.15 -> sys-fs/cryptsetup:0: build atoms none (runtime edge only or USE-conditional); sys-fs/cryptsetup installed: True
+  sys-fs/cryptsetup:0 -> sys-libs/pam:0: build atoms none (runtime edge only or USE-conditional); sys-libs/pam installed: True
+  sys-libs/pam:0 -> dev-lang/python:3.14: build atoms none (runtime edge only or USE-conditional); dev-lang/python installed: True
+edges with a build atom met by an installed package: 6 of 11
+literal checker build-order failures on the plan: 0

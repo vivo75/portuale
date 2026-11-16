@@ -1,0 +1,29 @@
+cycle members: 26 (26 edges)
+  sys-apps/systemd:0 -> app-arch/libarchive:0: build atoms ['>=app-arch/libarchive-3.0:0=']; app-arch/libarchive installed: True
+  app-arch/libarchive:0 -> dev-libs/libxml2:2: build atoms ['dev-libs/libxml2:=[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]']; dev-libs/libxml2 installed: True
+  dev-libs/libxml2:2 -> dev-build/meson:0: build atoms ['>=dev-build/meson-1.2.3']; dev-build/meson installed: True
+  dev-build/meson:0 -> dev-lang/python:3.14: build atoms ['dev-lang/python:3.12', 'dev-lang/python:3.13', 'dev-lang/python:3.14', 'dev-lang/python:3.15', 'dev-lang/python:3.12', 'dev-lang/python:3.13', 'dev-lang/python:3.14', 'dev-lang/python:3.15']; dev-lang/python installed: True
+  dev-lang/python:3.14 -> dev-db/sqlite:3: build atoms ['>=dev-db/sqlite-3.3.8:3=']; dev-db/sqlite installed: True
+  dev-db/sqlite:3 -> dev-libs/icu:0: build atoms ['dev-libs/icu:=[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]']; dev-libs/icu installed: False
+  dev-libs/icu:0 -> sys-apps/util-linux:0: build atoms none (runtime edge only or USE-conditional); sys-apps/util-linux installed: True
+  sys-apps/util-linux:0 -> dev-python/gpep517:0: build atoms none (runtime edge only or USE-conditional); dev-python/gpep517 installed: True
+  dev-python/gpep517:0 -> dev-python/setuptools:0: build atoms none (runtime edge only or USE-conditional); dev-python/setuptools installed: True
+  dev-python/setuptools:0 -> dev-python/packaging:0: build atoms ['>=dev-python/packaging-25.0[python_targets_pypy3_12(-)?,python_targets_python3_12(-)?,python_targets_python3_13(-)?,python_targets_python3_14t(-)?,python_targets_python3_14(-)?,python_targets_python3_15t(-)?,python_targets_python3_15(-)?]']; dev-python/packaging installed: True
+  dev-python/packaging:0 -> dev-python/flit-core:0: build atoms ['>=dev-python/flit-core-3.12.0[python_targets_pypy3_12(-)?,python_targets_python3_12(-)?,python_targets_python3_13(-)?,python_targets_python3_14t(-)?,python_targets_python3_14(-)?,python_targets_python3_15t(-)?,python_targets_python3_15(-)?]', 'dev-python/flit-core[python_targets_pypy3_12(-)?,python_targets_python3_12(-)?,python_targets_python3_13(-)?,python_targets_python3_14t(-)?,python_targets_python3_14(-)?,python_targets_python3_15t(-)?,python_targets_python3_15(-)?]']; dev-python/flit-core installed: True
+  dev-python/flit-core:0 -> dev-python/platformdirs:0: build atoms none (runtime edge only or USE-conditional); dev-python/platformdirs installed: True
+  dev-python/platformdirs:0 -> dev-python/wheel:0: build atoms none (runtime edge only or USE-conditional); dev-python/wheel installed: True
+  dev-python/wheel:0 -> dev-libs/libgcrypt:0: build atoms none (runtime edge only or USE-conditional); dev-libs/libgcrypt installed: True
+  dev-libs/libgcrypt:0 -> sys-libs/glibc:2.2: build atoms ['>=sys-libs/glibc-2.25']; sys-libs/glibc installed: True
+  sys-libs/glibc:2.2 -> app-misc/pax-utils:0: build atoms ['>=app-misc/pax-utils-1.3.3']; app-misc/pax-utils installed: True
+  app-misc/pax-utils:0 -> sys-devel/binutils:2.47: build atoms none (runtime edge only or USE-conditional); sys-devel/binutils installed: True
+  sys-devel/binutils:2.47 -> dev-libs/elfutils:0: build atoms ['dev-libs/elfutils[debuginfod(-)]']; dev-libs/elfutils installed: True
+  dev-libs/elfutils:0 -> dev-libs/json-c:0: build atoms ['>=dev-libs/json-c-0.11:=', '>=dev-libs/json-c-0.11:=']; dev-libs/json-c installed: True
+  dev-libs/json-c:0 -> net-misc/curl:0: build atoms none (runtime edge only or USE-conditional); net-misc/curl installed: True
+  net-misc/curl:0 -> net-libs/nghttp2:0: build atoms ['>=net-libs/nghttp2-1.15.0:=[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]', '>=net-libs/nghttp2-1.15.0:=[utils,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]', '>=net-libs/nghttp2-1.15.0:=[utils,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?]']; net-libs/nghttp2 installed: False
+  net-libs/nghttp2:0 -> sys-devel/gcc:16: build atoms none (runtime edge only or USE-conditional); sys-devel/gcc installed: True
+  sys-devel/gcc:16 -> dev-python/lxml:0: build atoms none (runtime edge only or USE-conditional); dev-python/lxml installed: True
+  dev-python/lxml:0 -> dev-python/cython:0: build atoms ['>=dev-python/cython-3.1.4[python_targets_python3_12(-)?,python_targets_python3_13(-)?,python_targets_python3_14t(-)?,python_targets_python3_14(-)?,python_targets_python3_15t(-)?,python_targets_python3_15(-)?]']; dev-python/cython installed: True
+  dev-python/cython:0 -> sys-libs/libxcrypt:0: build atoms none (runtime edge only or USE-conditional); sys-libs/libxcrypt installed: True
+  sys-libs/libxcrypt:0 -> sys-apps/systemd:0: build atoms none (runtime edge only or USE-conditional); sys-apps/systemd installed: True
+edges with a build atom met by an installed package: 12 of 26
+literal checker build-order failures on the plan: 0

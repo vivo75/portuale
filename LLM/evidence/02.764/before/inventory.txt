@@ -1,0 +1,40 @@
+crates/portage-world/src/rebuild.rs:522:        let rows = world.ordered(&Order::Alpha);
+crates/portage-world/src/bootstrap.rs:12:use crate::{Order, SlotSet, World, build_time_cycles};
+crates/portage-world/src/bootstrap.rs:75:    pub fn build_plan(&self, how: &Order<'_>) -> BuildPlan<'_> {
+crates/portage-world/src/bootstrap.rs:76:        let rows = self.ordered(how);
+crates/portage-world/src/bootstrap.rs:77:        let cycles = build_time_cycles(&self.edges, &self.edge_kinds);
+crates/portage-world/src/bootstrap.rs:201:    let cycles = build_time_cycles(&world.edges, &world.edge_kinds);
+crates/portage-world/src/order.rs:55:            Order::Depend => {
+crates/portage-world/src/order.rs:59:                let order = depend_order(&edges, &self.edge_kinds);
+crates/portage-world/src/order.rs:96:pub(crate) fn depend_order(
+crates/portage-world/src/order.rs:100:    let build_used = build_time_used(kinds);
+crates/portage-world/src/order.rs:162:pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSet<String> {
+crates/portage-world/src/order.rs:173:pub(crate) fn is_cuttable_runtime_edge(
+crates/portage-world/src/order.rs:242:        .find(|edge| is_cuttable_runtime_edge(kinds, build_used, edge))
+crates/portage-world/src/order.rs:249:pub fn build_time_cycles(
+crates/portage-world/src/order.rs:378:            .ordered(&Order::Depend)
+crates/portage-world/src/order.rs:410:        let o = depend_order(&g, &no_kinds());
+crates/portage-world/src/order.rs:426:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:429:            build_time_cycles(&g, &kinds),
+crates/portage-world/src/order.rs:438:            depend_order(&g, &no_kinds()),
+crates/portage-world/src/order.rs:464:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:494:            runtime_cut(&g, &kinds, &build_time_used(&kinds)),
+crates/portage-world/src/order.rs:497:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:523:        let used = build_time_used(&kinds);
+crates/portage-world/src/order.rs:527:        assert!(!is_cuttable_runtime_edge(
+crates/portage-world/src/order.rs:532:        assert!(!is_cuttable_runtime_edge(
+crates/portage-world/src/order.rs:537:        assert!(is_cuttable_runtime_edge(
+crates/portage-world/src/order.rs:548:        assert!(build_time_cycles(&g, &kinds).is_empty());
+crates/portage-world/src/order.rs:579:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:598:        assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
+crates/portage-world/src/lib.rs:90:pub use order::{Order, build_time_cycles};
+crates/portage-world/src/lib.rs:524:    /// single-flag reduction does ([`World::build_plan`] applies it).
+crates/portage-world/src/lib.rs:1503:        let used = crate::order::build_time_used(&world.edge_kinds);
+crates/portage-world/src/lib.rs:1505:        assert!(!crate::order::is_cuttable_runtime_edge(
+crates/portage-world/src/lib.rs:1524:        let used = crate::order::build_time_used(&world.edge_kinds);
+crates/portage-world/src/lib.rs:1526:        assert!(crate::order::is_cuttable_runtime_edge(
+crates/experiment-tree-diagram/src/levels.rs:317:    fn pdepend_orders_nothing() {
+crates/portuale/src/plan_world.rs:52:        "depend" => Order::Depend,
+crates/portuale/src/plan_world.rs:69:    let plan = world.build_plan(&order);
+crates/portuale/src/plan_world.rs:878:        // Fast plan, through the same `build_plan` `run()` uses.
+crates/portuale/src/plan_world.rs:889:        let fast = world.build_plan(&portage_world::Order::Depend).rows;

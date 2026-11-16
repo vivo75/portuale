@@ -1,0 +1,47 @@
+### R1: pytest pins with the 12 fixtures absent (frozen binary 9a6ea361...)
+E       AssertionError: no w764 rows: the fixtures are missing
+E       assert []
+E       AssertionError: no w764 rows: the fixtures are missing
+E       assert []
+E       AssertionError: no w764 rows: the fixtures are missing
+E       assert []
+FAILED pytests-contract-suite/test_plan_world.py::test_764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer
+FAILED pytests-contract-suite/test_plan_world.py::test_764_an_unavoidable_late_tool_dependency_is_literal_legal
+FAILED pytests-contract-suite/test_plan_world.py::test_764_an_uncuttable_runtime_cycle_is_left_to_the_walk
+3 failed, 25 deselected, 2 warnings in 0.25s
+
+### R2: temporary k2 mutation of build_time_used (targets of runtime edges out of build-used nodes are build-used too), cargo test --release -p portage-world w764
+test order::tests::w764_an_uncuttable_runtime_cycle_is_left_to_the_walk ... ok
+test order::tests::w764_an_unavoidable_late_tool_dependency_is_literal_legal ... FAILED
+test order::tests::w764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer ... FAILED
+thread 'order::tests::w764_an_unavoidable_late_tool_dependency_is_literal_legal' (2283739) panicked at crates/portage-world/src/order.rs:658:9:
+  left: ["dev-libs/w764cu:0", "dev-libs/w764cm:0", "dev-libs/w764ct:0", "dev-libs/w764cb:0"]
+ right: ["dev-libs/w764cm:0", "dev-libs/w764ct:0", "dev-libs/w764cb:0", "dev-libs/w764cu:0"]
+thread 'order::tests::w764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer' (2283738) panicked at crates/portage-world/src/order.rs:638:9:
+  left: ["dev-libs/w764au:0", "dev-libs/w764am:0", "dev-libs/w764at:0", "dev-libs/w764ab:0", "dev-libs/w764ax:0"]
+ right: ["dev-libs/w764am:0", "dev-libs/w764at:0", "dev-libs/w764ab:0", "dev-libs/w764ax:0", "dev-libs/w764au:0"]
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 68 filtered out; finished in 0.00s
+
+### R2 (pytest): same mutation, binary rebuilt, pytest -k 764
+E       AssertionError: ['w764au', 'w764am', 'w764at', 'w764ab', 'w764ax']
+E       assert ['w764au', 'w...ab', 'w764ax'] == ['w764am', 'w...ax', 'w764au']
+E       AssertionError: ['w764cu', 'w764cm', 'w764ct', 'w764cb']
+E       assert ['w764cu', 'w...ct', 'w764cb'] == ['w764cm', 'w...cb', 'w764cu']
+FAILED pytests-contract-suite/test_plan_world.py::test_764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer
+FAILED pytests-contract-suite/test_plan_world.py::test_764_an_unavoidable_late_tool_dependency_is_literal_legal
+2 failed, 1 passed, 25 deselected, 2 warnings in 0.26s
+
+### R3: temporary v3fix mutation of cycle_cut (fall back to the first runtime-only edge), cargo test --release -p portage-world (whole crate)
+test order::tests::w764_an_uncuttable_runtime_cycle_is_left_to_the_walk ... FAILED
+test order::tests::the_virtual_provider_edge_is_the_only_cuttable_edge ... FAILED
+  left: Some(("dev-libs/w764dt:0", "dev-libs/w764du:0"))
+ right: None
+  left: Some(("dev-libs/w751prov:0", "dev-libs/w751base:0"))
+ right: Some(("virtual/w751virt:0", "dev-libs/w751prov:0"))
+test result: FAILED. 69 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+### R3 (pytest): same mutation, binary rebuilt, pytest -k 764
+E       AssertionError: ['w764dt', 'w764db', 'w764du']
+E       assert ['w764dt', 'w764db', 'w764du'] == ['w764du', 'w764dt', 'w764db']
+FAILED pytests-contract-suite/test_plan_world.py::test_764_an_uncuttable_runtime_cycle_is_left_to_the_walk
+1 failed, 2 passed, 25 deselected, 2 warnings in 0.36s

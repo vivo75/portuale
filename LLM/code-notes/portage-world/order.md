@@ -8,10 +8,12 @@
   (deterministic run to run). A cycle is cut at the first runtime-only edge
   in cycle order from the ancestor the back edge points at; only when the
   cycle has no runtime-only edge at all (or the back edge is its only one) is
-  the back edge cut, as before. A cycle with no cuttable edge is genuine:
+  the back edge cut, as before. A cycle with only build-time edges is genuine:
   no cut is chosen, the walk orders it implicitly, and `build_time_cycles`
   reports it for the checker to fail (backlog #749: reported, never a
-  second build). Cutting a runtime edge keeps every
+  second build). A cycle with a runtime edge that is uncuttable only because
+  of the build-used rule is ordered by the walk and NOT reported (#771, shape
+  `w764d*`: `build_time_cycles` sees build edges only). Cutting a runtime edge keeps every
   build-time edge, so a build dependency is still merged before the package
   needing it (PMS `dependencies.tex`, `sec:dependency-classes`); a runtime
   dependency only needs its target merged by the end (charter property 2, and
@@ -57,9 +59,10 @@
   build tool usable, so its `RDEPEND` closure constrains the order. The
   "used at build time" set is computed once per `depend_order` call, as the
   targets of a build-kind edge, and deliberately does not propagate through
-  `RDEPEND`: propagating it would leave the #746-shaped graph with no
-  cuttable edge and force a spurious second build, contradicting the
-  `a_cycle_with_a_cuttable_runtime_edge_needs_no_second_build` shape.
+  `RDEPEND` (the owner's ruling of 2026-11-15, measured in #764 below). The
+  earlier rationale ("a spurious second build",
+  `a_cycle_with_a_cuttable_runtime_edge_needs_no_second_build`) is stale:
+  #749 deleted both the second build and that test.
 - A `virtual/*` target does not confer build-time status. That exclusion is
   a heuristic that keeps the perl/libcrypt rebuild cluster ordered, not PMS
   soundness: `BDEPEND virtual/foo` makes the provider a build input in fact
@@ -253,9 +256,21 @@
   ordered, not PMS soundness: `BDEPEND virtual/foo` makes the provider a
   build input in fact, so a kept virtual's provider edge stays cuttable
   even when the installed provider is broken. The known hole (and the real
-  fix) is filed as #751. One pass: build-time use must not propagate
-  through `RDEPEND`, or every cycle edge would count as build-time in fact
-  and no cycle could be cut.
+  fix) is filed as #751. One level only (#764, owner ruling 2026-11-15:
+  documented limitation). Measured on 2026-11-16 with the 764 fixtures:
+  a tool's depth-2 runtime dependency can merge after its consumer (`w764a*`,
+  V2: `am, at, ab, ax, au`, `au` late; literal checker clean, the strict PMS
+  8.1 model flags it). Propagating the status one level (k=2) only moves the
+  late package one level deeper (V2 `au, am, at, ab, ax`, `ax` late);
+  propagating it along the whole runtime closure leaves cycles with no
+  cuttable edge: V2 happens to come out clean (`ax, au, am, at, ab`) but V1
+  (`w764c*`, `cu` genuinely needs `cb`) becomes a literal `build-order`
+  failure with no report line (`cu, cm, ct, cb`). A cut preference among the
+  cuttable edges (target nearest the tool) fixes V2 and leaves V1 alone; it
+  changes plan order, so it is the owner's call. On the host fast plan (349
+  rows) and the bed's (`FAST_world.json`, 172 rows) there is no #764-shaped
+  row: the strict model's 49 host rows are all the openssl `:0/3=` binding
+  move. The bed plan has 0 strict rows. Evidence: `LLM/evidence/02.764/`.
 
 ## fn depend_order
 
@@ -277,3 +292,26 @@
   [`build_time_cycles`] reports it, for the checker to fail (charter
   2a: a cycle no order satisfies is reported, never papered over by
   building a package twice).
+
+## fn w764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer (#764)
+
+- Pins shape V2 by `depend_order` on a literal graph: `am, at, ab, ax, au`. The
+  order is derived by hand from the cut rule (plan `LLM/02.764-build-closure.opus.md`
+  sec. 1), not from a run; the pytest pin `test_764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer`
+  checks the same shape end to end over the committed `w764a*` fixtures. Proven
+  not vacuous by the `k2` mutation (`LLM/evidence/02.764/after/red.txt`).
+
+## fn w764_an_unavoidable_late_tool_dependency_is_literal_legal (#764)
+
+- Shape V1, `cm, ct, cb, cu`: `cu` after `cb` is PMS-genuine (`cu -B-> cb`), and
+  the one-level cut gives it. Propagating build-used status down the runtime
+  closure would turn it into a literal `build-order` failure.
+
+## fn w764_an_uncuttable_runtime_cycle_is_left_to_the_walk (#764)
+
+- Shape V3, OBSERVED DEFECT pinned exactly (residue #771, owner decision of
+  2026-11-16: not fixed in #764): `runtime_cut` is `None`, `build_time_cycles`
+  is empty, the walk gives `du, dt, db`, which breaks the literal edge
+  `du -B-> db`. The fix (fall back to the first runtime-only edge, about three
+  lines) would also move `the_virtual_provider_edge_is_the_only_cuttable_edge`.
+  Proven by the `v3fix` mutation.

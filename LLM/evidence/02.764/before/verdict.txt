@@ -1,0 +1,12 @@
+Plan 02.764 S0.9 verdict: D0.
+Premise: reproduced. Fixture roots (frozen binary sha256 9a6ea361..., probes.txt, identical twice): V2 w764am,at,ab,ax,au; V1 cm,ct,cb,cu;
+V3 du,dt,db; no `build cycle` line; ctl no w764 rows. inventory.txt: only plan_world.rs:69 reaches build_plan/Order::Depend in production.
+Oracle: literal and strict agree with plan sec. 1 on every cell (fixture-table.txt, variant-cells.txt); control kept_middle (oracle-control.txt)
+has no row on w746*; identity permutation is byte-equal.
+Host (host.txt, host-table.txt; 349 rows, sha ea695c42e792af67): literal 1 runtime-deps (cargo-c stale binding, the stderr line), 0 build-order;
+strict 49 build-order, all binding-transition (openssl :0/3= moving to sub-slot 4); depth1 0, depth2+ 0, other-build-order 0.
+Bed (bed-table.txt, FAST_world.json sha 96bc81c1e57d5e49, checker-only container): literal 0, strict 0 in every class.
+=> no avoidable #764-shaped row on host or bed (D1 not met); no literal build-order failure on either (D2 not met).
+Cycle-line witness for #772 (host-cycle-line.txt 11 members, bed-cycle-line.txt 26 members): the literal checker finds 0 build-order on both plans
+and every member's target cp is installed; build atoms are visible in the plan entry text for 6/11 and 12/26 edges (the rest need USE-reduced or
+installed-package deps the entries do not show). Instrumented variants (C1) not built.
