@@ -247,14 +247,13 @@ impl LazyRepo {
     /// over the pool relaxed to `opts.relax` (the closure follows the relaxed
     /// versions' deps too, so it is rebuilt per level).
     ///
-    /// `seeds_first` queues the expanding seeds above the shallow installed
-    /// entries, so `Vec::pop` drains the whole target cone before any installed
-    /// CPN loads shallow.
+    /// The expanding seeds queue above the shallow installed entries, so
+    /// `Vec::pop` drains the whole target cone before any installed CPN loads
+    /// shallow.
     fn build_relaxed(
         req: &ResolveRequest,
         repos: Vec<RepoConfig>,
         (seeds, shallow): (&[String], &[String]),
-        seeds_first: bool,
         opts: &PoolOpts,
     ) -> Result<Self, super::Error> {
         let relax = opts.relax;
@@ -294,25 +293,16 @@ impl LazyRepo {
         };
         // Under deep, an installed cpv's own vdb deps decide what it reaches
         // (#34 S3) -- including versions gone from the repo -- so installed
-        // CPNs expand from the vdb here. Only when `seeds_first`: without it
-        // the installed cone stays shallow and never enters `closure`.
-        let vdb_expand = seeds_first && (!matches!(req.deep, Deep::NotRequested) || req.empty);
-        // `(cp, expand)`: targets expand, installed only load. Seeds queue last
-        // when `seeds_first`, so LIFO `pop` expands the target cone first: a CPN
-        // that is both a seed and installed expands instead of loading shallow.
-        let mut queue: Vec<(String, bool)> = if seeds_first {
-            shallow
-                .iter()
-                .map(|cp| (cp.clone(), false))
-                .chain(seeds.iter().map(|cp| (cp.clone(), true)))
-                .collect()
-        } else {
-            seeds
-                .iter()
-                .map(|cp| (cp.clone(), true))
-                .chain(shallow.iter().map(|cp| (cp.clone(), false)))
-                .collect()
-        };
+        // CPNs expand from the vdb here.
+        let vdb_expand = !matches!(req.deep, Deep::NotRequested) || req.empty;
+        // `(cp, expand)`: targets expand, installed only load. Seeds queue last,
+        // so LIFO `pop` expands the target cone first: a CPN that is both a seed
+        // and installed expands instead of loading shallow.
+        let mut queue: Vec<(String, bool)> = shallow
+            .iter()
+            .map(|cp| (cp.clone(), false))
+            .chain(seeds.iter().map(|cp| (cp.clone(), true)))
+            .collect();
         while let Some((cp, expand)) = queue.pop() {
             if !repo.closure.insert(cp.clone()) {
                 continue;
@@ -5513,7 +5503,7 @@ fn resolve_pubgrub_at(
         .chain(shallow.iter())
         .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
         .collect();
-    let lazy = LazyRepo::build_relaxed(req, repos, (&seeds, &shallow), true, opts)
+    let lazy = LazyRepo::build_relaxed(req, repos, (&seeds, &shallow), opts)
         .map_err(|e| format!("reading repo facts: {e}"))?;
     // The kept/rebuild set is computed before the provider exists (deps are
     // converted inside `new_for_targets`).
@@ -5902,14 +5892,8 @@ mod tests {
         seeds: &[String],
         shallow: &[String],
     ) -> super::LazyRepo {
-        super::LazyRepo::build_relaxed(
-            req,
-            repos,
-            (seeds, shallow),
-            true,
-            &super::PoolOpts::default(),
-        )
-        .expect("closure builds")
+        super::LazyRepo::build_relaxed(req, repos, (seeds, shallow), &super::PoolOpts::default())
+            .expect("closure builds")
     }
 
     #[test]

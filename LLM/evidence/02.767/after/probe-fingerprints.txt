@@ -1,0 +1,69 @@
+argv: emerge --pretend dev-libs/newpkg
+rc=0 stdout=e8ceeb6dcacd0881483eb273b742c4cf3131933ed3ab685296ae0b7c522d3200 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/newpkg
+rc=0 stdout=e8ceeb6dcacd0881483eb273b742c4cf3131933ed3ab685296ae0b7c522d3200 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/diamond
+rc=0 stdout=f326188e08b8a1dd7071b5566f66a3c1fb92e02ccc14871abd68e42919046e0b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend dev-libs/diamond
+rc=0 stdout=f326188e08b8a1dd7071b5566f66a3c1fb92e02ccc14871abd68e42919046e0b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/slotconfgroup
+rc=1 stdout=1ce10eac21d110c73d14dc2b0ae46640f6bff375303beec55a1e4ebadaace776 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/maskedpkg
+rc=1 stdout=7a9f6b3f6cfb21380c6ee710fd9f324771d7e6bff273385924e22441850f83de stderr=1860fcbf2754e27972f9755fc5e2b5401041ac693d0bcddf4e55a24d61a10892 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/graphblockerparent
+rc=1 stdout=f719b38b2dd21b1e6579c6aec8371a8fc4db603aa24a11cb8c78d50a89afe70a stderr=c9aeb8a0ede2f1469c7b0b828f62483fbc73fcc5e5f3ad99828a2ac53796d66f closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/blockerpkg
+rc=0 stdout=a5e225c1c329968ed5ed22dec0ca72cd651dac966ed3c9a9ddd035acd1b0c447 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/hardcyclea
+rc=1 stdout=5f5b5662ad50995938d53cb54a4a0362af469faf51adc426eaa4fc73a3fec464 stderr=3fbaadcb3fe4d2d625720296f3c3cb7362d29fc767f33ef6bbca54fadcbb6daf closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/slotconflicttarget
+rc=0 stdout=ab88fec292b704c67a898cf59fa0e2388e4949c1099956a9e1a19d395dbb87ae stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub dev-libs/pkgusemaskforcepkg
+rc=0 stdout=b674add29faebdbc9991ab834d3e429912fcc23d7455243357e9426ae51e3088 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend dev-libs/slotconfgroup
+rc=1 stdout=1ce10eac21d110c73d14dc2b0ae46640f6bff375303beec55a1e4ebadaace776 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend --solver=pubgrub dev-libs/p569prov
+rc=0 stdout=d4ec8644f0cbdf6c00d4ee4ab74a92a63bfd604838cf4cd684daebe37c445bb9 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub --update --deep dev-libs/pg34-gapp
+rc=0 stdout=b90894f0f073ed813dd189c88d2f51f60f7a156b9a676033f8c3012bee458f2e stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub --update --deep dev-libs/pg34-arg
+rc=0 stdout=5b83221fbdae52b53485e4a2b13ecc061d0dbd69acfa152d92032b54f5e920fc stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub dev-libs/pg34-arg
+rc=0 stdout=b5603251c0e1e53857f6456953b326ab312fe063a7ac980d60755f2cc947beab stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub --emptytree dev-libs/diamond
+rc=0 stdout=19dbf48e786037c3033705e892bc0b3504330ffdb4004ca3079b0a6f8320b878 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: emerge --pretend -v --solver=pubgrub --update --deep @world
+rc=0 stdout=c465153b3911c4ba5650ff98335a9fe5d80616f2dc875fdcf5f009bbe05bb5a6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 closure_expanded=0 closure_shallow=0
+
+argv: PORTUALE_PG_TRACE=1 emerge --pretend -v --solver=pubgrub --update --deep dev-libs/pg34-gapp
+rc=0 stdout=b90894f0f073ed813dd189c88d2f51f60f7a156b9a676033f8c3012bee458f2e stderr=52ff59e09a60edc2a83fa3cec48df3d167b02674fdb3953a56223298da426ddc closure_expanded=64 closure_shallow=172
+
+argv: PORTUALE_PG_TRACE=1 emerge --pretend -v --solver=pubgrub --update --deep dev-libs/pg34-arg
+rc=0 stdout=5b83221fbdae52b53485e4a2b13ecc061d0dbd69acfa152d92032b54f5e920fc stderr=e327d849978f1792453154a571a99532fededc699533c8b2b7f703add02afc39 closure_expanded=64 closure_shallow=171
+
+argv: PORTUALE_PG_TRACE=1 emerge --pretend -v --solver=pubgrub dev-libs/pg34-arg
+rc=0 stdout=b5603251c0e1e53857f6456953b326ab312fe063a7ac980d60755f2cc947beab stderr=240271fe4cb2234517e1872661870b8339643a1f94f8af6d42d8f6b32cdccddf closure_expanded=2 closure_shallow=203
+
+argv: PORTUALE_PG_TRACE=1 emerge --pretend -v --solver=pubgrub --emptytree dev-libs/diamond
+rc=0 stdout=19dbf48e786037c3033705e892bc0b3504330ffdb4004ca3079b0a6f8320b878 stderr=29a4012ec4b01f580e5eb7ba5249e741a507e38f6d1fc4d3053b9d0313bae5ff closure_expanded=67 closure_shallow=172
+
+argv: PORTUALE_PG_TRACE=1 emerge --pretend -v --solver=pubgrub --update --deep @world
+rc=0 stdout=c465153b3911c4ba5650ff98335a9fe5d80616f2dc875fdcf5f009bbe05bb5a6 stderr=a6810354426c28768dd776a8789e0d4fdbc0bf1fb8370f13cc6bae4ae9d09b5a closure_expanded=138 closure_shallow=336
+

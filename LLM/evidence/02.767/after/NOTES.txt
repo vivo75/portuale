@@ -1,0 +1,4 @@
+S1 after-state: same probe.sh, same frozen root /var/tmp/767fx, binary rebuilt from the S1 tree (copied to /tmp/opencode/767bin/portuale).
+diff before/probe-fingerprints.txt after/probe-fingerprints.txt: empty (23 entries incl. 5 closure traces; expanded/shallow line counts identical).
+RED: dropping the 'true' in lazy_closure -> E0061 (5 arguments expected, 4 supplied). GREEN: cargo test --release -p portage-repo solver_bridge: 121 passed (121 before).
+grep -rn seeds_first crates/: empty. fact_coverage.py HEAD solver_bridge.rs: 0 facts not found.
