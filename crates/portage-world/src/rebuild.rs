@@ -55,10 +55,12 @@ pub struct RefusedBinding {
     /// `cat/pkg` of the kept consumer.
     pub consumer: String,
     /// The recorded atom that forbids the repair, or the stale `:=` atom
-    /// itself when the consumer has no visible candidate.
+    /// itself when the consumer has no slot in the plan's walk.
     pub atom: String,
     /// `cat/pkg-ver` of the provider version the plan leaves behind, `None`
-    /// when the consumer has no visible tree candidate.
+    /// when the consumer has no slot in the plan's walk (it was not reached
+    /// from `@world`, or no version was chosen in its slot); its ebuild may
+    /// be visible.
     pub provider: Option<String>,
 }
 
@@ -387,12 +389,11 @@ impl Scan<'_> {
 }
 
 /// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
-/// `cat/pkg:slot` of each kept installed package whose recorded `:slot/sub-slot=`
 /// dependency no longer matches the provider version the plan leaves behind (a
 /// binding already stale is repaired too). A `:*` dependency never counts.
 ///
 /// A stale consumer is rebuilt only when no other recorded atom forbids it; one
-/// with no visible tree candidate, or whose text does not reduce, is refused
+/// with no slot in the plan's walk, or whose text does not reduce, is refused
 /// rather than mis-judged.
 ///
 /// PMS `dependencies.tex`, `sec:slot-dep`: `:=` binds the consumer to the

@@ -661,7 +661,8 @@ fn stale_pin_for_consumer(
     if edges.is_empty() {
         return;
     }
-    // A consumer with no visible tree candidate stays out silently.
+    // A consumer with no ebuild at all stays out silently (any slot, masked
+    // ones included).
     if ctx
         .gate
         .repo_candidates(&pkg.category, &pkg.package)

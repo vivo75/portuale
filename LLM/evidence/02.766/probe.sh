@@ -10,7 +10,7 @@ F=/var/tmp/766fx
 export PORTAGE_CONFIGROOT=$F
 export PORTAGE_REPOSITORIES="$(cat $(find $F/etc/portage/repos.conf -type f | sort) | awk 1)"
 OUT=$1; shift; mkdir -p "$OUT"
-B=/tmp/opencode/766bin
+B=${BIN:-/tmp/opencode/766bin}
 ROOTS=("$@"); [ ${#ROOTS[@]} -eq 0 ] && ROOTS=($(ls /var/tmp/766roots))
 RES=(--pretend --update --deep --newuse --getbinpkg=n $EXTRA)
 for rn in "${ROOTS[@]}"; do

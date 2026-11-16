@@ -1,0 +1,73 @@
+            {"consumer": "a/b-1", "atom": "=c/d-1*", "provider": "c/d-2"}]}
+        bare = {"entries": [], "kept": [], "aborted": None}
+        got = load().crosscheck(resolver, bare, [])
+>       assert kinds(got) == [("judge", "stale-binding-resolver-only")]
+E       AssertionError: assert [] == [('judge', 's...solver-only')]
+E         
+E         Right contains one more item: ('judge', 'stale-binding-resolver-only')
+E         Use -v to get more diff
+
+pytests-contract-suite/test_world_crosscheck.py:110: AssertionError
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_world_crosscheck.py::test_a_fast_plan_stale_binding_the_plan_does_not_repair_is_noted
+FAILED pytests-contract-suite/test_world_crosscheck.py::test_a_stale_binding_only_the_fast_plan_names_is_judged
+FAILED pytests-contract-suite/test_world_crosscheck.py::test_a_stale_binding_only_the_resolver_names_is_judged
+3 failed, 1 passed, 5 deselected, 2 warnings in 0.07s
+
+=== S2-red step 2: test_plan_world.py -k 766 (agreement and pins pass at once: a characterisation, no product change to be red against)
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[ctl-nothing-stale-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[ctl-nothing-stale-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[r703-provider-held-back-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[r703-provider-held-back-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[r698-D-698-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[r698-D-698-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[gone-A1-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[gone-A1-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[unred-A3-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[unred-A3-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[pull-S-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[pull-S-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-default]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-pubgrub]
+PASSED pytests-contract-suite/test_plan_world.py::test_766_the_agreement_check_can_fail
+19 passed, 6 deselected, 2 warnings in 6.40s
+
+=== G5 mutation a: r698 (fast refuses p698reinst, resolver reinstalls it) listed as an agreement root
+E       AssertionError: assert {'consumers o.../p698reinst']} == {}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698reinst'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698reinst']}
+E         Use -v to get more diff
+E       AssertionError: assert {'consumers o.../p698reinst']} == {}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698reinst'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698reinst']}
+E         Use -v to get more diff
+
+=== G5 mutation b: _view_766 keys the resolver row by the full cpv instead of the consumer cat/pkg
+E       AssertionError: assert {'consumers o.../p569virt-1']} == {}
+E       AssertionError: assert {'consumers o.../p569virt-1']} == {}
+E       AssertionError: assert {'consumers o.../p569virt-1']} == {}
+E       AssertionError: assert {'consumers o.../p569virt-1']} == {}
+4 failed, 5 passed, 16 deselected, 2 warnings in 3.20s
+(note: removing the restriction to recorded-binding consumers does NOT fail these roots: the fixture resolver lists no unrelated --newuse reinstall here; the restriction guards the real tree, review D3)
+
+=== S1: crosscheck green
+9 passed, 2 warnings in 0.18s
+4 passed, 5 deselected, 2 warnings in 0.04s

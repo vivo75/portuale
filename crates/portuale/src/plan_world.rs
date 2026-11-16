@@ -270,7 +270,7 @@ fn entry_json(
 
 /// Why one stale slot-operator binding stays unrepaired: the recorded atom
 /// names a provider version the plan leaves behind, or the consumer has no
-/// visible tree candidate.
+/// slot in the plan's walk (the "no visible ebuild" text does not say so).
 fn refusal_reason(refusal: &portage_world::RefusedBinding) -> String {
     match &refusal.provider {
         Some(provider) => format!("not satisfied by {provider}"),
