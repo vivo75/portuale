@@ -1,0 +1,9 @@
+S0 before-state, plan 02.767, branch backlog/767-seeds-first, tree 7580d865 + untracked plan/review.
+Probe script: LLM/evidence/02.767/probe.sh OUTFILE (same script before and after).
+Env: ROOT=PORTAGE_CONFIGROOT=/var/tmp/767fx (frozen copy: cp -a of ../pmtest/fixtures, symlinks preserved),
+  PORTAGE_REPOSITORIES = concatenated sorted repos.conf of that root. argv0 emerge (symlink to portuale).
+Binary: /tmp/opencode/767bin/emerge -> portuale (copy of target/release/portuale built from 7580d865).
+18 argv: 13 inherited from 04.755 + 5 pubgrub argv (pg34-gapp --update --deep, pg34-arg --update --deep, pg34-arg, --emptytree diamond, --update --deep @world); the 5 appended ones again with PORTUALE_PG_TRACE=1 (23 entries).
+Trace captures are non-vacuous: closure_expanded/closure_shallow counts are in the fingerprint file (all >0).
+G3: the very first run on the fresh frozen copy differed from later runs in one stdout hash (first probe, cold root);
+ three consecutive runs afterwards (b2,b3,b4) are identical; b3 is recorded. The frozen root is reused for the after-set.
