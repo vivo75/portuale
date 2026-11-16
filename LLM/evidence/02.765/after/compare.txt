@@ -1,0 +1,13 @@
+changed: 11 of 79 ; default-solver side changed: []
+  fx --pretend --update dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  fx --pretend --json --update dev-libs/p569prov | note/jsonkey ('0', '0') -> ('0', '1') | default has NOTE body equal: True
+  fx --pretend dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  fx --pretend --deep dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  fx --pretend --update --deep dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  fx --pretend --update dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  r698 --pretend dev-libs/p727top dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  r698 --pretend --update --deep dev-libs/p727top | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  r698 --pretend --update dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  r698 --pretend --update --deep @world | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+  r698 --pretend dev-libs/p569prov | note/jsonkey ('0', '0') -> ('1', '0') | default has NOTE body equal: True
+pg NOTE/jsonkey/body differing from the default after the change: []

@@ -1,0 +1,351 @@
+argv: [fx/df] emerge  --pretend --update dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/df] emerge  --pretend --quiet --update dev-libs/p569prov
+rc=0 stdout=736be6b574c0579a4d48bcd68f04e630c3d56892eec71148494c6189e3715c6b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --quiet --update dev-libs/p569prov
+rc=0 stdout=736be6b574c0579a4d48bcd68f04e630c3d56892eec71148494c6189e3715c6b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --json --update dev-libs/p569prov
+rc=0 stdout=e861590771a2081ade41b7732ea4a05362992f881dfbbce4bc8fa73a7b9c2a37 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=1 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --json --update dev-libs/p569prov
+rc=0 stdout=e861590771a2081ade41b7732ea4a05362992f881dfbbce4bc8fa73a7b9c2a37 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=1 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --json dev-libs/newpkg
+rc=0 stdout=d9ab8227eeb4f60c849723faed7642e8d6fb99a371dfb71d4a9608c659d61e50 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --json dev-libs/newpkg
+rc=0 stdout=d9ab8227eeb4f60c849723faed7642e8d6fb99a371dfb71d4a9608c659d61e50 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/df] emerge  --pretend --deep dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --deep dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/df] emerge  --pretend --update --deep dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update --deep dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/df] emerge  --pretend --emptytree dev-libs/p569prov
+rc=0 stdout=aa36e6b5f2074f8222e56e08e6263beb67cc0625e8f7a43ebfb1eb159da16920 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --emptytree dev-libs/p569prov
+rc=0 stdout=aa36e6b5f2074f8222e56e08e6263beb67cc0625e8f7a43ebfb1eb159da16920 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=aaa157c2669f8d12ae644cbde1604f9abca20b54945f564786a07d480923f8e2 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=80a773a62ad09314472337733cafbe2266633c2b778db5d863fa899b91026ca7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --update dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=90e629f3bdec496676830183cabf4bfdd870e7da61751dd9926cdca779b0dd90 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=80a773a62ad09314472337733cafbe2266633c2b778db5d863fa899b91026ca7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --update --deep dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=90e629f3bdec496676830183cabf4bfdd870e7da61751dd9926cdca779b0dd90 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update --deep dev-libs/p569pull dev-libs/p569prov
+rc=0 stdout=80a773a62ad09314472337733cafbe2266633c2b778db5d863fa899b91026ca7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/p569prov dev-libs/p569core
+rc=0 stdout=2aeb344c57238c4cf2afa6171e7a9c18aad445b6e5135b672c0019d85e3a248a stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/p569prov dev-libs/p569core
+rc=0 stdout=c6adfd45c5d4d795d45bce94371fb612c2db09ace97023378713d18574c21986 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --update --deep @world
+rc=0 stdout=fbfe0c31aa21cb9c63dcc7f4748b0e0acb04eb853d53062834c07fdb3b04f4f7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update --deep @world
+rc=0 stdout=fbfe0c31aa21cb9c63dcc7f4748b0e0acb04eb853d53062834c07fdb3b04f4f7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend --update --deep dev-libs/p569core
+rc=0 stdout=498e210de8a0d5fe4122eb7a1d4057b4af53c3cd2276dc14e6b7d1fcad483bd7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend --update --deep dev-libs/p569core
+rc=0 stdout=498e210de8a0d5fe4122eb7a1d4057b4af53c3cd2276dc14e6b7d1fcad483bd7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] TRACE emerge --solver=pubgrub --pretend --update dev-libs/p569prov
+rc=0 stdout=cbcf32f00aeba9e7fffaebe918c8837da88cc0dfa48dd4abbc9fd6e58a4ba962 stderr=7f1b1f39f132920986b0a4e30edb65e17f909324b72c2857376f4b17fb412101 note=1 jsonkey=0 trace_lines=1662
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [fx/df] emerge  --pretend dev-libs/newpkg
+rc=0 stdout=41093630ed7e5b842154f1cc12c77065e734d4ad259c1a53584a4640ad3fa979 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/newpkg
+rc=0 stdout=41093630ed7e5b842154f1cc12c77065e734d4ad259c1a53584a4640ad3fa979 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/diamond
+rc=0 stdout=e367dbd68be7288588c719f6bc647644abe47797c69fe10fcfc33528e8af1844 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/diamond
+rc=0 stdout=e367dbd68be7288588c719f6bc647644abe47797c69fe10fcfc33528e8af1844 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/slotconfgroup
+rc=1 stdout=8405534b400d4628b9eadd81372d2a6a6b5d7dd4781cef0622583d244112d199 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/slotconfgroup
+rc=1 stdout=8405534b400d4628b9eadd81372d2a6a6b5d7dd4781cef0622583d244112d199 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/maskedpkg
+rc=1 stdout=7a9f6b3f6cfb21380c6ee710fd9f324771d7e6bff273385924e22441850f83de stderr=5fb462661d1237be50157656b6f45143d475e267dd20eee12dec168f5a0acade note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/maskedpkg
+rc=1 stdout=7a9f6b3f6cfb21380c6ee710fd9f324771d7e6bff273385924e22441850f83de stderr=5fb462661d1237be50157656b6f45143d475e267dd20eee12dec168f5a0acade note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/graphblockerparent
+rc=1 stdout=c279837fd464d08d972f1324465d2a011c3fc81cab6878044f745c3386a42dd0 stderr=c9aeb8a0ede2f1469c7b0b828f62483fbc73fcc5e5f3ad99828a2ac53796d66f note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/graphblockerparent
+rc=1 stdout=c279837fd464d08d972f1324465d2a011c3fc81cab6878044f745c3386a42dd0 stderr=c9aeb8a0ede2f1469c7b0b828f62483fbc73fcc5e5f3ad99828a2ac53796d66f note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/blockerpkg
+rc=0 stdout=57867bd929d00915551fba816212dcf4f6968f99f1e9a108a1fce21b0a75f4f6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/blockerpkg
+rc=0 stdout=57867bd929d00915551fba816212dcf4f6968f99f1e9a108a1fce21b0a75f4f6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/hardcyclea
+rc=1 stdout=1d96e795396d5c6d4a9066db76b11d98b9c69b9dd461b2106b2031df8c199c2b stderr=3fbaadcb3fe4d2d625720296f3c3cb7362d29fc767f33ef6bbca54fadcbb6daf note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/hardcyclea
+rc=1 stdout=1d96e795396d5c6d4a9066db76b11d98b9c69b9dd461b2106b2031df8c199c2b stderr=3fbaadcb3fe4d2d625720296f3c3cb7362d29fc767f33ef6bbca54fadcbb6daf note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend dev-libs/slotconflicttarget
+rc=0 stdout=73c33b25d5a89c5ea13e8109ea5c3c31e1818ef8a2286b9b311849f651a08a83 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend dev-libs/slotconflicttarget
+rc=0 stdout=73c33b25d5a89c5ea13e8109ea5c3c31e1818ef8a2286b9b311849f651a08a83 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend -v dev-libs/pkgusemaskforcepkg
+rc=0 stdout=ecd2ad315514726eb942d1ae0e18650848dc91060240a27bb9e7dba30187e293 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend -v dev-libs/pkgusemaskforcepkg
+rc=0 stdout=ecd2ad315514726eb942d1ae0e18650848dc91060240a27bb9e7dba30187e293 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend -v --update --deep dev-libs/pg34-gapp
+rc=0 stdout=1b31d48497b15d5cd68ec0ef15b185505f36ec6975fe9dfa9e55204ca4b61ae1 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend -v --update --deep dev-libs/pg34-gapp
+rc=0 stdout=1b31d48497b15d5cd68ec0ef15b185505f36ec6975fe9dfa9e55204ca4b61ae1 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend -v --update --deep dev-libs/pg34-arg
+rc=0 stdout=955f8af28409b43980d038b8706bfcf03749a2f70a67be2f63b515cd7ad534da stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend -v --update --deep dev-libs/pg34-arg
+rc=0 stdout=955f8af28409b43980d038b8706bfcf03749a2f70a67be2f63b515cd7ad534da stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend -v dev-libs/pg34-arg
+rc=0 stdout=85fa944ae2facdb1e7ef7802e098b773545f384096a4fe9ccae9ede1c2ef5e50 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend -v dev-libs/pg34-arg
+rc=0 stdout=85fa944ae2facdb1e7ef7802e098b773545f384096a4fe9ccae9ede1c2ef5e50 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/df] emerge  --pretend -v --emptytree dev-libs/diamond
+rc=0 stdout=40d85b9e46a7d01620089de057f75f5968120967ba5adf7cdc7957898d6a72f6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [fx/pg] emerge --solver=pubgrub --pretend -v --emptytree dev-libs/diamond
+rc=0 stdout=40d85b9e46a7d01620089de057f75f5968120967ba5adf7cdc7957898d6a72f6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r698/df] emerge  --pretend dev-libs/p727top
+rc=0 stdout=52cce7ffe1e0ff8275c303faba3ac3736bb43fa37e5fdd2f006e3b2a4f37ca38 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend dev-libs/p727top
+rc=0 stdout=f96fbb7ec6496654d5d89bc213160f1a3fb94fc2914b8207cb7c7654853bfb7f stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r698/df] emerge  --pretend dev-libs/p727top dev-libs/p569prov
+rc=0 stdout=6804d7602de9b5587ae40b056f58ea013f68386b94ea87f8bd652bb4da0eee01 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend dev-libs/p727top dev-libs/p569prov
+rc=0 stdout=72a866a357fe8367f1c912bb346402d24f65a2fa77cde1c427cf96fac9b809ea stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/df] emerge  --pretend --update --deep dev-libs/p727top
+rc=0 stdout=fd15ba310be44b8a6dfa262378f9b26b2472321a22efad3140b20ad2f95f96f7 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend --update --deep dev-libs/p727top
+rc=0 stdout=72a866a357fe8367f1c912bb346402d24f65a2fa77cde1c427cf96fac9b809ea stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/df] emerge  --pretend --update dev-libs/p569prov
+rc=0 stdout=1dbc78162a455c7ed543976e9b68bc17eab443574df9997a8c6f66abd9d4b0fe stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend --update dev-libs/p569prov
+rc=0 stdout=bea461642de1ec96d726253feac5555c9d1abe2ddd8b0a007753ecfd24fa43d4 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/df] emerge  --pretend --update --deep @world
+rc=0 stdout=0243efb1a933da5d9f5535fb2f093177fc16cc1cffb24be16996ddbd9894ea3f stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend --update --deep @world
+rc=0 stdout=21af9c422ab18966b5a3ddbc7214d788b7d68bf4f1b18ab6155385566f17a5c1 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/df] emerge  --pretend dev-libs/p727top2
+rc=0 stdout=e2d7be5e99d9363a2744b974740b07c4e5b9bbbc85e7438aca5714470cb6c78e stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend dev-libs/p727top2
+rc=0 stdout=f3f9988c3838c7e0cdf2be83e82c94769fa4dd5221e873e72992ed0218e5cb71 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r698/df] emerge  --pretend dev-libs/p569prov
+rc=0 stdout=1dbc78162a455c7ed543976e9b68bc17eab443574df9997a8c6f66abd9d4b0fe stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r698/pg] emerge --solver=pubgrub --pretend dev-libs/p569prov
+rc=0 stdout=bea461642de1ec96d726253feac5555c9d1abe2ddd8b0a007753ecfd24fa43d4 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=1 jsonkey=0 trace_lines=0
+  | 
+  | NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  | 
+  |   dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  | 
+  |   Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+
+argv: [r703/df] emerge  --pretend dev-libs/p569prov
+rc=0 stdout=2445ffbd5768e5a12b7a6d6fd9b41a97f1f5687d5231476236b7b6e4a705eb73 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/pg] emerge --solver=pubgrub --pretend dev-libs/p569prov
+rc=0 stdout=3f5ac21ea4d5aa7961765ed2aadfe44a709f23b488dc8b855127c5a5e68e7c95 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/df] emerge  --pretend --update dev-libs/p569prov
+rc=0 stdout=ac05684ba2840a29e64f36548a1c539404c93c181969036a00a4bd86a6038840 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/pg] emerge --solver=pubgrub --pretend --update dev-libs/p569prov
+rc=0 stdout=3f5ac21ea4d5aa7961765ed2aadfe44a709f23b488dc8b855127c5a5e68e7c95 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/df] emerge  --pretend --quiet dev-libs/p569prov
+rc=0 stdout=6377c6ad515d5daeeef4b749fdb1d363d821cf969ffcacb85161c43c5ca1c07b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/pg] emerge --solver=pubgrub --pretend --quiet dev-libs/p569prov
+rc=0 stdout=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/df] emerge  --pretend --update --deep @world
+rc=0 stdout=f6db0046f62fae23654375d8e23e77b48aa9019023263f2a9bb7ca913a51131d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/pg] emerge --solver=pubgrub --pretend --update --deep @world
+rc=0 stdout=f6db0046f62fae23654375d8e23e77b48aa9019023263f2a9bb7ca913a51131d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/df] emerge  --pretend --json dev-libs/p569prov
+rc=0 stdout=50452322eedee93bcb0662df02b10e9185101868c3626ebcd1c3757f85a1ffd3 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+
+argv: [r703/pg] emerge --solver=pubgrub --pretend --json dev-libs/p569prov
+rc=0 stdout=391e3f343c8b50aa13dbad719ed8c0a83e9cc41e8a79dea77f9865e35dc3a610 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 note=0 jsonkey=0 trace_lines=0
+

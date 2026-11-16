@@ -1,0 +1,72 @@
+== RED 1: tests/eliminate.rs test against the unchanged tuple signature (cargo test --release -p portage-repo --no-run)
+error[E0609]: no field `entries` on type `(Vec<resolve::entry::GraphEntry>, Vec<(String, String)>)`
+   --> crates/portage-repo/src/tests/eliminate.rs:773:17
+    |                 ^^^^^^^ unknown field
+error[E0609]: no field `refused` on type `(Vec<resolve::entry::GraphEntry>, Vec<(String, String)>)`
+   --> crates/portage-repo/src/tests/eliminate.rs:775:13
+    |             ^^^^^^^ unknown field
+error: could not compile `portage-repo` (lib test) due to 2 previous errors
+
+== RED 2: with the eliminate test cfg'd out for this capture only, the bridge test compiles and fails by assertion (cargo test --release -p portage-repo pg765)
+warning: unused import: `super::rebuild_scan::stale_pin_base`
+ --> crates/portage-repo/src/tests/eliminate.rs:1:5
+  |
+1 | use super::rebuild_scan::stale_pin_base;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `portage-repo` (lib test) generated 1 warning (run `cargo fix --lib -p portage-repo --tests` to apply 1 suggestion)
+
+running 1 test
+test solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal ... FAILED
+
+failures:
+
+---- solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal stdout ----
+
+thread 'solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal' (1363162) panicked at crates/portage-repo/src/solver_bridge.rs:10269:9:
+assertion `left == right` failed: ["dev-libs/p569prov-5.44:0"]
+  left: []
+ right: [StalePinRefusal { consumer: "dev-libs/p569virt-1", atom: "=dev-libs/p569prov-5.42*", provider: "dev-libs/p569prov-5.44" }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1487 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p portage-repo --lib`
+
+== RED 3: pmtest, python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -k 765 -q
+        parameter proves it reached the bridge (`PORTUALE_PG_TRACE=1` writes `pg-*` trace lines
+        there and none with the default solver)."""
+        args = [a for a in (solver, "--pretend") if a]
+        env = dict(fixture_env, PORTUALE_PG_TRACE="1")
+        got = _run([str(emerge_binary)], [*args, "--update", "dev-libs/p569prov"], env)
+        assert got.returncode == 0, (got.stdout, got.stderr)
+        assert bool(got.stderr.count("pg-")) == bool(solver), got.stderr[:300]
+>       assert got.stdout.splitlines()[-5:] == _STALE_NOTE_765, got.stdout
+E       AssertionError: [ebuild     U  ] dev-libs/p569prov-5.44 [5.42] to /home/vivo/repo/PORTUALE/pmtest/fixtures
+E         
+E       assert ['[ebuild    ...est/fixtures'] == ['NOTE: One o... are unused.']
+E         
+E         At index 0 diff: '[ebuild     U  ] dev-libs/p569prov-5.44 [5.42] to /home/vivo/repo/PORTUALE/pmtest/fixtures' != 'NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:'
+E         Right contains 4 more items, first extra item: ''
+E         Use -v to get more diff
+
+pytests-contract-suite/test_emerge_pretend_contract.py:40449: AssertionError
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.kla
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_emerge_pretend_contract.py::test_765_both_solvers_name_a_stale_binding_the_plan_cannot_repair[--solver=pubgrub]
+1 failed, 2 passed, 2363 deselected, 2 warnings in 3.88s
