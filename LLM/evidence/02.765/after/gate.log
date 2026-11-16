@@ -1,0 +1,68 @@
+work-space rc=0
+  mount         total     free    use threshold
+  /tmp          62.9G    61.9G    98% ok
+  /var/tmp      48.0G    47.2G    98% ok
+  
+  inodes (sanity floor 200000; the run-size guard is --require-inodes):
+  mount           total       free    use threshold
+  /tmp          1048576     950410    90% ok
+  /var/tmp   10737418240 10737258903    99% ok
+doc-status rc=1
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:667: (c) #660 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:668: (c) #661 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:669: (c) #662 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:670: (c) #663 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:671: (c) #664 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:690: (c) #681 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:692: (c) #682 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:694: (c) #683 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:697: (c) #685 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:699: (c) #686 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:833: (c) #667 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:835: (c) #668 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:837: (c) #669 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:839: (c) #670 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:841: (c) #671 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:843: (c) #672 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:845: (c) #673 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:849: (c) #674 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:851: (c) #675 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:853: (c) #676 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:855: (c) #677 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:857: (c) #678 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1077: (c) #694 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1174: (c) #644 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1175: (c) #645 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1176: (c) #646 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1178: (c) #648 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1179: (c) #649 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1180: (c) #650 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1181: (c) #651 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1182: (c) #652 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1183: (c) #653 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1186: (c) #654 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1187: (c) #656 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1188: (c) #657 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1190: (c) #658 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1191: (c) #659 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/backlog-tasks.md:1192: (c) #679 no `Oracle:`/`Premise:` token (or `Premise: n/a` without a reason)
+  /home/vivo/repo/PORTUALE/portuale/LLM/02.685-slot-scoped-pin.opus.md:1: (a) #685 plan has no recognisable `Status:` header
+  doc status: 39 violation(s)
+skills rc=0
+cut-registry rc=0
+pair-check rc=0
+  pair-check: base 31c033d26d97cca2461964a3bcc7bb20287c9254 (portuale, anchor refs/heads/opencode)
+  pair-check: base 11ac29cb49710a50eba6e606aeae1a85c62f47ab (pmtest, anchor refs/heads/opencode)
+  pair-check: WARN portuale commit f3cb854 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+  pair-check: WARN portuale commit f3ad4f1 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+  pair-check: WARN portuale commit 331aac8 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+  pair-check: WARN portuale commit 3aa51c7 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+  pair-check: WARN portuale commit 7580d86 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+fmt rc=0
+clippy rc=0 warnings=0
+build rc=0
+test rc=0
+  passed 3556 failed 0 in 34 suites
+contract rc=0
+  5008 passed, 2 skipped, 2 xfailed, 3 warnings in 879.59s (0:14:39)
+logs: /var/tmp/gate.TWmFz1
