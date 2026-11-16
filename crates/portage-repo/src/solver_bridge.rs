@@ -901,7 +901,11 @@ fn graph_result_from_order(
     }
     let orphan_blockers =
         file_bridge_blocker_conflicts(req, repo, &mut entries, kept, &pending_blockers);
-    let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, &entries, repo);
+    let super::SlotOperatorRebuilds {
+        entries: slot_op_rebuilds,
+        abi_rebuilds,
+        refused: stale_pin_refusals,
+    } = bridge_slot_operator_rebuilds(req, &entries, repo);
     entries.extend(slot_op_rebuilds);
     // The rebuild rows the slot-operator pass adds have no solver record: read
     // the same dependency data for them, so `--json` is whole for every
@@ -949,7 +953,7 @@ fn graph_result_from_order(
         skipped_missing_dep_full: Vec::new(),
         held_back_use: Vec::new(),
         held_back_no_route: Vec::new(),
-        stale_pin_refusals: Vec::new(),
+        stale_pin_refusals,
         orphan_blockers,
         changed_deps_report: Vec::new(),
         installed_masked: Vec::new(),
@@ -1562,12 +1566,12 @@ fn file_bridge_blocker_conflicts(
 }
 
 /// ABI rebuilds via the walk's own fixpoint, extended before the merge-order
-/// sort so rebuilds land dependency-first.
+/// sort so rebuilds land dependency-first. The stale pins the scan refuses to repair come back with them.
 fn bridge_slot_operator_rebuilds(
     req: &ResolveRequest,
     entries: &[GraphEntry],
     lazy: &LazyRepo,
-) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+) -> super::SlotOperatorRebuilds {
     let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
     {
         HashSet::new()
@@ -1575,7 +1579,11 @@ fn bridge_slot_operator_rebuilds(
         super::required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
     };
     if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
-        (Vec::new(), Vec::new())
+        super::SlotOperatorRebuilds {
+            entries: Vec::new(),
+            abi_rebuilds: Vec::new(),
+            refused: Vec::new(),
+        }
     } else {
         // Same `update` flag and top-level atoms the default path resolves
         // under, so the bridge fixpoint runs the new-slot arm too.
@@ -10217,6 +10225,70 @@ mod tests {
             result.abi_rebuilds.is_empty(),
             "no ABI rebuilds under the ignore gate: {:?}",
             result.abi_rebuilds
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bridge returns the stale-pin refusal its slot-operator scan makes (backlog #765): the
+    /// plan upgrades `p569prov` past the recorded `=dev-libs/p569prov-5.42*` of the unreached
+    /// `p569virt-1`, so the result names it; a request that moves no provider reports none.
+    #[test]
+    fn pg765_bridge_result_carries_the_stale_pin_refusal() {
+        let dir = portage_util::TempDir::new("portage-bridge-pg765");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |name: &str, files: &[(&str, &str)]| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            s6_write_files(&d, files);
+        };
+        mk(
+            "p569prov-5.42",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("EAPI", "8\n"),
+                ("SLOT", "0/5.42\n"),
+                ("repository", "testrepo\n"),
+            ],
+        );
+        mk(
+            "p569virt-1",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("EAPI", "8\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                (
+                    "RDEPEND",
+                    "|| ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* ) dev-libs/p569prov:0/5.42=\n",
+                ),
+            ],
+        );
+        let solve = |atom: &str| {
+            let mut req = fixture_request(&[atom]);
+            req.root = dir.to_path_buf();
+            req.solver = super::super::SolverKind::PubGrub;
+            req.rebuild_if_new_slot = true;
+            req.update = true;
+            super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+                .resolve(&req)
+                .expect("resolves")
+        };
+        let result = solve("dev-libs/p569prov");
+        assert_eq!(
+            result.stale_pin_refusals,
+            vec![super::super::StalePinRefusal {
+                consumer: "dev-libs/p569virt-1".to_string(),
+                atom: "=dev-libs/p569prov-5.42*".to_string(),
+                provider: "dev-libs/p569prov-5.44".to_string(),
+            }],
+            "{:?}",
+            pg34_plan(&result)
+        );
+        let none = solve("dev-libs/newpkg");
+        assert!(
+            none.stale_pin_refusals.is_empty(),
+            "{:?}",
+            none.stale_pin_refusals
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

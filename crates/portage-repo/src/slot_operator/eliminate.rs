@@ -210,6 +210,14 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) usepkg: bool,
 }
 
+/// What [`slot_operator_rebuild_entries`] settles on: the synthesised rebuild entries, the
+/// `(provider, consumer)` display pairs, and the stale pins the last scan refused to repair.
+pub(crate) struct SlotOperatorRebuilds {
+    pub(crate) entries: Vec<GraphEntry>,
+    pub(crate) abi_rebuilds: Vec<(String, String)>,
+    pub(crate) refused: Vec<StalePinRefusal>,
+}
+
 /// Legacy path for the `--solver=pubgrub` bridge only:
 /// the engine re-drives no pass, so it keeps the post-pass synthesiser --
 /// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
@@ -217,7 +225,7 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
 /// consumer as a walked node instead.
 pub(crate) fn slot_operator_rebuild_entries(
     args: SlotOperatorRebuildEntriesArgs<'_>,
-) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+) -> SlotOperatorRebuilds {
     let SlotOperatorRebuildEntriesArgs {
         root,
         entries,
@@ -236,6 +244,7 @@ pub(crate) fn slot_operator_rebuild_entries(
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
     let mut out: Vec<GraphEntry> = Vec::new();
     let mut abi_rebuilds: Vec<(String, String)>;
+    let mut refused: Vec<StalePinRefusal>;
     loop {
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
@@ -259,6 +268,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             usepkg,
         });
         abi_rebuilds = scan.abi_rebuilds;
+        refused = scan.refused;
         if scan.scheduled == scheduled {
             break;
         }
@@ -392,7 +402,11 @@ pub(crate) fn slot_operator_rebuild_entries(
             })
             .collect();
     }
-    (out, abi_rebuilds)
+    SlotOperatorRebuilds {
+        entries: out,
+        abi_rebuilds,
+        refused,
+    }
 }
 
 /// Every installed package reachable over the installed dependency graph from

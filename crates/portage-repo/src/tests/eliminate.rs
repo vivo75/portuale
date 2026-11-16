@@ -1,3 +1,4 @@
+use super::rebuild_scan::stale_pin_base;
 use super::*;
 
 /// The bridge fixpoint runs the new-slot update arm, so both solvers agree (--update
@@ -63,20 +64,21 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     };
     let entries = [fresh, consumer];
     // With `--update` the bridge synthesises the consumer rebuild.
-    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
-        usepkg: false,
-        empty: false,
-        root: &dir,
-        entries: &entries,
-        reachable: &HashSet::new(),
-        with_bdeps: true,
-        excluded: &[],
-        update: true,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        config: &test_config(),
-        gate: crate::test_gate(&repos),
-    });
+    let SlotOperatorRebuilds { entries: out, .. } =
+        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+            usepkg: false,
+            empty: false,
+            root: &dir,
+            entries: &entries,
+            reachable: &HashSet::new(),
+            with_bdeps: true,
+            excluded: &[],
+            update: true,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+        });
     let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["massc"]);
     assert!(matches!(
@@ -87,20 +89,21 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         }
     ));
     // Without `--update` the arm stays off.
-    let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
-        usepkg: false,
-        empty: false,
-        root: &dir,
-        entries: &entries,
-        reachable: &HashSet::new(),
-        with_bdeps: true,
-        excluded: &[],
-        update: false,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        config: &test_config(),
-        gate: crate::test_gate(&repos),
-    });
+    let SlotOperatorRebuilds { entries: off, .. } =
+        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+            usepkg: false,
+            empty: false,
+            root: &dir,
+            entries: &entries,
+            reachable: &HashSet::new(),
+            with_bdeps: true,
+            excluded: &[],
+            update: false,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+        });
     assert!(off.is_empty(), "no want_update, no schedule");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -195,20 +198,21 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     };
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
-    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
-        usepkg: false,
-        empty: false,
-        root: &dir,
-        entries: std::slice::from_ref(&bar_upgrade),
-        reachable: &reach,
-        with_bdeps: true,
-        excluded: &[],
-        update: false,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        config: &test_config(),
-        gate: crate::test_gate(&repos),
-    });
+    let SlotOperatorRebuilds { entries: out, .. } =
+        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+            usepkg: false,
+            empty: false,
+            root: &dir,
+            entries: std::slice::from_ref(&bar_upgrade),
+            reachable: &reach,
+            with_bdeps: true,
+            excluded: &[],
+            update: false,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+        });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
     assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
@@ -244,20 +248,21 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
     };
     let reach: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
-    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
-        usepkg: false,
-        empty: false,
-        root: &dir,
-        entries: std::slice::from_ref(&bar_upgrade),
-        reachable: &reach,
-        with_bdeps: true,
-        excluded: &[],
-        update: false,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        config: &test_config(),
-        gate: crate::test_gate(&repos),
-    });
+    let SlotOperatorRebuilds { entries: out, .. } =
+        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+            usepkg: false,
+            empty: false,
+            root: &dir,
+            entries: std::slice::from_ref(&bar_upgrade),
+            reachable: &reach,
+            with_bdeps: true,
+            excluded: &[],
+            update: false,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+        });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
     assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
@@ -734,4 +739,52 @@ fn installed_reachability_follows_build_deps_only_with_bdeps() {
         "build-only tool and what it needs are not reachable: {without:?}"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// The stale-pin arm's refusal reaches the caller: the plan moves the provider past the
+/// consumer's recorded `=` pin, nothing is scheduled, and the refusal comes back with the
+/// entries instead of being dropped (backlog #765; the `--solver=pubgrub` bridge reports it).
+#[test]
+fn slot_operator_rebuild_entries_reports_the_refused_stale_pin() {
+    let (base, repos) = stale_pin_base(
+        "5.42",
+        "0/5.42",
+        "=dev-libs/prov-5.42* dev-libs/prov:0/5.42=",
+    );
+    let upgrade = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "5.42".into(),
+            to: "5.44".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("5.44".into()),
+        ..graph_entry("dev-libs", "prov", "5.44")
+    };
+    let got = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+        usepkg: false,
+        empty: false,
+        root: &base,
+        entries: std::slice::from_ref(&upgrade),
+        reachable: &HashSet::from([("dev-libs".to_string(), "prov".to_string())]),
+        with_bdeps: true,
+        excluded: &[],
+        update: true,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        config: &test_config(),
+        gate: crate::test_gate(&repos),
+    });
+    assert!(
+        got.entries.is_empty(),
+        "the refused consumer is not scheduled"
+    );
+    assert_eq!(
+        got.refused,
+        vec![StalePinRefusal {
+            consumer: "dev-libs/user-1.0".to_string(),
+            atom: "=dev-libs/prov-5.42*".to_string(),
+            provider: "dev-libs/prov-5.44".to_string(),
+        }]
+    );
+    let _ = fs::remove_dir_all(&base);
 }

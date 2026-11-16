@@ -251,20 +251,21 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     );
 
     // The `--solver=` bridges must still build the one flagged entry.
-    let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
-        usepkg: false,
-        empty: false,
-        root: &dir,
-        entries: std::slice::from_ref(&bar_upgrade),
-        reachable: &reach,
-        with_bdeps: true,
-        excluded: &[],
-        update: false,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        config: &test_config(),
-        gate: crate::test_gate(&[]),
-    });
+    let SlotOperatorRebuilds { entries: out, .. } =
+        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+            usepkg: false,
+            empty: false,
+            root: &dir,
+            entries: std::slice::from_ref(&bar_upgrade),
+            reachable: &reach,
+            with_bdeps: true,
+            excluded: &[],
+            update: false,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            config: &test_config(),
+            gate: crate::test_gate(&[]),
+        });
     let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["stale"]);
     assert!(matches!(
@@ -1807,7 +1808,7 @@ fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
 /// installed `user-1.0` consumer recording `recorded`, with a tree ebuild for
 /// the consumer carrying the live `dev-libs/prov:=` atom (it accepts any
 /// sub-slot, so only the recorded pins can refuse the rebuild).
-fn stale_pin_base(
+pub(super) fn stale_pin_base(
     prov_version: &str,
     prov_slot: &str,
     recorded: &str,
