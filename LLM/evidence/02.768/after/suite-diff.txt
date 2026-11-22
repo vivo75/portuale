@@ -1,0 +1,35 @@
+# suite-diff: before (before/suite-result-set.txt, 5037 names) vs after (this run, 5047 names), compared by name
+# NEW (in after, not in before): 17
+pytests-contract-suite.test_emerge_pretend_contract::test_pretend_case_exit_code[#656 leg (a): the bare provider request with installed+tree holders skips the transient, so only the provider reinstalls (bare p651prov: U p651prov-5.44.0 plus two U virtuals; supersedes the #651 guard description -- same argv, the world changed under it when enforcement-open landed; Portage H0/P2 reinstall with no fall-through, the skip block itself bed-oracled -- enforcement-open gate, rc 0)] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[gone-no-ebuild-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[gone-no-ebuild-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-pubgrub] skip
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[r698-holder-route-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[r698-holder-route-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_768_a_stale_consumer_with_no_ebuild_is_named[default] pass
+pytests-contract-suite.test_plan_world::test_768_a_stale_consumer_with_no_ebuild_is_named[pubgrub] pass
+# GONE (in before, not in after): 7
+pytests-contract-suite.test_emerge_pretend_contract::test_pretend_case_exit_code[#656 leg (a): the bare provider request with installed+tree holders skips the transient, so only the provider reinstalls (bare p651prov: R prov with the skip WARNING, virtuals kept; supersedes the #651 guard description -- same argv, the world changed under it when enforcement-open landed; Portage H0/P2 reinstall with no fall-through, the skip block itself bed-oracled -- enforcement-open gate, rc 0)] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[gone-A1-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[gone-A1-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[r698-D-698-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[r698-D-698-pubgrub] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[unred-A3-default] pass
+pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[unred-A3-pubgrub] pass
+# STATUS CHANGED on common names: 0
+# NOT PASS in after: 5 skips (4 in before, 1 new: test_766 pull-walked-consumer-pubgrub, runbook line 531 expects it skipped)
+pytests-contract-suite.test_benchmark_gate::test_rust_versions_harness_is_faster_than_python skip
+pytests-contract-suite.test_emerge_pretend_contract::test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer skip
+pytests-contract-suite.test_emerge_pretend_contract::test_oracle_slotop_missed_update skip
+pytests-contract-suite.test_musl_smoke::test_musl_static_binaries_run_in_scratch_container skip
+pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-pubgrub] skip
+# failing in after: 0

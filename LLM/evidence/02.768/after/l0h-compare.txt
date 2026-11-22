@@ -1,0 +1,8 @@
+### l0-health-20261122T175600Z
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []
+### l0-health-20261122T175732Z
+fast refusals []
+resolver refusals []
+consumers only fast []; only resolver []

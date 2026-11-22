@@ -1,0 +1,14 @@
+ .../src/resolve/feedback/co_upgrade.rs             |   4 +-
+ crates/portage-repo/src/resolve/feedback/mod.rs    |   5 +-
+ crates/portage-repo/src/resolve/mod.rs             |   1 +
+ crates/portage-repo/src/resolve/skipped.rs         |   5 +-
+ .../portage-repo/src/slot_operator/rebuild_scan.rs |  18 +-
+ crates/portage-repo/src/solver_bridge.rs           |   1 +
+ crates/portage-repo/src/tests/eliminate.rs         |   1 +
+ crates/portage-repo/src/tests/rebuild_scan.rs      |  36 ++
+ crates/portage-world/src/lib.rs                    | 376 +++++++++++++++++++--
+ crates/portage-world/src/rebuild.rs                | 188 ++++++++---
+ crates/portuale/src/plan_world.rs                  |  38 ++-
+ crates/portuale/src/pretend/json.rs                |   7 +-
+ crates/portuale/src/pretend/problem_reports.rs     |  21 +-
+ 13 files changed, 608 insertions(+), 93 deletions(-)
