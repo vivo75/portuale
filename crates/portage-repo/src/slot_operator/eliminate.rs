@@ -203,6 +203,8 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) update: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) top_level_atoms: &'a HashSet<String>,
+    /// Installed packages the solve walked below a package it merges.
+    pub(crate) walked_installed: &'a HashSet<(String, String)>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
     /// `--emptytree`: Portage files no slot-operator rebuild, so the stale-pin arm stays out.
@@ -221,8 +223,9 @@ pub(crate) struct SlotOperatorRebuilds {
 /// Legacy path for the `--solver=pubgrub` bridge only:
 /// the engine re-drives no pass, so it keeps the post-pass synthesiser --
 /// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
-/// iterated until the set stops growing. The default solver path seeds the
-/// consumer as a walked node instead.
+/// iterated until the set stops growing. The default solver seeds the
+/// consumer as a walked node instead; the bridge passes the installed
+/// packages its solve walked.
 pub(crate) fn slot_operator_rebuild_entries(
     args: SlotOperatorRebuildEntriesArgs<'_>,
 ) -> SlotOperatorRebuilds {
@@ -235,6 +238,7 @@ pub(crate) fn slot_operator_rebuild_entries(
         update,
         top_level_cps,
         top_level_atoms,
+        walked_installed,
         config,
         gate,
         empty,
@@ -254,7 +258,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             entries: &combined,
             reachable,
             scope: None,
-            walked_installed: &HashSet::new(),
+            walked_installed,
             already: &scheduled,
             undone: &BTreeSet::new(),
             with_bdeps,

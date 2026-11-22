@@ -1,0 +1,9 @@
+Verdicts per probe (pubgrub side; every df block byte-identical to before):
+pull-json, pull-uDN, pull-uD : OK  gains rR p569virt-1 + "causes rebuilds for:" pair; provider row U without r (#780). pull-json reinstall set = {p569virt}, equals the default.
+pull-DN, pull-D              : OK  byte-identical (rR p569virt-1 already printed before).
+pull-bt0                     : OK  gains rR p569virt-1 (default exits rc 1; Q2, intended).
+pull-u                       : OK  byte-identical (false NOTE stays, #781).
+tree-D-pull, tree-D-bpull    : OK  byte-identical.
+ctl-json, prov-json, r703-json: OK byte-identical.
+tree-uD-pull, tree-uD-bpull  : STOP-1  false NOTE + held-back single-row plan vanished; pubgrub now prints the default's plan (see ../STOP-1.md).
+Side fact: --json lists p569virt twice (reinstall + already_installed) on pubgrub, also before the change under -DN.

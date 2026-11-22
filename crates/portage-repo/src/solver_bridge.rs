@@ -905,7 +905,7 @@ fn graph_result_from_order(
         entries: slot_op_rebuilds,
         abi_rebuilds,
         refused: stale_pin_refusals,
-    } = bridge_slot_operator_rebuilds(req, &entries, repo);
+    } = bridge_slot_operator_rebuilds(req, &entries, repo, parents);
     entries.extend(slot_op_rebuilds);
     // The rebuild rows the slot-operator pass adds have no solver record: read
     // the same dependency data for them, so `--json` is whole for every
@@ -1565,12 +1565,52 @@ fn file_bridge_blocker_conflicts(
     orphan_blockers
 }
 
+/// The installed packages the solve walked below a package the plan merges:
+/// every `AlreadyInstalled` entry reachable from a merge-bound entry along the
+/// solution's dependency edges, installed-to-installed edges included.
+fn bridge_walked_installed(
+    entries: &[GraphEntry],
+    parents: &HashMap<String, Vec<(String, String)>>,
+) -> HashSet<(String, String)> {
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for (parent, child) in solution_taken_edges(parents) {
+        children.entry(parent).or_default().push(child);
+    }
+    let kept: HashSet<String> = entries
+        .iter()
+        .filter(|e| matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. }))
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    let mut stack: Vec<String> = entries
+        .iter()
+        .filter(|e| super::merge_bound_version(&e.outcome).is_some())
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    let mut seen: HashSet<String> = stack.iter().cloned().collect();
+    let mut walked = HashSet::new();
+    while let Some(cp) = stack.pop() {
+        for child in children.get(&cp).into_iter().flatten() {
+            if !seen.insert(child.clone()) {
+                continue;
+            }
+            if kept.contains(child)
+                && let Some((category, package)) = child.split_once('/')
+            {
+                walked.insert((category.to_string(), package.to_string()));
+            }
+            stack.push(child.clone());
+        }
+    }
+    walked
+}
+
 /// ABI rebuilds via the walk's own fixpoint, extended before the merge-order
 /// sort so rebuilds land dependency-first. The stale pins the scan refuses to repair come back with them.
 fn bridge_slot_operator_rebuilds(
     req: &ResolveRequest,
     entries: &[GraphEntry],
     lazy: &LazyRepo,
+    parents: &HashMap<String, Vec<(String, String)>>,
 ) -> super::SlotOperatorRebuilds {
     let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
     {
@@ -1595,6 +1635,12 @@ fn bridge_slot_operator_rebuilds(
             .collect();
         // The raw request atoms, for the greedy-eligibility half of the gate.
         let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
+        // Only a deep walk recurses into installed packages.
+        let walked_installed = if req.deep == super::Deep::NotRequested {
+            HashSet::new()
+        } else {
+            bridge_walked_installed(entries, parents)
+        };
         super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
             root: &req.root,
             entries,
@@ -1604,6 +1650,7 @@ fn bridge_slot_operator_rebuilds(
             update: req.update,
             top_level_cps: &top_level_cps,
             top_level_atoms: &top_level_atoms,
+            walked_installed: &walked_installed,
             config: &req.config,
             gate: lazy.gate(),
             empty: req.empty,
@@ -10292,6 +10339,109 @@ mod tests {
             none.stale_pin_refusals
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scratch root with the root-`pull` shape: `p569prov-5.42` installed and
+    /// `p569virt-1` installed with `recorded` as its RDEPEND.
+    fn pg770_root(name: &str, recorded: &str) -> portage_util::TempDir {
+        let dir = portage_util::TempDir::new(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |pf: &str, files: &[(&str, &str)]| {
+            let d = dir.join("var/db/pkg/dev-libs").join(pf);
+            std::fs::create_dir_all(&d).unwrap();
+            s6_write_files(&d, files);
+        };
+        let base = [
+            ("CATEGORY", "dev-libs\n"),
+            ("EAPI", "8\n"),
+            ("repository", "testrepo\n"),
+        ];
+        mk(
+            "p569prov-5.42",
+            &[base[0], base[1], base[2], ("SLOT", "0/5.42\n")],
+        );
+        mk(
+            "p569virt-1",
+            &[
+                base[0],
+                base[1],
+                base[2],
+                ("SLOT", "0\n"),
+                ("RDEPEND", recorded),
+            ],
+        );
+        dir
+    }
+
+    /// The pubgrub result for `dev-libs/p569pull` on `root`, seeded like the
+    /// command line seeds a world update (here the one world atom).
+    fn pg770_solve(root: &std::path::Path, update: bool) -> super::super::GraphResult {
+        let mut req = fixture_request(&["dev-libs/p569pull"]);
+        req.root = root.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.update = update;
+        req.deep = super::super::Deep::Unlimited;
+        req.config.complete_seed_atoms = vec!["dev-libs/p569pull".to_string()];
+        super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("resolves")
+    }
+
+    fn pg770_reinstalls(result: &super::super::GraphResult, package: &str) -> bool {
+        result.entries.iter().any(|e| {
+            e.package == package
+                && matches!(e.outcome, super::super::PretendOutcome::Reinstall { .. })
+        })
+    }
+
+    /// PMS `sec:slot-dep`, charter property 1: the plan merges `p569pull-2`,
+    /// which moves `p569prov` to 5.44; the installed `p569virt-1` the solve
+    /// walked below it recorded `:0/5.42=`, so the bridge schedules its rebuild.
+    #[test]
+    fn pg770_bridge_rebuilds_the_walked_installed_consumer() {
+        let root = pg770_root("portage-bridge-pg770-a", "dev-libs/p569prov:0/5.42=\n");
+        let result = pg770_solve(&root, true);
+        assert!(
+            pg770_reinstalls(&result, "p569virt"),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert!(
+            result
+                .abi_rebuilds
+                .iter()
+                .any(|(p, c)| p.contains("p569prov-5.44") && c.contains("p569virt-1")),
+            "{:?}",
+            result.abi_rebuilds
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Control: a recorded binding that is not stale schedules nothing.
+    #[test]
+    fn pg770_bridge_leaves_a_consumer_without_a_stale_binding() {
+        let root = pg770_root("portage-bridge-pg770-b", "dev-libs/p569prov\n");
+        let result = pg770_solve(&root, true);
+        assert!(
+            !pg770_reinstalls(&result, "p569virt"),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without `--update` the walked consumer is rebuilt too.
+    #[test]
+    fn pg770_bridge_rebuilds_the_walked_consumer_without_update() {
+        let root = pg770_root("portage-bridge-pg770-c", "dev-libs/p569prov:0/5.42=\n");
+        let result = pg770_solve(&root, false);
+        assert!(
+            pg770_reinstalls(&result, "p569virt"),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// `bridge_circular_display` only hardens build-time edges nothing

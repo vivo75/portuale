@@ -263,6 +263,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
             update: false,
             top_level_cps: &HashSet::new(),
             top_level_atoms: &HashSet::new(),
+            walked_installed: &HashSet::new(),
             config: &test_config(),
             gate: crate::test_gate(&[]),
         });

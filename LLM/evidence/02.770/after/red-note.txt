@@ -1,0 +1,9 @@
+Correction to red.txt (Task 5, 2026-11-22). The Task 4 helper pg770_root returned dir.to_path_buf() and dropped
+the portage_util::TempDir guard on return, which deleted the scratch root before the solve. Both failing tests failed
+because nothing was installed (every row "New"), not because of the missing walked set; the control passed vacuously.
+The helper now returns the TempDir (no expected value changed). Re-run with the walked set forced empty
+(production change neutralised), on the fixed helper:
+  pg770_bridge_rebuilds_the_walked_installed_consumer           FAILED by assertion  (the real red)
+  pg770_bridge_leaves_a_consumer_without_a_stale_binding        ok
+  pg770_bridge_rebuilds_the_walked_consumer_without_update      ok  (the stale-pin arm already schedules it, as the plan says)
+With the implementation: all three ok.

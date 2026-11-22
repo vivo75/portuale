@@ -1,0 +1,59 @@
+5c5
+< rc=0 stdout=eafd5418025ac9124fc63b078e2d7ed9e161d1ebd47bec00124b19cc3d0ccca4 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=7441
+---
+> rc=0 stdout=8effb756103b2392f84755f60a0e1d9b3567688aa5e4e1ef7726129d8502d1c8 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+23c23
+< rc=0 stdout=7f630b9d5b921924e7bdaaa939324ac8c4ec725eb47a946aa48f9370027bfd53 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=7441
+---
+> rc=0 stdout=5a6a0d18fb86a6f9bb07908bc5dd919cacf736a1031564d47d0ada3f58b76e64 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+29a30
+> [ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/770/roots/pull 0 KiB
+32a34,35
+>   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull') causes rebuilds for:
+>     (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull')
+112c115
+< rc=0 stdout=7f630b9d5b921924e7bdaaa939324ac8c4ec725eb47a946aa48f9370027bfd53 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=7417
+---
+> rc=0 stdout=5a6a0d18fb86a6f9bb07908bc5dd919cacf736a1031564d47d0ada3f58b76e64 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4942
+118a122
+> [ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/770/roots/pull 0 KiB
+121a126,127
+>   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull') causes rebuilds for:
+>     (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull')
+162c168
+< rc=0 stdout=455366a26408bb83fe6fce51b6c7355d63018d40e3c0dd81ec9d33781f843300 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=7441
+---
+> rc=0 stdout=877c6f185c32c1a0931fd305feb618b97c27ec77d8575d543a741e51dff19582 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+168a175
+> [ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/770/roots/pull 0 KiB
+171a179,180
+>   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull') causes rebuilds for:
+>     (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/pull')
+183,187c192,198
+< rc=0 stdout=62076fdee425afc1b290a22a067ea0fbabe64bc95d5f6fcc764fabce47a08f49 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4812
+< [ebuild  N     ] dev-libs/p569pull-1::testrepo to /var/tmp/770/roots/ctl 0 KiB
+< NOTE: One or more updates were not merged because an installed package cannot follow them:
+<   not merged: 5.44 (dev-libs/p569virt-1 needs =dev-libs/p569prov-5.38*)
+<   No visible version of dev-libs/p569virt accepts dev-libs/p569prov-5.44.
+---
+> rc=0 stdout=04ba211cef0fc77be736a54ac79ac3b8a8d4d5c5234e1bb3b499c062a76105aa stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4808
+> [ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/770/roots/ctl 0 KiB
+>   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/ctl') causes rebuilds for:
+>     (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/ctl')
+217,221c228,234
+< rc=0 stdout=3d0591af15c250fcac32754957497e3ab0220e4915b358408895b6d3503f92ea stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4813
+< [ebuild  N     ] dev-libs/p589bpull-1::testrepo to /var/tmp/770/roots/ctl 0 KiB
+< NOTE: One or more updates were not merged because an installed package cannot follow them:
+<   not merged: 5.44 (dev-libs/p589bvirt-1 needs =dev-libs/p589bprov-5.38*)
+<   No visible version of dev-libs/p589bvirt accepts dev-libs/p589bprov-5.44.
+---
+> rc=0 stdout=a83d3059f2efad5c21c39060a73230ff9456d97d4d622579aed1371cf64bff76 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4808
+> [ebuild     U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to /var/tmp/770/roots/ctl 0 KiB
+> [ebuild  N     ] dev-libs/p589bpull-2::testrepo to /var/tmp/770/roots/ctl 0 KiB
+>   (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/ctl') causes rebuilds for:
+>     (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/770/roots/ctl')

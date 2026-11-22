@@ -1,0 +1,162 @@
+   Compiling portage-repo v300.83.0 (/home/vivo/repo/PORTUALE/portuale/crates/portage-repo)
+    Finished `release` profile [optimized] target(s) in 41.49s
+     Running unittests src/lib.rs (target/release/deps/portage_repo-85806134b82c2f23)
+
+running 3 tests
+test solver_bridge::tests::pg770_bridge_leaves_a_consumer_without_a_stale_binding ... ok
+test solver_bridge::tests::pg770_bridge_rebuilds_the_walked_installed_consumer ... FAILED
+test solver_bridge::tests::pg770_bridge_rebuilds_the_walked_consumer_without_update ... FAILED
+
+failures:
+
+---- solver_bridge::tests::pg770_bridge_rebuilds_the_walked_installed_consumer stdout ----
+
+thread 'solver_bridge::tests::pg770_bridge_rebuilds_the_walked_installed_consumer' (2017659) panicked at crates/portage-repo/src/solver_bridge.rs:10358:9:
+["dev-libs/p569core-1.0:0", "dev-libs/p569prov-5.44:0", "dev-libs/p569pull-2:0", "dev-libs/p569virt-1:0"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- solver_bridge::tests::pg770_bridge_rebuilds_the_walked_consumer_without_update stdout ----
+
+thread 'solver_bridge::tests::pg770_bridge_rebuilds_the_walked_consumer_without_update' (2017658) panicked at crates/portage-repo/src/solver_bridge.rs:10392:9:
+["dev-libs/p569core-1.0:0", "dev-libs/p569prov-5.44:0", "dev-libs/p569pull-2:0", "dev-libs/p569virt-1:0"]
+
+
+failures:
+    solver_bridge::tests::pg770_bridge_rebuilds_the_walked_consumer_without_update
+    solver_bridge::tests::pg770_bridge_rebuilds_the_walked_installed_consumer
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1490 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p portage-repo --lib`
+.F.F.F                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o1')
+solver = 'pubgrub', name = 'pull'
+rows = {('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+reinstalls = {'dev-libs/p569virt'}, virt = False, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # A recorded pin the tree ebuild lets go: both reinstall it (owner Q4(a), #769).
+        pytest.param("r698", set(), {"dev-libs/p698rebuild", "dev-libs/p698reinst"}, True, False, id="r698-holder-route"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, False, id="pull-walked-consumer"),
+        # A consumer with no ebuild left: both name it (owner Q2(b)); the rows differ by contract.
+        pytest.param("gone", None, set(), True, False, id="gone-no-ebuild"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'stale reins...bs/p569virt']} == {}
+E         
+E         Left contains 1 more item:
+E         {'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:293: AssertionError
+___ test_770_both_solvers_rebuild_the_walked_installed_virtual[uDN-pubgrub] ____
+
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_1')
+solver = 'pubgrub', flags = ('--update', '--deep', '--newuse')
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("flags", [("--update", "--deep", "--newuse"), ("--update", "--deep")], ids=["uDN", "uD"])
+    def test_770_both_solvers_rebuild_the_walked_installed_virtual(emerge_binary, fixture_env, tmp_path, solver, flags):
+        """Backlog #770, PMS `dependencies.tex` `sec:slot-dep` and charter property 1 (a `:=` binding
+        the plan breaks is repaired or said): `p569pull-2` moves `p569prov` to 5.44, so the installed
+        `p569virt-1`, recorded on `p569prov:0/5.42=` and walked below `p569pull`, is rebuilt, on both
+        solvers. The expected rows are derived from the root (the binding and the move), and equal the
+        default solver's output; nothing comes from Portage. The provider row's `r` tag is not compared
+        (pubgrub does not print it, backlog #780)."""
+        env = _root_766(fixture_env, tmp_path, "pull")
+        argv = [str(emerge_binary), *(["--solver=pubgrub"] if solver else []), "--pretend", *flags, "--getbinpkg=n", "@world"]
+        run = subprocess.run(argv, capture_output=True, text=True, check=False,
+                             env={**env, "PORTUALE_PG_TRACE": "1"} if solver else env)
+        assert run.returncode == 0, (run.stdout, run.stderr)
+        assert bool(re.search(r"^pg-", run.stderr, re.M)) == bool(solver), run.stderr[:300]
+        rows = [line for line in run.stdout.splitlines() if line.startswith("[ebuild")]
+>       assert any(re.match(r"\[ebuild  rR    \] dev-libs/p569virt-1\b", line) for line in rows), rows
+E       AssertionError: ['[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_1/root', '[ebu... '[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_1/root', ...]
+E       assert False
+E        +  where False = any(<generator object test_770_both_solvers_rebuild_the_walked_installed_virtual.<locals>.<genexpr> at 0x7fa28de6a500>)
+
+pytests-contract-suite/test_plan_world.py:372: AssertionError
+____ test_770_both_solvers_rebuild_the_walked_installed_virtual[uD-pubgrub] ____
+
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_3')
+solver = 'pubgrub', flags = ('--update', '--deep')
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("flags", [("--update", "--deep", "--newuse"), ("--update", "--deep")], ids=["uDN", "uD"])
+    def test_770_both_solvers_rebuild_the_walked_installed_virtual(emerge_binary, fixture_env, tmp_path, solver, flags):
+        """Backlog #770, PMS `dependencies.tex` `sec:slot-dep` and charter property 1 (a `:=` binding
+        the plan breaks is repaired or said): `p569pull-2` moves `p569prov` to 5.44, so the installed
+        `p569virt-1`, recorded on `p569prov:0/5.42=` and walked below `p569pull`, is rebuilt, on both
+        solvers. The expected rows are derived from the root (the binding and the move), and equal the
+        default solver's output; nothing comes from Portage. The provider row's `r` tag is not compared
+        (pubgrub does not print it, backlog #780)."""
+        env = _root_766(fixture_env, tmp_path, "pull")
+        argv = [str(emerge_binary), *(["--solver=pubgrub"] if solver else []), "--pretend", *flags, "--getbinpkg=n", "@world"]
+        run = subprocess.run(argv, capture_output=True, text=True, check=False,
+                             env={**env, "PORTUALE_PG_TRACE": "1"} if solver else env)
+        assert run.returncode == 0, (run.stdout, run.stderr)
+        assert bool(re.search(r"^pg-", run.stderr, re.M)) == bool(solver), run.stderr[:300]
+        rows = [line for line in run.stdout.splitlines() if line.startswith("[ebuild")]
+>       assert any(re.match(r"\[ebuild  rR    \] dev-libs/p569virt-1\b", line) for line in rows), rows
+E       AssertionError: ['[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_3/root', '[ebu... '[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/pmtest/pytest-basetemp/test_770_both_solvers_rebuild_3/root', ...]
+E       assert False
+E        +  where False = any(<generator object test_770_both_solvers_rebuild_the_walked_installed_virtual.<locals>.<genexpr> at 0x7fa28de2b680>)
+
+pytests-contract-suite/test_plan_world.py:372: AssertionError
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_770_both_solvers_rebuild_the_walked_installed_virtual[uDN-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_770_both_solvers_rebuild_the_walked_installed_virtual[uD-pubgrub]
+3 failed, 3 passed, 34 deselected, 2 warnings in 2.72s

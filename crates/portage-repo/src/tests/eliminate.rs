@@ -76,6 +76,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
             update: true,
             top_level_cps: &HashSet::new(),
             top_level_atoms: &HashSet::new(),
+            walked_installed: &HashSet::new(),
             config: &test_config(),
             gate: crate::test_gate(&repos),
         });
@@ -101,6 +102,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
             update: false,
             top_level_cps: &HashSet::new(),
             top_level_atoms: &HashSet::new(),
+            walked_installed: &HashSet::new(),
             config: &test_config(),
             gate: crate::test_gate(&repos),
         });
@@ -210,6 +212,7 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
             update: false,
             top_level_cps: &HashSet::new(),
             top_level_atoms: &HashSet::new(),
+            walked_installed: &HashSet::new(),
             config: &test_config(),
             gate: crate::test_gate(&repos),
         });
@@ -260,6 +263,7 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
             update: false,
             top_level_cps: &HashSet::new(),
             top_level_atoms: &HashSet::new(),
+            walked_installed: &HashSet::new(),
             config: &test_config(),
             gate: crate::test_gate(&repos),
         });
@@ -771,6 +775,7 @@ fn slot_operator_rebuild_entries_reports_the_refused_stale_pin() {
         update: true,
         top_level_cps: &HashSet::new(),
         top_level_atoms: &HashSet::new(),
+        walked_installed: &HashSet::new(),
         config: &test_config(),
         gate: crate::test_gate(&repos),
     });
