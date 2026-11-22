@@ -1,0 +1,12 @@
+pair-check: base 31c033d26d97cca2461964a3bcc7bb20287c9254 (portuale, anchor refs/heads/opencode)
+pair-check: base 11ac29cb49710a50eba6e606aeae1a85c62f47ab (pmtest, anchor refs/heads/opencode)
+pair-check: WARN portuale commit e9538ef quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit bf83194 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit 1329299 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit 0e2fb5c quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit f3cb854 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit f3ad4f1 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit 331aac8 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit 3aa51c7 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: WARN portuale commit 7580d86 quotes no pmtest short sha (pmtest has commits in 11ac29cb49710a50eba6e606aeae1a85c62f47ab..HEAD)
+pair-check: OK

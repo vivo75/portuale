@@ -1,0 +1,16 @@
+# #770 Task 6a suite diff: before = before/suite-result-set.txt (pytest-parallel junit), after = 2026-11-22 run of pytest-parallel with junit (portuale f6385911, pmtest f36c478)
+# method: python3 -I cmp.py, id = all text before the final state word; counts: before 5047 ids, after 5049 ids
+# MISSING-IN-AFTER: 2 (expected: removed pull-S ids)
+# STATE-CHANGE: 1 (expected: agree test pubgrub pull skip->pass)
+# NEW-IN-AFTER: 4 (expected: test_770_* four ids)
+# any other change: none
+
+before ids 5047 lines 5047
+after ids 5049 lines 5049
+MISSING-IN-AFTER pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[pull-S-default] ['pass']
+MISSING-IN-AFTER pytests-contract-suite.test_plan_world::test_766_the_known_differences_are_pinned_exactly[pull-S-pubgrub] ['pass']
+STATE-CHANGE pytests-contract-suite.test_plan_world::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-pubgrub] ['skip'] -> ['pass']
+NEW-IN-AFTER pytests-contract-suite.test_plan_world::test_770_both_solvers_rebuild_the_walked_installed_virtual[uD-default] ['pass']
+NEW-IN-AFTER pytests-contract-suite.test_plan_world::test_770_both_solvers_rebuild_the_walked_installed_virtual[uD-pubgrub] ['pass']
+NEW-IN-AFTER pytests-contract-suite.test_plan_world::test_770_both_solvers_rebuild_the_walked_installed_virtual[uDN-default] ['pass']
+NEW-IN-AFTER pytests-contract-suite.test_plan_world::test_770_both_solvers_rebuild_the_walked_installed_virtual[uDN-pubgrub] ['pass']
