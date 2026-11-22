@@ -1,0 +1,87 @@
+#772 late-need census: verdict (runbook 02.771-772, Task 3, Steps 5-6)
+
+Scope narrowing (coordinator ruling 1): Task 2's verdict is "#771 may ship: no"
+(before/v3fix-verdict.txt), so the v3fix order will not ship. The v3fix cycle_cut
+hunk was NOT applied, no census-v3fix binary was built, and only the order of the
+unmodified code ("before") was classified. Task 7's S2.4 comparison therefore uses
+the "before" census, which is this file.
+
+Census binary: /var/tmp/771/bin-census-before/portuale
+  sha256 e76c9f715939283040d614496b77e111f9e5c4a2ae45cf19227a33e7a897b9e9
+  = HEAD c6eb008f + before/census.patch (World::node_atoms/atom_nodes kept,
+    Bootstrap::drops pub, crates/portage-world/src/late.rs, PORTUALE_CENSUS dump in
+    plan_world.rs). order.rs is untouched.
+Plan hashes (sha256 of the --plan-world --json --sort depend stdout, first 16 hex):
+  host update      bin-before aac2bcf01cf5755c   census binary aac2bcf01cf5755c  (same)
+  host emptytree   bin-before 55c313ca08697959   census binary 55c313ca08697959  (same)
+  bed              bin-before 96bc81c1e57d5e49   census binary 96bc81c1e57d5e49  (same)
+  The census binary also prints the same hash with PORTUALE_CENSUS unset, and every
+  non-CENSUS stderr line equals the bin-before stderr (host, host-emptytree, bed).
+  Literal checker on the bed plan: findings [] (same as bed-before.literal.txt).
+
+Edge scope: every row, every build atom (bits & BUILD_KIND_MASK) whose target slot has
+no row before the requesting row (later row, or no row). The boot row's dropped edges
+(Bootstrap::drops) are skipped. No plan here has a boot row (stderr: "0 bootstrap" on
+host, host emptytree and bed).
+
+Class counts (rules in the runbook's order: N, C1a, C1b, C2, C5, C3, U)
+
+  plan             rows  late edges   N     N0  C1a  C1b  C2  C3  C5  U
+  host (update)     350      3454    3446    0     8    0    0   0   0   0
+  host emptytree   2181       309       0    0   306    0    0   0   3   0
+  bed (update)      172       356     343    0    13    0    0   0   0   0
+  (order: before only; v3fix not measured, see the narrowing above.)
+  N = target is not a row (kept installed slot: all 3446 host and 343 bed N lines
+  have an installed version of the slot). N0 = atom aimed at no slot (unmatched or
+  masked best): none on any plan. C4 cannot occur by construction (earlier targets
+  are filtered out).
+
+Literal checker on the same plans: host and bed 0 build-order findings
+(host: one checker-limitation note for sys-fs/zfs-2.4.4), host emptytree 0 build-order
+findings (before/host-emptytree.literal.txt: one unrelated runtime-deps failure for
+www-servers/nginx-1.31.7-r1 and three checker-limitation notes). Census and checker
+therefore agree: no late need, no build-order finding.
+
+What the classes are, in these plans
+  host C1a (8, all inside the 11-member report cycle): pam->systemd, nghttp2->systemd,
+    python:3.15->util-linux, openldap->util-linux, tpm2-tss->util-linux, cryptsetup->util-linux,
+    systemd->util-linux, systemd->python:3.14. Every target has an installed version that
+    meets the atom; the two `:=` DEPEND atoms (pam->systemd >=254:=, tpm2-tss->util-linux:=)
+    keep their sub-slot in the plan (systemd 0/2 -> 2, util-linux 0 -> 0), so no moved
+    binding.
+  bed C1a (13, all inside the 26-member report cycle): eight edges to dev-lang/python:3.14
+    (installed 3.14.6_p1, planned 3.14.10_p1, same sub-slot 3.14), nghttp2->systemd,
+    util-linux->systemd, elfutils->libarchive:= (DEPEND, installed 3.8.9 sub-slot 13, plan
+    3.8.10 sub-slot 13: not moved, so C1a and not the C1b the unreduced scan guessed),
+    gcc:16->glibc[cet(-)] (installed 2.43-r2 2.2, plan 2.43-r4 2.2).
+  emptytree: 306 C1a (installed versions meet them, no moved DEPEND `:=` binding), 3 C5:
+    media-libs/libaom (row 216), dev-libs/glib:2 (row 222), dev-util/bpftool (row 243)
+    each BDEPEND dev-lang/python:3.15 (row 299, not installed), displaced by the arm
+    on python:3.14 that is met at the row.
+  The three emptytree report lines have 3, 4 and 187 member entries (2, 3 and 186
+  unique members; the 187 one repeats python:3.14, coordinator ruling 2 measured 186).
+  The host line has 12 entries / 11 unique, the bed line 27 / 26. hostcycle.py read the
+  Tarjan member list as a path; it is not (a Tarjan discovery list), which is why the
+  late-edge census above, not the member list, is the evidence.
+
+Non-vacuity checks of the census (so that the all-zero result means something)
+  - Scratch ROOT, world dev-libs/w764db on an empty VDB (fixture shape V3):
+    census prints one U edge, dev-libs/w764du -> dev-libs/w764db [BDEPEND], the late
+    need that the literal checker fails on this plan (v3fix-fixtures.txt, "before
+    dev-libs/w764db ... build-order dev-libs/w764du-1").
+  - C5 is exercised on the host emptytree plan (3 lines). C1b and C3 are not exercised
+    by any real plan: no data produced them, and no synthetic shape was built for them
+    in this task (Task 6/7 fixtures w772d / w772e will).
+
+PREDICTED LINES (late U or C1b edge, one line each; order = before)
+  host (update):    none
+  host emptytree:   none
+  bed:              none
+So after S2 the host, host-emptytree and bed runs print no "build cycle" line at all
+(the 11-, 26-, 187-member and the two small emptytree lines disappear) and no
+"before its build dependency" line.
+
+STOP-0 check: no C3 edge; no U edge anywhere, so none on a plan whose literal checker
+shows no build-order finding. STOP-0 not triggered. C5 (3 lines) is listed, not a stop.
+
+S2 may proceed

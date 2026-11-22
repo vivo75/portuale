@@ -1,0 +1,523 @@
+diff --git a/crates/portage-world/src/bootstrap.rs b/crates/portage-world/src/bootstrap.rs
+index 842ffd53..fdebbd0f 100644
+--- a/crates/portage-world/src/bootstrap.rs
++++ b/crates/portage-world/src/bootstrap.rs
+@@ -35,7 +35,7 @@ impl Bootstrap {
+             })
+     }
+ 
+-    fn drops(&self, from: &str, to: &str) -> bool {
++    pub fn drops(&self, from: &str, to: &str) -> bool {
+         from == self.node
+             && self
+                 .guards
+diff --git a/crates/portage-world/src/late.rs b/crates/portage-world/src/late.rs
+new file mode 100644
+index 00000000..76aaa863
+--- /dev/null
++++ b/crates/portage-world/src/late.rs
+@@ -0,0 +1,379 @@
++//! The build edges of a fast plan whose target is merged after the row that
++//! needs it (or never), with the facts that decide whether the order breaks
++//! a build dependency.
++
++use crate::bootstrap::BuildPlan;
++use crate::{DEP_KEYS, World, load_config, use_deps_hold};
++use portage_dep::SlotOperator;
++use portage_repo::{Candidate, EffectiveUseFlagsArgs, InstalledPackage};
++use portage_use_reduce::{
++    AltPreference, BUILD_KIND_MASK, MatchMode, UseReduceFlatDisjunctiveArgs, use_reduce_flat,
++    use_reduce_flat_disjunctive,
++};
++use portage_vdb::{EntryKey, InstalledDb};
++use std::collections::{BTreeMap, HashSet};
++use std::path::Path;
++use std::sync::Arc;
++
++/// One late build edge `from -> to` through `atom`, with the facts the
++/// classification reads.
++pub struct LateEdge {
++    pub from: String,
++    pub to: String,
++    pub atom: String,
++    pub bits: u8,
++    /// The row that builds `from`.
++    pub row: usize,
++    /// Every row of `to`; empty when it has none.
++    pub to_rows: Vec<usize>,
++    /// Installed version and `SLOT` file of `to`'s slot.
++    pub installed: Option<(String, String)>,
++    /// The version and sub-slot the plan chooses for `to`.
++    pub planned: Option<(String, String)>,
++    pub met_by_installed: bool,
++    pub other_installed_slot_meets: bool,
++    pub in_scc: bool,
++    pub has_slot_op: bool,
++    pub in_depend: bool,
++    /// The atom is in the row's own build text after the conditionals.
++    pub text_has_atom: bool,
++    /// Another `||` arm is met at the row, so the reduction drops the atom.
++    pub or_displaced: bool,
++}
++
++struct Facts<'a> {
++    world: &'a World,
++    plan: &'a BuildPlan<'a>,
++    root: &'a Path,
++    config: portage_profile::Config,
++    installed: Arc<Vec<InstalledPackage>>,
++    db: Arc<dyn InstalledDb>,
++    rows_of: BTreeMap<String, Vec<usize>>,
++    by_node: BTreeMap<String, &'a crate::SlotSet>,
++}
++
++/// Every late build edge of `plan`, in row order.
++///
++/// # Errors
++/// The repositories or the configuration cannot be read.
++pub fn census(
++    world: &World,
++    plan: &BuildPlan<'_>,
++    root: &Path,
++    config_root: &Path,
++) -> Result<Vec<LateEdge>, String> {
++    let repos = portage_repo::find_repos_quiet(config_root).map_err(|e| e.to_string())?;
++    let config = load_config(config_root, root, &repos)?;
++    let mut rows_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
++    for (i, row) in plan.rows.iter().enumerate() {
++        rows_of.entry(row.slot.node()).or_default().push(i);
++    }
++    let facts = Facts {
++        world,
++        plan,
++        root,
++        config,
++        installed: portage_repo::all_installed_packages(root),
++        db: portage_vdb::for_root(root),
++        rows_of,
++        by_node: world.slots.iter().map(|s| (s.node(), s)).collect(),
++    };
++    let mut out = Vec::new();
++    for (i, row) in plan.rows.iter().enumerate() {
++        let from = row.slot.node();
++        let Some(atoms) = world.node_atoms.get(&from) else {
++            continue;
++        };
++        for (atom, &bits) in atoms {
++            if bits & BUILD_KIND_MASK == 0 {
++                continue;
++            }
++            for to in world.atom_nodes.get(atom).into_iter().flatten() {
++                if *to == from {
++                    continue;
++                }
++                if row.bootstrap.is_some() && plan.bootstrap.is_some_and(|b| b.drops(&from, to)) {
++                    continue;
++                }
++                let to_rows = facts.rows_of.get(to).cloned().unwrap_or_default();
++                if to_rows.iter().any(|&j| j < i) {
++                    continue;
++                }
++                out.push(facts.edge(i, &from, to, atom, bits, to_rows));
++            }
++        }
++    }
++    Ok(out)
++}
++
++impl Facts<'_> {
++    fn edge(
++        &self,
++        i: usize,
++        from: &str,
++        to: &str,
++        atom: &str,
++        bits: u8,
++        to_rows: Vec<usize>,
++    ) -> LateEdge {
++        let (to_cp, to_slot) = to.split_once(':').unwrap_or((to, ""));
++        let same_cp = |p: &&InstalledPackage| format!("{}/{}", p.category, p.package) == to_cp;
++        let slot_here: Vec<&InstalledPackage> = self
++            .installed
++            .iter()
++            .filter(same_cp)
++            .filter(|p| p.slot == to_slot)
++            .collect();
++        let installed = slot_here.first().map(|p| {
++            let key = EntryKey::new(
++                p.category.clone(),
++                format!("{}-{}", p.package, p.version),
++            );
++            let slot = self
++                .db
++                .aux_get(&key, "SLOT")
++                .ok()
++                .flatten()
++                .unwrap_or_default()
++                .trim()
++                .to_string();
++            (p.version.clone(), slot)
++        });
++        let planned = self
++            .by_node
++            .get(to)
++            .and_then(|s| s.chosen())
++            .map(|c| (c.version.clone(), c.sub_slot.clone()));
++        let met_by_installed = slot_here.iter().any(|p| self.installed_matches(atom, p));
++        let other_installed_slot_meets = self
++            .installed
++            .iter()
++            .filter(same_cp)
++            .filter(|p| p.slot != to_slot)
++            .any(|p| self.installed_matches(atom, p) && !self.replaced_before(p, i));
++        let in_scc = self
++            .plan
++            .cycles
++            .iter()
++            .any(|c| c.iter().any(|m| m == from) && c.iter().any(|m| m == to));
++        let parsed = portage_dep::parse_atom(atom);
++        let (text_has_atom, or_displaced) = self.or_displaced(i, atom, bits);
++        LateEdge {
++            from: from.to_string(),
++            to: to.to_string(),
++            atom: atom.to_string(),
++            bits,
++            row: i,
++            to_rows,
++            installed,
++            planned,
++            met_by_installed,
++            other_installed_slot_meets,
++            in_scc,
++            has_slot_op: parsed
++                .as_ref()
++                .is_some_and(|a| a.slot_operator == Some(SlotOperator::Equals)),
++            in_depend: bits & 1 != 0,
++            text_has_atom,
++            or_displaced,
++        }
++    }
++
++    /// Whether an earlier row than `i` replaces the slot of `p`.
++    fn replaced_before(&self, p: &InstalledPackage, i: usize) -> bool {
++        self.rows_of
++            .get(&format!("{}/{}:{}", p.category, p.package, p.slot))
++            .is_some_and(|rows| rows.iter().any(|&j| j < i))
++    }
++
++    /// The installed `p` matches `atom`: version, slot, sub-slot, and the
++    /// `[flag]` dependencies against its recorded `USE`.
++    fn installed_matches(&self, atom: &str, p: &InstalledPackage) -> bool {
++        let m = p.match_str(self.root);
++        if !portage_dep::match_from_list(atom, &[m.as_str()]).is_some_and(|v| !v.is_empty()) {
++            return false;
++        }
++        if !atom.contains('[') {
++            return true;
++        }
++        let key = EntryKey::new(p.category.clone(), format!("{}-{}", p.package, p.version));
++        let read = |field: &str| {
++            self.db
++                .aux_get(&key, field)
++                .ok()
++                .flatten()
++                .unwrap_or_default()
++        };
++        let enabled: HashSet<String> = read("USE")
++            .split_whitespace()
++            .map(|f| f.trim_start_matches(['+', '-']).to_string())
++            .collect();
++        use_deps_hold(atom, &read("IUSE"), &enabled)
++    }
++
++    /// The USE a plan row builds with: the planned USE of its slot, the
++    /// boot row's reduced flag removed.
++    fn row_use(&self, j: usize, c: &Candidate) -> HashSet<String> {
++        let row = &self.plan.rows[j];
++        let node = row.slot.node();
++        let mut flags: HashSet<String> = match self.world.planned_use.get(&node) {
++            Some(set) => set.iter().cloned().collect(),
++            None => {
++                let (category, package) = row.slot.cp.split_once('/').unwrap_or_default();
++                self.use_of(c, category, package)
++            }
++        };
++        if let Some(b) = &row.bootstrap {
++            flags.remove(&b.reduced_flag);
++        }
++        flags
++    }
++
++    fn use_of(&self, c: &Candidate, category: &str, package: &str) -> HashSet<String> {
++        portage_repo::effective_use_flags(EffectiveUseFlagsArgs {
++            config: &self.config,
++            iuse: &c.iuse,
++            keywords: &c.keywords,
++            candidate_str: &c.match_str(category, package),
++            build_id: None,
++            category,
++            package,
++        })
++        .iter()
++        .cloned()
++        .collect()
++    }
++
++    /// Whether the row `j` (an earlier row than the one that needs `atom`) meets it.
++    fn row_meets(&self, atom: &str, j: usize) -> bool {
++        let row = &self.plan.rows[j];
++        let Some(c) = row.slot.chosen() else {
++            return false;
++        };
++        let (category, package) = row.slot.cp.split_once('/').unwrap_or_default();
++        let s = c.match_str(category, package);
++        if !portage_dep::match_from_list(atom, &[s.as_str()]).is_some_and(|v| !v.is_empty()) {
++            return false;
++        }
++        !atom.contains('[') || use_deps_hold(atom, &c.iuse, &self.row_use(j, c))
++    }
++
++    /// Whether `atom` is met when row `i` starts: by an earlier row, or by an
++    /// installed version no earlier row replaces whose `:=` binding the
++    /// plan does not move (`in_depend` says the atom is a `DEPEND` one).
++    fn met_at(&self, atom: &str, i: usize, in_depend: bool) -> bool {
++        if (0..i).any(|j| self.row_meets(atom, j)) {
++            return true;
++        }
++        let Some(parsed) = portage_dep::parse_atom(atom) else {
++            return false;
++        };
++        let equals = parsed.slot_operator == Some(SlotOperator::Equals);
++        self.installed
++            .iter()
++            .filter(|p| p.category == parsed.category && p.package == parsed.package)
++            .filter(|p| !self.replaced_before(p, i) && self.installed_matches(atom, p))
++            .any(|p| {
++                if !(in_depend && equals) {
++                    return true;
++                }
++                let node = format!("{}/{}:{}", p.category, p.package, p.slot);
++                let Some(planned) = self.by_node.get(&node).and_then(|s| s.chosen()) else {
++                    return true;
++                };
++                let m = p.match_str(self.root);
++                let installed_sub = m.rsplit_once('/').map(|(_, sub)| sub);
++                installed_sub == Some(planned.sub_slot.as_str())
++            })
++    }
++
++    /// `(text_has_atom, displaced)`: whether the build text of row `i` holds
++    /// `atom`, and whether re-reducing every `||` group with the arms met at
++    /// the row preferred leaves it out of each variable that holds it.
++    fn or_displaced(&self, i: usize, atom: &str, bits: u8) -> (bool, bool) {
++        let row = &self.plan.rows[i];
++        let Some(c) = row.slot.chosen() else {
++            return (false, false);
++        };
++        let (category, package) = row.slot.cp.split_once('/').unwrap_or_default();
++        let pf = format!("{package}-{}", c.version);
++        let Ok(meta) = portage_repo::repo_aux_metadata(&c.repo_location, category, &pf) else {
++            return (false, false);
++        };
++        let use_set = self.use_of(c, category, package);
++        let norm = |tok: &str| {
++            portage_dep::evaluate_atom_conditionals(tok, &use_set).unwrap_or_else(|| tok.to_string())
++        };
++        let (mut any_text, mut all_displaced) = (false, true);
++        for (bit, key) in DEP_KEYS.iter().enumerate() {
++            if bits & (1u8 << bit) == 0 || (1u8 << bit) & BUILD_KIND_MASK == 0 {
++                continue;
++            }
++            let Some(text) = meta.get(*key) else { continue };
++            let tokens: Vec<String> = text.split_whitespace().map(String::from).collect();
++            let in_text = use_reduce_flat(&tokens, &use_set, MatchMode::Normal)
++                .is_ok_and(|flat| flat.iter().any(|t| norm(t) == atom));
++            if !in_text {
++                continue;
++            }
++            any_text = true;
++            let in_depend = *key == "DEPEND";
++            let mut tie = |lists: &[Vec<String>]| {
++                lists
++                    .iter()
++                    .position(|l| l.iter().any(|t| norm(t) == atom))
++                    .unwrap_or(0)
++            };
++            let reduced = use_reduce_flat_disjunctive(
++                UseReduceFlatDisjunctiveArgs {
++                    tokens: &tokens,
++                    uselist: &use_set,
++                    mode: MatchMode::Normal,
++                    empty_groups_always_true: true,
++                    tie_break: &mut tie,
++                },
++                &mut |branch: &[String]| {
++                    let met = branch
++                        .iter()
++                        .filter_map(|t| {
++                            let a = portage_repo::parse_dep_atom(t, "portage-world")?;
++                            (a.blocker == portage_dep::Blocker::None).then(|| norm(t))
++                        })
++                        .all(|a| self.met_at(&a, i, in_depend));
++                    if met {
++                        AltPreference::BestVisibleInstalled
++                    } else {
++                        AltPreference::Available
++                    }
++                },
++            );
++            let kept = match reduced {
++                Ok(flat) => flat.iter().any(|t| norm(t) == atom),
++                Err(_) => true,
++            };
++            if kept {
++                all_displaced = false;
++            }
++        }
++        (any_text, any_text && all_displaced)
++    }
++}
++
++/// The build atoms of the rows that aim at no slot at all: no ebuild
++/// matches them (`World::unmatched`) or the best version is masked. One
++/// `(row, from, atom, bits, unmatched)` each, in row order.
++#[must_use]
++pub fn no_target(world: &World, plan: &BuildPlan<'_>) -> Vec<(usize, String, String, u8, bool)> {
++    let unmatched: HashSet<&str> = world.unmatched.iter().map(|(a, _)| a.as_str()).collect();
++    let mut out = Vec::new();
++    for (i, row) in plan.rows.iter().enumerate() {
++        let from = row.slot.node();
++        for (atom, &bits) in world.node_atoms.get(&from).into_iter().flatten() {
++            if bits & BUILD_KIND_MASK != 0 && world.atom_nodes.get(atom).is_none_or(|t| t.is_empty())
++            {
++                out.push((i, from.clone(), atom.clone(), bits, unmatched.contains(atom.as_str())));
++            }
++        }
++    }
++    out
++}
+diff --git a/crates/portage-world/src/lib.rs b/crates/portage-world/src/lib.rs
+index d1388ee5..38313c43 100644
+--- a/crates/portage-world/src/lib.rs
++++ b/crates/portage-world/src/lib.rs
+@@ -39,6 +39,7 @@ use std::sync::Mutex;
+ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+ 
+ mod bootstrap;
++pub mod late;
+ mod memo;
+ mod order;
+ mod rebuild;
+@@ -537,6 +538,11 @@ pub struct World {
+     /// could not be read: they are no candidates, so their dependencies
+     /// are missing from the walk. Sorted.
+     pub unreadable: Vec<String>,
++    /// `cat/pkg:slot` -> its dependency atoms, each with the `*DEPEND`
++    /// variables naming it (bits of [`DEP_KEYS`]).
++    pub node_atoms: BTreeMap<String, BTreeMap<String, u8>>,
++    /// Dependency atom -> the slots the walk aimed it at.
++    pub atom_nodes: BTreeMap<String, BTreeSet<String>>,
+ }
+ 
+ impl World {
+@@ -735,6 +741,8 @@ fn walk(
+     // slot -> the slots it depends on (itself left out).
+     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
++    let kept_node_atoms = node_atoms.clone();
++    let kept_atom_nodes = atom_nodes.clone();
+     for (node, atoms) in node_atoms {
+         let to = edges.entry(node.clone()).or_default();
+         for (atom, mask) in &atoms {
+@@ -759,6 +767,8 @@ fn walk(
+         planned_use,
+         bootstrap: None,
+         unreadable,
++        node_atoms: kept_node_atoms,
++        atom_nodes: kept_atom_nodes,
+     })
+ }
+ 
+diff --git a/crates/portuale/src/plan_world.rs b/crates/portuale/src/plan_world.rs
+index d9e1c962..78ba6ad0 100644
+--- a/crates/portuale/src/plan_world.rs
++++ b/crates/portuale/src/plan_world.rs
+@@ -67,6 +67,9 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
+     // the complete pair. A cycle the reduction does not break keeps the
+     // bare report line.
+     let plan = world.build_plan(&order);
++    if std::env::var_os("PORTUALE_CENSUS").is_some() {
++        census_dump(&world, &plan, &root, &config_root);
++    }
+     for cycle in &plan.cycles {
+         let mut chain = cycle.to_vec();
+         chain.extend(cycle.first().cloned());
+@@ -1537,3 +1540,68 @@ mod tests {
+         assert_eq!(rows.len(), 3);
+     }
+ }
++
++/// Measurement only: one stderr line per late build edge.
++fn census_dump(
++    world: &World,
++    plan: &portage_world::BuildPlan<'_>,
++    root: &Path,
++    config_root: &Path,
++) {
++    let edges = match portage_world::late::census(world, plan, root, config_root) {
++        Ok(e) => e,
++        Err(m) => {
++            eprintln!("CENSUS-ERROR\t{m}");
++            return;
++        }
++    };
++    let yn = |b: bool| if b { "1" } else { "0" };
++    for (row, from, atom, bits, unmatched) in portage_world::late::no_target(world, plan) {
++        let vars: Vec<&str> = portage_world::DEP_KEYS
++            .iter()
++            .enumerate()
++            .filter(|(b, _)| bits & (1u8 << b) != 0)
++            .map(|(_, k)| *k)
++            .collect();
++        eprintln!(
++            "CENSUS-NOTARGET\t{from}\t{atom}\t{}\t{row}\t{}",
++            vars.join("|"),
++            yn(unmatched)
++        );
++    }
++    for e in edges {
++        let vars: Vec<&str> = portage_world::DEP_KEYS
++            .iter()
++            .enumerate()
++            .filter(|(b, _)| e.bits & (1u8 << b) != 0)
++            .map(|(_, k)| *k)
++            .collect();
++        let rows = if e.to_rows.is_empty() {
++            "-".to_string()
++        } else {
++            e.to_rows.iter().map(usize::to_string).collect::<Vec<_>>().join(",")
++        };
++        let pair = |p: &Option<(String, String)>| {
++            p.as_ref().map_or("-\t-".to_string(), |(a, b)| format!("{a}\t{b}"))
++        };
++        eprintln!(
++            "CENSUS\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
++            e.from,
++            e.to,
++            e.atom,
++            vars.join("|"),
++            e.row,
++            rows,
++            yn(!e.to_rows.is_empty()),
++            pair(&e.installed),
++            pair(&e.planned),
++            yn(e.met_by_installed),
++            yn(e.other_installed_slot_meets),
++            yn(e.in_scc),
++            yn(e.has_slot_op),
++            yn(e.in_depend),
++            yn(e.text_has_atom),
++            yn(e.or_displaced),
++        );
++    }
++}

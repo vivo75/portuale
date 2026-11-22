@@ -1,12 +1,13 @@
 #!/bin/bash
 # usage: bed-plan.sh BIN_DIR OUT_DIR ; runs the fast plan (mrg --plan-world --json --sort depend) of a given
-# binary directory inside the l0-health image, then both checkers on it. Run via scoperun.sh.
+# binary directory (PORTUALE_CENSUS=1 in the caller environment is passed through: the census lines land in FAST_world.stderr) inside the l0-health image, then both checkers on it. Run via scoperun.sh.
 set -e
 BIN=${1:?bin dir}; O=${2:?out dir}
 HERE=$(cd "$(dirname "$0")" && pwd); PM=$HERE/../../../../pmtest
 E764=$HERE/../02.764
 mkdir -p "$O"
-podman run --rm --entrypoint /bin/sh \
+EXTRA=; [ -n "${PORTUALE_CENSUS:-}" ] && EXTRA="-e PORTUALE_CENSUS=1"
+podman run --rm --entrypoint /bin/sh $EXTRA \
   -v "$BIN":/usr/local/bin:ro -v "$O":/out -v "$E764":/E:ro -v "$PM/pytests-contract-suite":/L:ro \
   -e PMTEST_CHECKERS=/L -e PORTAGE_CONFIGROOT=/ -e ROOT=/ -e LC_ALL=C.UTF-8 -e TZ=UTC \
   localhost/test-portuale:latest -c '
