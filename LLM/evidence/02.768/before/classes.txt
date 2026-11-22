@@ -1,0 +1,7 @@
+a10: fast=refuses p569virt+p573virt (provider 5.44), no reinstall df=provider not upgraded, reinstalls p573virt, no refusal pg=refuses p569virt (=5.42* vs 5.44), reinstalls p573virt class=#773
+a2: fast=refuses hardmaskedpkg+p569virt (atom :0/5.42=), no reinstall df=refuses p569virt only, no reinstall pg=refuses p569virt only, no reinstall class=A2
+a5or: fast=refuses p569virt+p698rebuild (atom :0/5.42=), no reinstall df=refuses p569virt+p698rebuild (=5.42* vs 5.44), no reinstall pg=same as df class=I
+a5use: not built (provider ebuild has no IUSE) class=not built
+a6: not built (needs a root-local copy of the fixtures with one md5-cache entry deleted) class=not built
+a7: fast=refuses p569virt (:0/5.42=) + p698rebuild (:0/5.46=), no reinstall df=no refusal, reinstalls p569virt+p698rebuild pg=same as df class=A7
+a8: fast=refuses p569virt+p698rebuild (:0/5.42=), no reinstall df=refuses p569virt, reinstalls p698rebuild pg=same as df class=A8

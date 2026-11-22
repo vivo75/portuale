@@ -1,0 +1,5 @@
+portuale 1329299ea22043c1b9dd01c8c0fcaa58555b246a
+pmtest d6c89e90d15726cd22d0fab81d8baf17b57bf36c
+a5use: not built: the provider has no IUSE flag
+a6: not built: needs a root-local copy of the fixtures with one md5-cache entry deleted
+b42729f1fe465ca858dec78b65ca01d7436887c105fbd1eb485cc2e23429e993  /var/tmp/768bin/portuale

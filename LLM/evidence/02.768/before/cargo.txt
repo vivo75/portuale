@@ -1,0 +1,81 @@
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+failed: Name or service not known.
+Resolving example.invalid... failed: Name or service not known.
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 135 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1488 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.47s
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test redb_db::tests::a_dropped_or_failed_transaction_changes_nothing ... ok
+test sqlite::tests::a_dropped_or_failed_transaction_changes_nothing ... ok
+test result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+test result: ok. 139 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+ [31;01m*[0m ERROR: dev-libs/packagepkg-1.0::testrepo failed (package phase):
+test ebuild_package::tests::a_failed_packaging_phase_never_touches_the_final_binpkg_path ... ok
+ [31;01m*[0m ERROR: dev-libs/schedppfail-1.0::testrepo failed (pretend phase):
+ [31;01m*[0m   pretend failed on purpose
+ [31;01m*[0m   	die "pretend failed on purpose"
+ [31;01m*[0m ERROR: dev-libs/schedppseqb-1.0::testrepo failed (pretend phase):
+ [31;01m*[0m ERROR: dev-libs/schedppfail-1.0::testrepo failed (pretend phase):
+ [31;01m*[0m   pretend failed on purpose
+ [31;01m*[0m   	die "pretend failed on purpose"
+ [31;01m*[0m ERROR: dev-libs/schedbad-1.0::testrepo failed (install phase):
+test emerge_build::tests::scheduler::run_build_scheduler_single_failure_counts_failed_exactly_once ... ok
+ [31;01m*[0m ERROR: dev-libs/schedppfail-1.0::testrepo failed (pretend phase):
+ [31;01m*[0m   pretend failed on purpose
+ [31;01m*[0m   	die "pretend failed on purpose"
+test emerge_build::tests::source_merge::run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents ... ok
+test emerge_build::tests::source_merge::run_build_scheduler_keep_going_skips_a_failed_builds_dependents ... ok
+ [31;01m*[0m ERROR: dev-libs/schedppfail-1.0::testrepo failed (pretend phase):
+ [31;01m*[0m   pretend failed on purpose
+ [31;01m*[0m   	die "pretend failed on purpose"
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::testrepo failed (postinst phase):
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::testrepo failed (postinst phase):
+ [31;01m*[0m ERROR: dev-libs/binpkgpretendpkg-1.0:: failed (pretend phase):
+test emerge_getbinpkg::tests::failed_install_pkg_msg_matches_portage_failed_pkg_msg_bytes ... ok
+test emerge_getbinpkg::tests::failed_pkg_msg_matches_portage_failed_pkg_msg_bytes ... ok
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::testrepo failed (postinst phase):
+test emerge_getbinpkg::tests::merge_one_binary_entry_reports_fetching_failed_without_an_index_stanza ... ok
+!!! Digest verification failed:
+Connecting to 127.0.0.1:39417... failed: Connection refused.
+Connecting to 127.0.0.1:39417... failed: Connection refused.
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::testrepo failed (postinst phase):
+Connecting to 127.0.0.1:1... Connecting to 127.0.0.1:34203... failed: Connection refused.
+Connecting to 127.0.0.1:38953... Connecting to 127.0.0.1:1... failed: Connection refused.
+Connecting to 127.0.0.1:1... failed: Connection refused.
+Connecting to 127.0.0.1:44113... failed: Connection refused.
+Connecting to 127.0.0.1:44113... failed: Connection refused.
+Connecting to 127.0.0.1:37513... failed: Connection refused.
+Connecting to 127.0.0.1:37513... failed: Connection refused.
+Connecting to 127.0.0.1:44113... failed: Connection refused.
+Connecting to 127.0.0.1:44113... failed: Connection refused.
+test regen::tests::retry_set_is_the_unexpectedly_failed_cps_in_first_seen_order ... ok
+test vdb_rw::tests::a_failed_live_rewrite_is_eio_at_flush ... ok
+test vdb_rw::tests::a_failed_publish_is_eio_and_keeps_the_staged_entry ... ok
+test result: ok. 1410 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 32.22s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
