@@ -1,0 +1,12 @@
+pg770 default-site step_slot_conflict_abi scheduled={("dev-libs", "p569virt")} children={}
+pg770 scan cp=("dev-libs", "p569virt") in_graph=true walked=true same_slot_scope=true new_slot_scope=true stale_scope=true update=true
+pg770 scan edges=1
+pg770 default-site step_unsatisfied_dead_end scheduled={("dev-libs", "p569prov"), ("dev-libs", "p569virt")}
+pg770 scan cp=("dev-libs", "p569virt") in_graph=true walked=true same_slot_scope=true new_slot_scope=true stale_scope=true update=true
+pg770 scan edges=1
+pg770 default-site step_unsatisfied_dead_end scheduled={("dev-libs", "p569prov"), ("dev-libs", "p569virt")}
+pg770 default-site step_slot_conflict_abi scheduled={("dev-libs", "p569virt")} children={}
+pg770 scan cp=("dev-libs", "p569virt") in_graph=true walked=true same_slot_scope=false new_slot_scope=true stale_scope=false update=true
+pg770 scan edges=0
+pg770 scan stale-arm test=true
+pg770 default-site step_unsatisfied_dead_end scheduled={("dev-libs", "p569virt")}

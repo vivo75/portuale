@@ -1,0 +1,132 @@
+diff --git a/crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs b/crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs
+index d3200959..691798f4 100644
+--- a/crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs
++++ b/crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs
+@@ -68,6 +68,12 @@ pub(crate) fn step_slot_conflict_abi(
+         });
+         // A child is only ever filed together with its parent, so the parent
+         // set is the whole guard.
++        if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++            eprintln!(
++                "pg770 default-site step_slot_conflict_abi scheduled={:?} children={:?}",
++                fresh.parents, fresh.children
++            );
++        }
+         if !fresh.parents.is_empty() {
+             // Portage's `_slot_operator_update_backtrack` files both sides of
+             // the built `:=` dep: `_replace_installed_atom(dep.parent)` and,
+diff --git a/crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs b/crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs
+index 17ec387b..8f03939e 100644
+--- a/crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs
++++ b/crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs
+@@ -118,6 +118,9 @@ pub(crate) fn fold_rebuild_scan(
+     grown.slot_operator_forced_upgrade.extend(forced);
+     let before = grown.slot_operator_replace_installed.clone();
+     drop_masked_installed(ctx.root, grown, &before, &mut scheduled);
++    if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++        eprintln!("pg770 default-site fold_rebuild_scan scheduled={scheduled:?}");
++    }
+     grown.slot_operator_replace_installed = scheduled;
+     // The display mirror tracks the same filing: Portage renders `r` from the
+     // one `_slot_operator_replace_installed` set (`_gen_reinstall_sets`), so a
+diff --git a/crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs b/crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs
+index 3a60e8c0..97f51959 100644
+--- a/crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs
++++ b/crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs
+@@ -82,6 +82,9 @@ pub(crate) fn step_unsatisfied_dead_end(
+         scheduled.extend(force_consumers);
+         let before = grown.slot_operator_replace_installed.clone();
+         slot_conflict_backtrack::drop_masked_installed(ctx.root, grown, &before, &mut scheduled);
++        if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++            eprintln!("pg770 default-site step_unsatisfied_dead_end scheduled={scheduled:?}");
++        }
+         pass.abi_rebuilds = Some(abi_rebuilds);
+         let forced_new = !forced.is_subset(&grown.slot_operator_forced_upgrade);
+         grown.slot_operator_forced_upgrade.extend(forced);
+diff --git a/crates/portage-repo/src/slot_operator/rebuild_scan.rs b/crates/portage-repo/src/slot_operator/rebuild_scan.rs
+index 2e8d036d..e94577d8 100644
+--- a/crates/portage-repo/src/slot_operator/rebuild_scan.rs
++++ b/crates/portage-repo/src/slot_operator/rebuild_scan.rs
+@@ -248,6 +248,13 @@ pub(crate) fn slot_operator_rebuild_scan(
+             } else {
+                 !in_scope
+             };
++            if cp.1 == "p569virt" && std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++                eprintln!(
++                    "pg770 scan cp={cp:?} in_graph={} walked={} same_slot_scope={same_slot_scope} new_slot_scope={new_slot_scope} stale_scope={stale_scope} update={update}",
++                    in_graph.contains(&cp),
++                    walked.contains(&cp)
++                );
++            }
+             if !same_slot_scope && !new_slot_scope && !stale_scope {
+                 continue;
+             }
+@@ -305,6 +312,9 @@ pub(crate) fn slot_operator_rebuild_scan(
+                 .collect();
+             edges.sort();
+             edges.dedup();
++            if cp.1 == "p569virt" && std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++                eprintln!("pg770 scan edges={}", edges.len());
++            }
+             // A fresh candidate that violates another parent's atom refuses
+             // the whole replacement. The same-slot arm and the stale-pin arm
+             // contribute `(provider, consumer)` display pairs; the consumer
+@@ -340,6 +350,12 @@ pub(crate) fn slot_operator_rebuild_scan(
+             // pair only. The pair is re-emitted every pass: only the settling pass's pair
+             // names the parent, and scheduling stays scoped while naming does not.
+             if !survived || merge_bound_consumer {
++                if cp.1 == "p569virt" && std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++                    eprintln!(
++                        "pg770 scan stale-arm test={}",
++                        (stale_scope || scheduled.contains(&cp)) && !merge_bound_consumer
++                    );
++                }
+                 if (stale_scope || scheduled.contains(&cp)) && !merge_bound_consumer {
+                     stale_pin_for_consumer(
+                         &stale_ctx,
+diff --git a/crates/portage-repo/src/solver_bridge.rs b/crates/portage-repo/src/solver_bridge.rs
+index b306f0b1..5e02b2d4 100644
+--- a/crates/portage-repo/src/solver_bridge.rs
++++ b/crates/portage-repo/src/solver_bridge.rs
+@@ -1578,6 +1578,13 @@ fn bridge_slot_operator_rebuilds(
+     } else {
+         super::required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+     };
++    if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++        eprintln!(
++            "pg770 reachable len={} has_virt={}",
++            slot_op_reachable.len(),
++            slot_op_reachable.contains(&("dev-libs".to_string(), "p569virt".to_string()))
++        );
++    }
+     if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
+         super::SlotOperatorRebuilds {
+             entries: Vec::new(),
+@@ -5696,6 +5703,13 @@ fn holder_fix(
+     seeds.dedup();
+     let reachable = crate::slot_operator::InstalledReachability::for_run(&req.root, req.with_bdeps)
+         .reachable(&seeds, &[]);
++    if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++        eprintln!(
++            "pg770 holder_fix seeds={seeds:?} reachable_len={} reachable_has_virt={}",
++            reachable.len(),
++            reachable.contains(&("dev-libs".to_string(), "p569virt".to_string()))
++        );
++    }
+     for e in entries {
+         let Some(new_ver) = bound(e) else { continue };
+         let provider = (e.category.clone(), e.package.clone());
+@@ -5794,6 +5808,13 @@ fn holder_fix(
+             skipped_version: &new_ver,
+             holders: &broken,
+         });
++        if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++            eprintln!(
++                "pg770 holder_fix provider={provider:?} broken={:?} routes={routes:?} note_is_some={}",
++                broken.iter().map(|(h, _)| h.clone()).collect::<Vec<_>>(),
++                note.is_some()
++            );
++        }
+         if note.is_some() || !super::request_updates(asked, req.update, &req.deep, &provider) {
+             // A holder cannot follow, or the request does not ask for the provider
+             // (#727): the provider stays where it is.

@@ -1,0 +1,6 @@
+portuale 7e4ccb499246f177632379e9adf8fd2482ad00d5
+pmtest 5ec1f1b8bbdd41a44b9e88d59aed2d9dc51af32c
+02.768 landed first: yes
+1f0ce1d2dac7b4030a8d1c6f3655714d0bdde27b243a20da115f4efccbaf13e7  /var/tmp/770/bin/portuale
+cargo.txt and suite-result-set.txt: copied from runbook 1's final gate (portuale fcd29e1f, `cargo test --release --no-fail-fast` log /var/tmp/768-gate and `LLM/evidence/02.768/after/suite-result-set.txt`, junit of the final tree). No file under crates/ changed between fcd29e1f and this branch's HEAD (git diff empty), so they ARE this baseline; the coordinator decided not to run the same tree twice (2026-11-22).
+l0 pubgrub baseline report: l0-20261122T181346Z (/home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261122T181346Z/l0-report.txt), L0_PORTUALE_OPTS=--solver=pubgrub, rc=0, PM HEAD 7e4ccb49

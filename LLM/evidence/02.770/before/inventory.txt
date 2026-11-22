@@ -1,0 +1,25 @@
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:28:    pub(crate) walked_installed: &'a HashSet<(String, String)>,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:62:        walked_installed,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:203:        walked_installed,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:238:                && (scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp));
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:245:                scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp);
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:397:    walked_installed: &'a HashSet<(String, String)>,
+crates/portage-repo/src/slot_operator/rebuild_scan.rs:645:        && (ctx.walked_installed.contains(cp) || ctx.scope.unwrap_or(ctx.reachable).contains(cp))
+crates/portage-repo/src/slot_operator/eliminate.rs:257:            walked_installed: &HashSet::new(),
+--- callers
+crates/portage-repo/src/solver_bridge.rs:1598:        super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:68:        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:93:        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:202:        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:252:        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/tests/eliminate.rs:763:    let got = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+crates/portage-repo/src/slot_operator/eliminate.rs:226:pub(crate) fn slot_operator_rebuild_entries(
+crates/portage-repo/src/tests/rebuild_scan.rs:255:        slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
+--- pmtest pull
+151:    "pull": (["dev-libs/p569pull"], [("dev-libs/p573virt-1", _PIN_766, "")]),
+273:    pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+310:    "pull": ({_PULL_766}, {_VIRT_766}, {_PULL_766}, {_VIRT_766}),
+318:    pytest.param("pull", (), "S", id="pull-S"),
+--- pubgrub p569pull probes
+--- replaced
+978:        slot_operator_replaced: Vec::new(),

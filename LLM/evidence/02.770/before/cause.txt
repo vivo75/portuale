@@ -1,0 +1,52 @@
+Cause of backlog #770 (plan 02.770 §0, runbook Task 2). Traced 2026-11-22 on a throwaway worktree at
+portuale 7e4ccb49 + trace.patch (49 added lines, all behind PORTUALE_PG_TRACE). Root: /var/tmp/770/roots/pull,
+argv: emerge [--solver=pubgrub] --pretend --update --deep --newuse --getbinpkg=n @world.
+Raw traces: trace-pull-pg.txt, trace-pull-df.txt (same directory). Neither side's stdout changed by the trace.
+
+Reproduction: pubgrub prints no p569virt row (rc 0, provider row "U" without r, NOTE present); the default
+prints "[ebuild  rR    ] dev-libs/p569virt-1" and "p569prov-5.44 ... causes rebuilds for:".
+
+How the pubgrub run is shaped (read from the trace order): three solves. Pass 1 and 2 are seeded from
+merge_bound_dep_atoms (seeds=["dev-libs/p569virt"], then ["=dev-libs/p569prov-5.42*","dev-libs/p569virt"]);
+pass 1's holder_fix withholds p569prov (pg-plan p569prov-5.44 -> pg-plan p569prov-5.42, p569pull-1); pass 3 is
+seeded from the world (complete_seed_atoms) and is the plan that is printed (pg-plan p569prov-5.44, p569core-1.0,
+p569virt-1, p569pull-2). Verdict below is taken on pass 3; passes 1 and 2 show the same scan line.
+
+(i) BRIDGE SIDE (decides the fix)
+
+  Pass 3 trace, verbatim:
+    pg770 reachable len=3 has_virt=false
+    pg770 scan cp=("dev-libs", "p569virt") in_graph=false walked=true same_slot_scope=false new_slot_scope=true stale_scope=false update=true
+    pg770 scan edges=0
+    pg770 scan stale-arm test=false
+    pg770 holder_fix seeds=["dev-libs/dualslotpkg", "dev-libs/innernestedsetpkg", "dev-libs/nestedsetpkg", "dev-libs/newpkg", "dev-libs/p569pull", "dev-libs/systempkg", "dev-libs/withdeps"] reachable_len=3 reachable_has_virt=false
+  and pg-installed dev-libs/p569virt-1 slot=0 policy=Favor / pg-plan dev-libs/p569virt-1 are present.
+
+  H1  ACCEPTED. has_virt=false (the installed-graph closure of the world atoms misses p569virt, because p569pull
+      is not installed); the scan line has walked=true, same_slot_scope=false, stale_scope=false, edges=0 and
+      "stale-arm test=false". walked_installed is empty in the bridge, so the consumer is in_graph=false (an
+      AlreadyInstalled entry), walked, but gets no arm: same-slot off (needs scope or walked_installed), stale-pin
+      off (under --update stale_scope = in_scope || !walked, and it is walked).
+  H3  REJECTED. A scan line for p569virt exists, and pg-plan / pg-installed lines for it exist; walked=true, in_graph=false.
+  H4  REJECTED. edges=0 and stale-arm test=false: the scan never schedules it, so no later step dropped it.
+  H5  REJECTED for the printed plan. In pass 3 holder_fix has reachable_has_virt=false and prints no route verdict
+      (no broken holder). (In passes 1 and 2, seeded by merge_bound_dep_atoms, holder_fix does reach p569virt:
+      "pg770 holder_fix provider=("dev-libs", "p569prov") broken=[("dev-libs", "p569virt", "1")] routes=[None] note_is_some=true".
+      That is the known item-4 / #781 withhold of the p569prov move in the non-world-seeded pass; it is not what
+      decides the printed pass-3 plan, and it is not touched by #770.)
+
+  Bridge-side verdict: H1 alone. No STOP-0.
+
+(ii) DEFAULT SIDE (code note only; never a STOP)
+
+  The first default-site line that lists p569virt is the first line of the default trace:
+    pg770 default-site step_slot_conflict_abi scheduled={("dev-libs", "p569virt")} children={}
+  (filing site (c), the #641 conflict-ABI probe, files p569virt first.) step_unsatisfied_dead_end (site (a)) files it
+  next, with p569prov: scheduled={("dev-libs", "p569prov"), ("dev-libs", "p569virt")}; its scan line there has
+  in_graph=true walked=true same_slot_scope=true stale_scope=true edges=1 (the default's walked_installed holds
+  p569virt). In the settling pass the scan has same_slot_scope=false, stale_scope=false, edges=0, stale-arm test=true
+  and step_unsatisfied_dead_end still files {p569virt} (carried by scheduled / replace_installed from earlier passes).
+  fold_rebuild_scan (site (b)) never fired on this probe.
+
+Recorded, different cause (not #770): the provider row lacks the r tag (slot_operator_replaced hard-coded empty, #780);
+the pass-1 holder_fix withhold on the merge_bound_dep_atoms seed (#781).

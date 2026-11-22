@@ -1,0 +1,28 @@
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg770 reachable len=0 has_virt=false
+pg770 scan cp=("dev-libs", "p569virt") in_graph=false walked=true same_slot_scope=false new_slot_scope=true stale_scope=false update=true
+pg770 scan edges=0
+pg770 scan stale-arm test=false
+pg770 holder_fix seeds=["dev-libs/p569virt"] reachable_len=2 reachable_has_virt=true
+pg770 holder_fix provider=("dev-libs", "p569prov") broken=[("dev-libs", "p569virt", "1")] routes=[None] note_is_some=true
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg770 reachable len=0 has_virt=false
+pg770 scan cp=("dev-libs", "p569virt") in_graph=false walked=true same_slot_scope=false new_slot_scope=true stale_scope=false update=true
+pg770 scan edges=0
+pg770 scan stale-arm test=false
+pg770 holder_fix seeds=["=dev-libs/p569prov-5.42*", "dev-libs/p569virt"] reachable_len=2 reachable_has_virt=true
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg-installed dev-libs/p569virt-1 slot=0 policy=Favor
+pg-plan dev-libs/p569virt-1
+pg770 reachable len=3 has_virt=false
+pg770 scan cp=("dev-libs", "p569virt") in_graph=false walked=true same_slot_scope=false new_slot_scope=true stale_scope=false update=true
+pg770 scan edges=0
+pg770 scan stale-arm test=false
+pg770 holder_fix seeds=["dev-libs/dualslotpkg", "dev-libs/innernestedsetpkg", "dev-libs/nestedsetpkg", "dev-libs/newpkg", "dev-libs/p569pull", "dev-libs/systempkg", "dev-libs/withdeps"] reachable_len=3 reachable_has_virt=false
