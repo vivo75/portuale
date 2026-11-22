@@ -1,0 +1,9 @@
+# Name-level diff, before/suite-result-set.txt (comm -3 on sorted entries; '<' = before only, '>' = after only).
+# before: 5051 entries (5047 pass, 4 skip). after: 5056 entries (5052 pass, 4 skip). Corpus drift: none. Failures: none.
+< pytests-contract-suite.test_plan_world::test_764_an_uncuttable_runtime_cycle_is_left_to_the_walk pass
+> pytests-contract-suite.test_plan_world::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772a-both-installed] pass
+> pytests-contract-suite.test_plan_world::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772c-older-slot-installed] pass
+> pytests-contract-suite.test_plan_world::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772e-bdepend-slot-operator] pass
+> pytests-contract-suite.test_plan_world::test_772_a_late_need_without_a_cycle_is_reported pass
+> pytests-contract-suite.test_plan_world::test_772_a_moved_binding_is_still_a_need pass
+> pytests-contract-suite.test_plan_world::test_772_an_unmet_build_cycle_names_its_real_path pass
