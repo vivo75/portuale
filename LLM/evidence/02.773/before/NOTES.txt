@@ -1,3 +1,8 @@
 portuale HEAD: d71a8a7970105ad04ec1267742b1ed99126f8087
 pmtest HEAD: f36c4780c96e8d0341820275eb3ca48cec013c57
 97e5590941f288087e2030d008caa7fefcd3c47e6c9fdbbe5511387ff10dccf1  /var/tmp/773/bin/portuale
+Baselines (coordinator, 2026-11-22): no file under crates/ changed between portuale f6385911 (runbook 2's gate) and the product HEAD of this branch, so the baselines are copies, not new runs:
+- cargo.txt = runbook 2's gate cargo test log (LLM/evidence/02.770/after/gate-cargo-test.txt): 3570 passed.
+- suite-result-set.txt = LLM/evidence/02.770/after/suite-result-set.txt plus the two ids of the #773 pin (test_773_..._old_provider[default] and [pubgrub], both pass: pmtest 4e3bc22, `-k 773` gave 2 passed).
+- l0-hashes-pg.txt / l0-unexplained-pg.txt = the pubgrub-mode L0 report l0-20261122T191805Z (runbook 2's after-bed, 588 files, 0 unexplained).
+- l0-hashes-df.txt / l0-unexplained-df.txt = the default-mode L0 report l0-20261122T174952Z (runbook 1's after-bed, 588 files, 0 unexplained). Runbook 2 changed only the pubgrub bridge, so the default mode is expected to be byte-identical after this item as well; a difference there is to be investigated.
