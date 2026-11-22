@@ -1,0 +1,4 @@
+pg773 stale-pin schedules dev-libs/p573virt
+pg773 stale-pin schedules dev-libs/p573virt
+pg773 stale-pin schedules dev-libs/p573virt
+pg773 stale-pin schedules dev-libs/p573virt

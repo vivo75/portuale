@@ -1,0 +1,14 @@
+diff --git a/crates/portage-repo/src/slot_operator/rebuild_scan.rs b/crates/portage-repo/src/slot_operator/rebuild_scan.rs
+index 2e8d036d..9e5ee2d4 100644
+--- a/crates/portage-repo/src/slot_operator/rebuild_scan.rs
++++ b/crates/portage-repo/src/slot_operator/rebuild_scan.rs
+@@ -697,6 +697,9 @@ fn stale_pin_for_consumer(
+         return;
+     }
+     ctx.file_pairs(pkg, cp, &surviving, out.abi_rebuilds);
++    if std::env::var_os("PORTUALE_PG_TRACE").is_some() {
++        eprintln!("pg773 stale-pin schedules {}/{}", cp.0, cp.1);
++    }
+     out.scheduled.insert(cp.clone());
+ }
+ 

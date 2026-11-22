@@ -1,0 +1,28 @@
+## fast-txt
+/var/tmp/773/raw/before1/a10.fast-txt.err:plan-world: 7 to install (7 builds including 0 bootstrap), order depend
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild  N     ] dev-libs/innernestedsetpkg-1.0:0
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild  N     ] dev-libs/newpkg-1.0:0
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild  N     ] dev-libs/p569core-1.0:0
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild   R    ] dev-libs/p569virt-1:0
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild   R    ] dev-libs/p573virt-1:0
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]
+/var/tmp/773/raw/before1/a10.fast-txt.out:[ebuild  N     ] dev-libs/withdeps-1.0:0
+## df-txt
+/var/tmp/773/raw/before1/a10.df-txt.out:[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.df-txt.out:[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0] to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.df-txt.out:[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.df-txt.out:[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.df-txt.out:[ebuild  rR    ] dev-libs/p573virt-1 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.df-txt.out:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+/var/tmp/773/raw/before1/a10.df-txt.out:    =dev-libs/p569prov-5.42* required by (dev-libs/p573virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/773/roots/a10') USE="" ELIBC="glibc"
+## pg-txt
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0] to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild     U  ] dev-libs/p569prov-5.44 [5.42] to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:[ebuild  rR    ] dev-libs/p573virt-1 to /var/tmp/773/roots/a10
+/var/tmp/773/raw/before1/a10.pg-txt.out:NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+/var/tmp/773/raw/before1/a10.pg-txt.out:  dev-libs/p569virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+/var/tmp/773/raw/before1/a10.pg-txt.out:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/773/roots/a10') causes rebuilds for:
+/var/tmp/773/raw/before1/a10.pg-txt.out:    (dev-libs/p573virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/773/roots/a10')
