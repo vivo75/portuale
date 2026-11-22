@@ -66,7 +66,8 @@ pub struct HeldBackNoRoute {
 
 /// A stale slot-operator binding the plan does not repair: an installed
 /// consumer whose recorded versioned dependency forbids the provider version
-/// the plan leaves behind. A note, never a failure (charter property 5).
+/// the plan leaves behind, or that has no ebuild left to rebuild from. A note,
+/// never a failure (charter property 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StalePinRefusal {
     /// The installed consumer, `category/package-version`.
@@ -75,6 +76,8 @@ pub struct StalePinRefusal {
     pub atom: String,
     /// The provider version the plan leaves behind, `category/package-version`.
     pub provider: String,
+    /// The consumer has no ebuild in any repository, so it cannot be rebuilt.
+    pub no_ebuild: bool,
 }
 
 /// One slot for the abbreviated skipped-update tail: a masked version higher

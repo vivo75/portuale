@@ -784,6 +784,7 @@ fn slot_operator_rebuild_entries_reports_the_refused_stale_pin() {
             consumer: "dev-libs/user-1.0".to_string(),
             atom: "=dev-libs/prov-5.42*".to_string(),
             provider: "dev-libs/prov-5.44".to_string(),
+            no_ebuild: false,
         }]
     );
     let _ = fs::remove_dir_all(&base);

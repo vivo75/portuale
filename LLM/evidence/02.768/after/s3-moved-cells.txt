@@ -1,0 +1,231 @@
+3181:    ("#656 leg (a): the bare provider request with installed+tree holders skips the transient, so only the provider reinstalls (bare p651prov: R prov with the skip WARNING, virtuals kept; supersedes the #651 guard description -- same argv, the world changed under it when enforcement-open landed; Portage H0/P2 reinstall with no fall-through, the skip block itself bed-oracled -- enforcement-open gate, rc 0)", ["--pretend", "--verbose", "dev-libs/p651prov"], 0),
+3182:    ("#651: with the transient skipped under the chained holder pin both commit-before-conflict seeds are voided, so only the provider and the top reinstall (C1: p651prov + p651top, R + R with the skip WARNING, Portage 3.0.83, rc 0)", ["--pretend", "--verbose", "dev-libs/p651prov", "dev-perl/p651top"], 0),
+3183:    ("#652: the N-form consumer request holds the dead virtual after post-skip re-resolution, so no Sub-Name fall-through merges (N p652foo + N p652try, R top under the holder pin with the skip WARNING, virtuals kept; Portage NF oracle + texlive bed cell, rc 0)", ["--pretend", "--verbose", "dev-perl/p651top", "dev-perl/p652try"], 0),
+3184:    ("#652: under the live merging transient the Encode fall-through merges while TH stays held with the early consumer in the request (N enccore + U prov + N early, no TH pin, virtuals kept; libreoffice/gimp bed cells, rc 0)", ["--pretend", "--verbose", "dev-perl/p652early", "dev-libs/p651prov"], 0),
+3185:    ("#656 leg (b): the pinned transient with the fresh Encode consumer merges the transient and the Encode fall-through while TH stays held, but the residual slot conflict still fails the resolve (p656zip + pinned p651prov-5.44.0: N enccore + U prov + N zip, no TH pin, virtuals kept; Portage P1 merges the same three rows and also fails -- parent-posture hold gate, rc 1)", ["--pretend", "--verbose", "dev-perl/p656zip", "=dev-libs/p651prov-5.44.0"], 1),
+38056:    `=p651prov-5.44*`), so they upgrade with the provider and nothing is
+38061:    dev-libs/p651prov` (no `--update`). The enforcement-open gate files the
+38063:    `=p651prov-5.42*` requirers carry the pin (the three `p656hold` twins
+38096:        ["--pretend", "--verbose", "dev-libs/p651prov"],
+38105:        f'[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to {root} USE="-minimal%" ',
+38116:    """#651 holder leg (C1): `emerge -pv dev-libs/p651prov dev-perl/p651top`
+38117:    (no `--update`). The holder (`RDEPEND="dev-libs/p651prov:0/5.42"`, the
+38123:    `p651prov-5.44.0` and zero declines, the transient's conflict surfacing
+38129:    holder pin plus the two held `=p651prov-5.42*` virtual arms.
+38151:        ["--pretend", "--verbose", "dev-libs/p651prov", "dev-perl/p651top"],
+38160:        f'[ebuild   R    ] dev-libs/p651prov-5.42.2:0/5.42::testrepo to {root} USE="-minimal%" ',
+38166:        f"dev-libs/p651prov:0 for {root}/",
+38168:        f"  (dev-libs/p651prov-5.44.0:0/5.44::testrepo, ebuild scheduled for merge to '{root}') USE=\"-minimal\" ELIBC=\"glibc\" conflicts with",
+38169:        f"    dev-libs/p651prov:0/5.42 required by (dev-perl/p651holder-1:0/0::testrepo, installed in '{root}') USE=\"\"",
+38171:        f"    =dev-libs/p651prov-5.42* required by (virtual/p651enc-3.210.0-r2:0/0::testrepo, installed in '{root}') USE=\"\"",
+38173:        f"    =dev-libs/p651prov-5.42* required by (virtual/p651th-3.500.0-r1:0/0::testrepo, installed in '{root}') USE=\"\"",
+38182:    """#652 leg A (N-form): `emerge -pv dev-perl/p651top dev-perl/p652try`
+38187:    `dev-perl/p652subname` fall-through merges: three rows (`N` p652foo,
+38188:    `R` top, `N` p652try), the installed SLU virtual kept-silent, the skip WARNING
+38205:    (`crates/portage-repo/src/tests/tests_p652b.rs`) uses -- same graph,
+38225:        ["--pretend", "--verbose", "dev-perl/p651top", "dev-perl/p652try"],
+38237:        f"[ebuild  N     ] virtual/p652foo-2.223.0-r1::testrepo to {root}",
+38239:        f'[ebuild  N     ] dev-perl/p652try-1::testrepo to {root} USE="-minimal" ',
+38252:    assert f"dev-libs/p651prov:0 for {root}/" in got.stdout
+38254:        f"  (dev-libs/p651prov-5.44.0:0/5.44::testrepo, ebuild scheduled for merge to '{root}') USE=\"-minimal\" ELIBC=\"glibc\" conflicts with"
+38262:    """#654 evidence: bare `dev-perl/p652try` and bare `virtual/p652foo`
+38275:    `$ emerge --pretend --verbose dev-perl/p652try` → rc 0,
+38276:      `[ebuild  N     ] virtual/p652foo-2.223.0-r1::testrepo`,
+38277:      `[ebuild  N     ] dev-perl/p652try-1::testrepo USE="-minimal"`,
+38279:    `$ emerge --pretend --verbose virtual/p652foo` → rc 0,
+38280:      `[ebuild  N     ] virtual/p652foo-2.223.0-r1::testrepo`,
+38289:            ["--pretend", "--verbose", "dev-perl/p652try"],
+38291:                f"[ebuild  N     ] virtual/p652foo-2.223.0-r1::testrepo to {root}",
+38292:                f'[ebuild  N     ] dev-perl/p652try-1::testrepo to {root} USE="-minimal" ',
+38297:            ["--pretend", "--verbose", "virtual/p652foo"],
+38299:                f"[ebuild  N     ] virtual/p652foo-2.223.0-r1::testrepo to {root}",
+38335:    `p652early` merges beside them (four rows, no skip block; the hold-back
+38339:    dev-perl/p652early dev-libs/p651prov` (no `--update`). The same
+38340:    installed, tree-present `=p651prov-5.42*` holders that flip the bare
+38348:    `crates/portage-repo/src/tests/tests_p652b.rs`, same world+request,
+38359:    DISTDIR=$PWD/distfiles emerge --pretend --verbose dev-perl/p652early
+38360:    dev-libs/p651prov` on host Portage 3.0.83 prints `R prov-5.42.2 + N
+38362:    WARNING block naming the two `=p651prov-5.42*` virtual arms (run live
+38384:        ["--pretend", "--verbose", "dev-perl/p652early", "dev-libs/p651prov"],
+38396:        f'[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to {root} USE="-minimal%" ',
+38399:        f"[ebuild  N     ] dev-perl/p652early-1::testrepo to {root}",
+38412:    """#656 leg (b): `emerge -pv dev-perl/p656zip =dev-libs/p651prov-5.44.0`
+38417:    three rows (`N` enccore 3.210.0, `U` prov 5.44.0, `N` p656zip), neither
+38420:    `=p651prov-5.42*` virtual pins vs the merging 5.44.0 pulled by the
+38440:    (`crates/portage-repo/src/tests/tests_p656.rs`) uses -- same graph,
+38454:        ["--pretend", "--verbose", "dev-perl/p656zip", "=dev-libs/p651prov-5.44.0"],
+38467:        f'[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to {root} USE="-minimal%"',
+38468:        f"[ebuild  N     ] dev-perl/p656zip-1::testrepo to {root}",
+38483:    assert "\ndev-libs/p651prov:0\n" in got.stdout
+38485:        f"  (dev-libs/p651prov-5.44.0:0/5.44::testrepo, ebuild scheduled for merge) USE=\"-minimal\" ELIBC=\"glibc\" pulled in by\n"
+38488:    assert "    =dev-libs/p651prov-5.44.0 (Argument)\n" in got.stdout
+38490:        f"  (dev-libs/p651prov-5.42.2:0/5.42::testrepo, installed in '{root}') USE=\"\" pulled in by\n"
+38494:        f"    =dev-libs/p651prov-5.42* required by (virtual/p651enc-3.210.0-r2:0/0::testrepo, installed in '{root}') USE=\"\"\n"
+39417:    (`|| ( =dev-libs/p651prov-5.44* ~core )`) while installed virtuals hold
+39418:    `=p651prov-5.42*`. The first walk meets the provider slot conflict,
+39419:    masks `p651prov-5.44.0`, then the new virtual (its `=5.44*` arm is left
+39429:    skip WARNING for `dev-libs/p651prov:0`, and `!!! The following
+39442:    assert f"dev-libs/p651prov:0 for {root}/" in got.stdout, got.stdout
+=== BEFORE ===
+--- argv: --pretend --verbose dev-libs/p651prov
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild     U  ] virtual/p651enc-3.240.0::testrepo [3.210.0-r2::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] virtual/p651th-3.520.0::testrepo [3.500.0-r1::testrepo] to /var/tmp/768s3/ctl 0 KiB
+
+Total: 3 packages (3 upgrades), Size of downloads: 0 KiB
+[stderr]
+[rc] 0
+--- argv: --pretend --verbose dev-perl/p652early dev-libs/p651prov
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild     U  ] virtual/p651th-3.520.0::testrepo [3.500.0-r1::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] virtual/p651enc-3.240.0::testrepo [3.210.0-r2::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild  N     ] dev-perl/p652early-1::testrepo to /var/tmp/768s3/ctl 0 KiB
+
+Total: 4 packages (3 upgrades, 1 new), Size of downloads: 0 KiB
+[stderr]
+[rc] 0
+--- argv: --pretend --verbose dev-perl/p656zip =dev-libs/p651prov-5.44.0
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/p651enccore-3.210.0::testrepo to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild  N     ] dev-perl/p656zip-1::testrepo to /var/tmp/768s3/ctl 0 KiB
+
+Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/p651prov:0
+
+  (dev-libs/p651prov-5.44.0:0/5.44::testrepo, ebuild scheduled for merge) USE="-minimal" ELIBC="glibc" pulled in by
+    =dev-libs/p651prov-5.44.0 (Argument)
+
+  (dev-libs/p651prov-5.42.2:0/5.42::testrepo, installed in '/var/tmp/768s3/ctl') USE="" pulled in by
+    =dev-libs/p651prov-5.42* required by (virtual/p651enc-3.210.0-r2:0/0::testrepo, installed in '/var/tmp/768s3/ctl') USE=""
+    ^                  ^^^^^                                                                                                  
+    (and 1 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+[stderr]
+[rc] 1
+
+=== AFTER ===
+--- argv: --pretend --verbose dev-libs/p651prov
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild     U  ] virtual/p651enc-3.240.0::testrepo [3.210.0-r2::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] virtual/p651th-3.520.0::testrepo [3.500.0-r1::testrepo] to /var/tmp/768s3/ctl 0 KiB
+
+Total: 3 packages (3 upgrades), Size of downloads: 0 KiB
+
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+
+  dev-perl/p651pin-1: its dependency dev-libs/p651prov:0/5.42= was built against a sub-slot dev-libs/p651prov-5.44.0 does not have, and no ebuild of it is left to rebuild it from
+
+  Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+[stderr]
+[rc] 0
+--- argv: --pretend --verbose dev-perl/p652early dev-libs/p651prov
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild     U  ] virtual/p651th-3.520.0::testrepo [3.500.0-r1::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] virtual/p651enc-3.240.0::testrepo [3.210.0-r2::testrepo] to /var/tmp/768s3/ctl 0 KiB
+[ebuild  N     ] dev-perl/p652early-1::testrepo to /var/tmp/768s3/ctl 0 KiB
+
+Total: 4 packages (3 upgrades, 1 new), Size of downloads: 0 KiB
+
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+
+  dev-perl/p651pin-1: its dependency dev-libs/p651prov:0/5.42= was built against a sub-slot dev-libs/p651prov-5.44.0 does not have, and no ebuild of it is left to rebuild it from
+
+  Rebuild them once a visible version accepts the new provider, or unmerge them if they are unused.
+[stderr]
+[rc] 0
+--- argv: --pretend --verbose dev-perl/p656zip =dev-libs/p651prov-5.44.0
+[stdout]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/p651enccore-3.210.0::testrepo to /var/tmp/768s3/ctl 0 KiB
+[ebuild     U  ] dev-libs/p651prov-5.44.0:0/5.44::testrepo [5.42.2:0/5.42::testrepo] to /var/tmp/768s3/ctl USE="-minimal%" 0 KiB
+[ebuild  N     ] dev-perl/p656zip-1::testrepo to /var/tmp/768s3/ctl 0 KiB
+
+Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/p651prov:0
+
+  (dev-libs/p651prov-5.44.0:0/5.44::testrepo, ebuild scheduled for merge) USE="-minimal" ELIBC="glibc" pulled in by
+    =dev-libs/p651prov-5.44.0 (Argument)
+
+  (dev-libs/p651prov-5.42.2:0/5.42::testrepo, installed in '/var/tmp/768s3/ctl') USE="" pulled in by
+    =dev-libs/p651prov-5.42* required by (virtual/p651enc-3.210.0-r2:0/0::testrepo, installed in '/var/tmp/768s3/ctl') USE=""
+    ^                  ^^^^^                                                                                                  
+    (and 1 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+[stderr]
+[rc] 1

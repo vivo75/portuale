@@ -259,9 +259,9 @@ pub(crate) fn show_held_back_no_route(quiet: bool, debug: bool, result: &GraphRe
 }
 
 /// Installed packages whose recorded slot-operator binding is stale but whose
-/// recorded versioned dependency forbids the new provider, so the plan leaves
-/// them as they are. A note: the exit code stays 0, and `--quiet` hides it
-/// like the notes above.
+/// recorded versioned dependency forbids the new provider, or that have no
+/// ebuild left, so the plan leaves them as they are. A note: the exit code
+/// stays 0, and `--quiet` hides it like the notes above.
 pub(crate) fn show_stale_pin_refusals(quiet: bool, debug: bool, result: &GraphResult) {
     if (quiet && !debug) || result.stale_pin_refusals.is_empty() {
         return;
@@ -272,10 +272,17 @@ pub(crate) fn show_stale_pin_refusals(quiet: bool, debug: bool, result: &GraphRe
     );
     println!();
     for r in &result.stale_pin_refusals {
-        println!(
-            "  {}: its dependency {} is not satisfied by {}",
-            r.consumer, r.atom, r.provider
-        );
+        if r.no_ebuild {
+            println!(
+                "  {}: its dependency {} was built against a sub-slot {} does not have, and no ebuild of it is left to rebuild it from",
+                r.consumer, r.atom, r.provider
+            );
+        } else {
+            println!(
+                "  {}: its dependency {} is not satisfied by {}",
+                r.consumer, r.atom, r.provider
+            );
+        }
     }
     println!();
     println!(

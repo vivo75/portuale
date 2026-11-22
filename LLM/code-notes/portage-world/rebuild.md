@@ -18,3 +18,4 @@ rebuilds over the kept set.
 
 ## struct Scan (#760)
 - `slot_operator` is split into `Scan::{final_provider, provider_cpv, stale_atoms, held_back, judge}` plus one `refuse(...)` constructor. The installed records are read once (`all_installed_packages`, first record per `(category, package, slot)`) instead of per atom in `final_provider`/`provider_cpv`/`kept_installed`; `World::kept_of` is `kept_installed` over an already-read list.
+- A4 is kept on purpose (owner Q5(c)): the fast plan reads `DEPEND`/`BDEPEND` of a consumer in the walk, the resolver under `--usepkg` does not. `--usepkg` can mix prebuilt and to-be-built packages, so a clean rule would hold only for `--usepkgonly`. The resolver now names a consumer with no ebuild too (#768, `rebuild_scan.md`), so A1 no longer differs at the consumer key.

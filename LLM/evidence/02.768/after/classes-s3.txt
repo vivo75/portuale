@@ -1,0 +1,23 @@
+# S3 after-state (binary of the tree at the end of Task 7 step 5; raw: /var/tmp/768raw/after, compare.txt).
+# Same lines as classes-s2.txt except `gone` (diff compare-s2.txt compare.txt shows only the gone block). The p569virt difference is as in classes-s2.txt (owner decision 2026-11-22, residue #793).
+ctl:    agree, nothing stale on either side (fast, df, pg all empty).
+r703:   agree, provider held back on every side (fast, df, pg all empty).
+prov:   agree except the p569virt difference; df == pg. fast: U p569prov-5.44, R p569virt-1, N p569core-1.0.
+bdw:    agree except the p569virt difference (p698rebuild reinstalled by all three); df == pg.
+unred:  agree except the p569virt difference (p698rebuild reinstalled by all three, the tree decides); df == pg.
+outr:   agree except the p569virt difference (p698rebuild reinstalled by all three: Q1(a) + seeded walk); df == pg.
+outpin: agree except the p569virt difference; p698reinst refused with the same (atom, provider) on all three: (=dev-libs/p569prov-5.42*, dev-libs/p569prov-5.44); df == pg.
+bdout:  agree except the p569virt difference; p698rebuild silent on all three (DEPEND/BDEPEND-only binding outside the walk, Q-A (i)); df == pg.
+pull:   default solver agrees (p573virt refused with the same row, p569virt rebuilt by both); pubgrub differs as before (no rebuild of walked p569virt, #770).
+r698:   moved: p698reinst was refused by the fast plan (D-698) -> now reinstalled by all three (the walked consumer's tree ebuild lets the pin go; owner Q4(a)). Only the p569virt difference remains; p698rebuild reinstalled by all three.
+gone:   moved: p766gone is now named by both: fast (dev-libs/p569prov:0/5.42=, None), resolver (dev-libs/p569prov:0/5.42=, dev-libs/p569prov-5.44), same consumer key, provider differs by contract (null vs named, owner Q2(b), plan Q-G); df == pg. Plus the p569virt difference.
+a10:    class=#773. fast: R p573virt-1, R p569virt-1, N p569core-1.0, no U p569prov, no refusal. df: R p573virt-1 only, no U p569prov (provider held at 5.42 by p573virt's tree); pg: U p569prov-5.44, p573virt reinstalled, NOTE for p569virt.
+        (the p569virt rebuild stays although the held-back provider no longer makes it stale: residue #777).
+a2:     moved: fast refuses [hardmaskedpkg (dev-libs/p569prov:0/5.42=, None), p569virt (same atom, None)] -> refuses [hardmaskedpkg (same, None)] + R p569virt-1 (+ N p569core-1.0); resolver (df, pg): NOTE p569virt (=...-5.42*, ...-5.44), no hardmaskedpkg row, no reinstall. Masked-only consumer: fast names it (None), resolver silent (A1/A2 class).
+a5or:   moved: fast refuses [p569virt (None), p698rebuild (None)] -> refuses [] + R p569virt-1, R p698rebuild-1; resolver (df, pg): NOTE p569virt and p698rebuild (=...-5.42*, ...-5.44), no reinstall. Hold-back atom inside || : the fast plan reduces the recorded || to the arm the best visible matches (p569core), so nothing holds it back; the resolver reads it installed-first and refuses.
+a5use:  not built: the provider has no IUSE flag.
+a7:     moved: fast refuses [p569virt (None), p698rebuild (dev-libs/p569prov:0/5.46=, None)] -> refuses [] + R p569virt-1, R p698rebuild-1, D p569prov-5.44 [5.46]; resolver (df, pg): R p569virt-1, R p698rebuild-1, no refusal. fast and resolver now agree on the consumers and reinstalls (downgrade).
+a8:     moved: fast refuses [p569virt (None), p698rebuild (None)] -> refuses [] + R p569virt-1, R p698rebuild-1; resolver (df, pg): R p698rebuild, NOTE p569virt (=...-5.42*, ...-5.44). Only the p569virt difference remains (empty SLOT file of the installed provider).
+virtw:  unchanged by S1 (before == after): fast U p569prov-5.44 + R p569virt-1 (+ N p569core-1.0); resolver nothing (df, pg).
+vw2:    unchanged by S1 (before == after): same as virtw.
+seed upgrades: none observed (no seeded consumer has a newer visible ebuild in its slot on these roots).

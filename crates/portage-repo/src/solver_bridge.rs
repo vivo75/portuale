@@ -10280,6 +10280,7 @@ mod tests {
                 consumer: "dev-libs/p569virt-1".to_string(),
                 atom: "=dev-libs/p569prov-5.42*".to_string(),
                 provider: "dev-libs/p569prov-5.44".to_string(),
+                no_ebuild: false,
             }],
             "{:?}",
             pg34_plan(&result)

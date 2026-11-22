@@ -419,6 +419,8 @@ struct StalePinOut<'a> {
 /// One stale pin that can still be repaired: the provider, the fresh
 /// candidate string, and the version and slot the run leaves behind.
 struct StaleEdge {
+    /// The recorded `:slot/sub=` token.
+    atom: String,
     provider_cp: (String, String),
     cand: String,
     final_version: String,
@@ -488,6 +490,7 @@ impl StalePinCtx<'_> {
                 atom.category, atom.package
             );
             edges.push(StaleEdge {
+                atom: tok.clone(),
                 provider_cp,
                 cand,
                 final_version,
@@ -527,6 +530,7 @@ impl StalePinCtx<'_> {
                     consumer: pkg.cpv(),
                     atom: tok.clone(),
                     provider: format!("{}/{}-{final_version}", atom.category, atom.package),
+                    no_ebuild: false,
                 });
             }
         }
@@ -661,14 +665,24 @@ fn stale_pin_for_consumer(
     if edges.is_empty() {
         return;
     }
-    // A consumer with no ebuild at all stays out silently (any slot, masked
-    // ones included).
+    // A consumer with no ebuild at all (any slot, masked ones included)
+    // cannot be rebuilt: it is named.
     if ctx
         .gate
         .repo_candidates(&pkg.category, &pkg.package)
         .ok()
         .is_none_or(|cands| cands.is_empty())
     {
+        let edge = &edges[0];
+        out.refused.push(StalePinRefusal {
+            consumer: pkg.cpv(),
+            atom: edge.atom.clone(),
+            provider: format!(
+                "{}/{}-{}",
+                edge.provider_cp.0, edge.provider_cp.1, edge.final_version
+            ),
+            no_ebuild: true,
+        });
         return;
     }
     if let Some(refusal) = ctx.held_back(pkg, &keyed) {

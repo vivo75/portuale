@@ -1901,6 +1901,40 @@ fn slot_operator_rebuild_scan_rebuilds_a_stale_binding_in_a_deep_request() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// A kept consumer whose recorded `:=` is stale and that has no ebuild left
+/// cannot be rebuilt: it is refused by name, not dropped silently.
+#[test]
+fn a_stale_consumer_with_no_ebuild_is_refused_by_name() {
+    let (base, _repos) = stale_pin_base("5.44", "0/5.44", "dev-libs/prov:0/5.42=");
+    let req = GraphEntry {
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "req", "1.0")
+    };
+    let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        update: true,
+        ..scan_args(
+            &base,
+            std::slice::from_ref(&req),
+            &HashSet::from([("dev-libs".to_string(), "req".to_string())]),
+            crate::test_gate(&[]),
+        )
+    });
+    assert!(scan.scheduled.is_empty(), "{:?}", scan.scheduled);
+    assert_eq!(scan.refused.len(), 1, "{:?}", scan.refused);
+    let r = &scan.refused[0];
+    assert!(r.no_ebuild, "{r:?}");
+    assert!(r.consumer.contains("user"), "{r:?}");
+    assert!(
+        r.atom.ends_with('='),
+        "the recorded := atom is named: {r:?}"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// The p573virt shape (§2.3): the plan moves the provider past a recorded
 /// versioned pin, so the stale consumer is refused, not scheduled.
 #[test]
@@ -1937,6 +1971,7 @@ fn slot_operator_rebuild_scan_does_not_schedule_a_consumer_whose_dependency_forb
             consumer: "dev-libs/user-1.0".to_string(),
             atom: "=dev-libs/prov-5.42*".to_string(),
             provider: "dev-libs/prov-5.44".to_string(),
+            no_ebuild: false,
         }]
     );
     let _ = fs::remove_dir_all(&base);
@@ -2290,6 +2325,7 @@ fn resolve_reports_a_stale_binding_the_plan_cannot_repair() {
             consumer: "dev-libs/p569virt-1".to_string(),
             atom: "=dev-libs/p569prov-5.42*".to_string(),
             provider: "dev-libs/p569prov-5.44".to_string(),
+            no_ebuild: false,
         }]
     );
 }

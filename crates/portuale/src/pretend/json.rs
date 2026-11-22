@@ -630,8 +630,13 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         let rows: Vec<String> = stale_pin_refusals
             .iter()
             .map(|r| {
+                let reason = if r.no_ebuild {
+                    ",\"reason\":\"no ebuild\""
+                } else {
+                    ""
+                };
                 format!(
-                    "{{\"consumer\":{},\"atom\":{},\"provider\":{}}}",
+                    "{{\"consumer\":{},\"atom\":{},\"provider\":{}{reason}}}",
                     json_string(&r.consumer),
                     json_string(&r.atom),
                     json_string(&r.provider)
