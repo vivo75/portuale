@@ -64,6 +64,7 @@ pub(crate) fn assemble_result(
                 gate: ctx.gate(),
                 empty: ctx.empty,
                 usepkg: ctx.usepkg,
+                tree_pin_refuses: false,
             });
             stale_pin_refusals = scan.refused;
             scan.abi_rebuilds

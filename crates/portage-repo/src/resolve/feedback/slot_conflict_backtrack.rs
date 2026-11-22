@@ -96,6 +96,7 @@ pub(crate) fn fold_rebuild_scan(
         gate: ctx.gate(),
         empty: ctx.empty,
         usepkg: ctx.usepkg,
+        tree_pin_refuses: false,
     })
     .scheduled;
     let force_reachable = ctx.force_scan_reachable();

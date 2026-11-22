@@ -520,6 +520,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     } = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         usepkg: false,
         empty: false,
+        tree_pin_refuses: false,
         effective: None,
         root: &dir,
         entries: &[provider, entry],

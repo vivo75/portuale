@@ -33,6 +33,7 @@ fn scan_args<'a>(
         config: &TEST_CONFIG,
         gate,
         empty: false,
+        tree_pin_refuses: false,
     }
 }
 

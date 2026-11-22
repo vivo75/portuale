@@ -1,0 +1,5 @@
+Task 5 (option A), uncommitted. Binary of the working tree: sha256 449f1e0df5b98cc1755ca9b2b567a5a1d1e97dd012139fcc4d8d143658fb272e (/var/tmp/773/bin-after).
+red.txt: pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects FAILS by assertion (plan still has the rebuild), control pg773_bridge_still_rebuilds_when_the_tree_accepts passes; pmtest -k 773: [pubgrub] FAILS by assertion, [default] passes (control).
+probes.diff: before/probes.txt vs after probes of the 773 root set: only a10/pg and a10/pg-txt moved.
+probes-770.diff: LLM/evidence/02.770/probe.sh (pull, tree-uD-*) on the new binary vs 02.770/after/probes.txt: empty (byte-identical, 271 lines, 28 argv blocks).
+compare.txt: diff against before/compare.txt only on == a10 pubgrub side.

@@ -10444,6 +10444,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The pubgrub result for `dev-libs/p569prov` on a scratch root holding
+    /// `p569prov-5.42` and the installed `consumer-1`, recorded `:0/5.42=`.
+    fn pg773_solve(
+        name: &str,
+        consumer: &str,
+    ) -> (portage_util::TempDir, super::super::GraphResult) {
+        let dir = portage_util::TempDir::new(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |pf: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(pf);
+            std::fs::create_dir_all(&d).unwrap();
+            s6_write_files(
+                &d,
+                &[
+                    ("CATEGORY", "dev-libs\n"),
+                    ("EAPI", "8\n"),
+                    ("SLOT", slot),
+                    ("repository", "testrepo\n"),
+                    ("RDEPEND", rdepend),
+                ],
+            );
+        };
+        mk("p569prov-5.42", "0/5.42\n", "\n");
+        mk(consumer, "0\n", "dev-libs/p569prov:0/5.42=\n");
+        let mut req = fixture_request(&["dev-libs/p569prov"]);
+        req.root = dir.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.update = true;
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("resolves");
+        (dir, result)
+    }
+
+    /// PMS `sec:slot-dep`, charter property 1: the plan upgrades `p569prov`
+    /// to 5.44; the installed `p573virt-1` recorded `:0/5.42=`, but its tree
+    /// ebuild needs `=dev-libs/p569prov-5.42*`, so a rebuild cannot follow
+    /// the upgrade. The bridge names it and schedules no rebuild.
+    #[test]
+    fn pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects() {
+        let (dir, result) = pg773_solve("portage-bridge-pg773-a", "p573virt-1");
+        assert!(
+            result.entries.iter().any(|e| e.package == "p569prov"
+                && matches!(e.outcome, super::super::PretendOutcome::Upgrade { .. })),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert!(
+            !pg770_reinstalls(&result, "p573virt"),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert_eq!(
+            result.stale_pin_refusals,
+            vec![super::super::StalePinRefusal {
+                consumer: "dev-libs/p573virt-1".to_string(),
+                atom: "=dev-libs/p569prov-5.42*".to_string(),
+                provider: "dev-libs/p569prov-5.44".to_string(),
+                no_ebuild: false,
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Control: the same root with a consumer whose tree ebuild carries no
+    /// versioned pin is still rebuilt and not named.
+    #[test]
+    fn pg773_bridge_still_rebuilds_when_the_tree_accepts() {
+        let (dir, result) = pg773_solve("portage-bridge-pg773-b", "p698rebuild-1");
+        assert!(
+            pg770_reinstalls(&result, "p698rebuild"),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert!(
+            result.stale_pin_refusals.is_empty(),
+            "{:?}",
+            result.stale_pin_refusals
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `bridge_circular_display` only hardens build-time edges nothing
     /// installed satisfies: a runtime edge back into the cycle is soft,
     /// so no notice fires (Portage `circular_dependency.py`).

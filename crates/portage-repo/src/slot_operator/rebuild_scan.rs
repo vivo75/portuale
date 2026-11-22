@@ -40,6 +40,10 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
     /// `--emptytree`: Portage files no slot-operator rebuild, so the stale-pin arm stays out.
     pub(crate) empty: bool,
+    /// Refuse a stale-pin rebuild whose tree ebuild rejects the provider
+    /// version the run leaves behind. Set by a caller that cannot walk the
+    /// rebuild again.
+    pub(crate) tree_pin_refuses: bool,
 }
 
 /// Post-walk scan for consumers needing a slot-operator rebuild: the same-slot
@@ -71,6 +75,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         config,
         gate,
         empty,
+        tree_pin_refuses,
     } = args;
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
@@ -206,6 +211,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         with_bdeps,
         usepkg,
         empty,
+        tree_pin_refuses,
         config,
         gate,
         new_slot: &new_slot,
@@ -400,6 +406,7 @@ struct StalePinCtx<'a> {
     with_bdeps: bool,
     usepkg: bool,
     empty: bool,
+    tree_pin_refuses: bool,
     config: &'a portage_profile::Config,
     gate: CategoryGate<'a>,
     new_slot: &'a HashMap<(String, String), ProviderMove>,
@@ -535,6 +542,59 @@ impl StalePinCtx<'_> {
             }
         }
         None
+    }
+
+    /// The atom of the consumer's tree ebuild that rejects the provider
+    /// version the run leaves behind on one of `edges`, as a refusal. Each
+    /// `||` group counts through its chosen arm only.
+    fn tree_held_back(
+        &self,
+        pkg: &InstalledPackage,
+        stale_keys: &[&str],
+        edges: &[StaleEdge],
+    ) -> Option<StalePinRefusal> {
+        let live = live_metadata_for_installed(
+            self.gate.repos,
+            self.root,
+            &pkg.category,
+            &pkg.package,
+            &pkg.version,
+        )?;
+        let use_flags =
+            read_vdb_flag_set(self.root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        let atoms: Vec<String> = stale_keys
+            .iter()
+            .flat_map(|key| {
+                selected_parent_atoms(
+                    live.get(*key).map(String::as_str).unwrap_or_default(),
+                    self.root,
+                    self.entries,
+                    &use_flags,
+                )
+            })
+            .collect();
+        edges.iter().find_map(|edge| {
+            atoms.iter().find_map(|tok| {
+                let atom = parse_dep_atom(tok, "rebuild_scan_tree_pin")?;
+                let on_provider = atom.blocker == portage_dep::Blocker::None
+                    && (atom.category.clone(), atom.package.clone()) == edge.provider_cp;
+                let rejects = on_provider
+                    && portage_dep::match_from_list(
+                        portage_dep::without_use(tok),
+                        &[edge.cand.as_str()],
+                    )
+                    .is_none_or(|m| m.is_empty());
+                rejects.then(|| StalePinRefusal {
+                    consumer: pkg.cpv(),
+                    atom: tok.clone(),
+                    provider: format!(
+                        "{}/{}-{}",
+                        edge.provider_cp.0, edge.provider_cp.1, edge.final_version
+                    ),
+                    no_ebuild: false,
+                })
+            })
+        })
     }
 
     /// Whether the replacement's own atoms, some replacement parent, the
@@ -686,6 +746,12 @@ fn stale_pin_for_consumer(
         return;
     }
     if let Some(refusal) = ctx.held_back(pkg, &keyed) {
+        out.refused.push(refusal);
+        return;
+    }
+    if ctx.tree_pin_refuses
+        && let Some(refusal) = ctx.tree_held_back(pkg, &stale_keys, &edges)
+    {
         out.refused.push(refusal);
         return;
     }

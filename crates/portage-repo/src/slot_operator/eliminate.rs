@@ -270,6 +270,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             gate,
             empty,
             usepkg,
+            tree_pin_refuses: true,
         });
         abi_rebuilds = scan.abi_rebuilds;
         refused = scan.refused;

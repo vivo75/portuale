@@ -1,0 +1,67 @@
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (target/release/deps/portage_repo-85806134b82c2f23)
+
+running 2 tests
+test solver_bridge::tests::pg773_bridge_still_rebuilds_when_the_tree_accepts ... ok
+test solver_bridge::tests::pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects ... FAILED
+
+failures:
+
+---- solver_bridge::tests::pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects stdout ----
+
+thread 'solver_bridge::tests::pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects' (3620103) panicked at crates/portage-repo/src/solver_bridge.rs:10492:9:
+["dev-libs/p569prov-5.44:0", "dev-libs/p573virt-1:0"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    solver_bridge::tests::pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 1493 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p portage-repo --lib`
+
+=== pmtest: test_plan_world.py -k 773 (red; the default parameter is the control) ===
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+________ test_773_a_consumer_whose_tree_pins_the_old_provider[pubgrub] _________
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_773_a_consumer_whose_tree1')
+solver = 'pubgrub'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    def test_773_a_consumer_whose_tree_pins_the_old_provider(mrg_binary, emerge_binary, fixture_env, tmp_path, solver):
+        """Backlog #773. Root `a10`: the installed `p573virt-1` recorded `p569prov:0/5.42=`, and its
+        tree ebuild needs `=dev-libs/p569prov-5.42*`. PMS `sec:slot-dep` and charter property 1: a
+        plan may not rebuild it against `p569prov-5.44`. The fast plan and the default solver keep the
+        provider and rebuild the consumer; the fast plan also rebuilds the shared VDB's `p569virt-1`
+        through its recorded `||` (owner decision 2026-11-22), needlessly once the provider stays
+        (residue #777). pubgrub keeps the upgrade, does not rebuild the consumer and names it in
+        the stale-binding NOTE (owner decision Q1 (A), 2026-11-22; plan
+        `LLM/02.773-pubgrub-rebuild-against-tree-pin.opus.md`); the default solver and the fast
+        plan hold the provider back instead."""
+        env = _root_766(fixture_env, tmp_path, "a10")
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        assert fast == (set(), {"dev-libs/p573virt", "dev-libs/p569virt"}), fast
+>       assert res == _A10_773[solver], res
+E       AssertionError: ({('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}, {'dev-libs/p573virt'})
+E       assert ({('dev-libs/...bs/p573virt'}) == ({('dev-libs/....44')}, set())
+E         
+E         At index 0 diff: {('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')} != {('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44'), ('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:404: AssertionError
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_plan_world.py::test_773_a_consumer_whose_tree_pins_the_old_provider[pubgrub]
+1 failed, 1 passed, 40 deselected, 2 warnings in 0.97s

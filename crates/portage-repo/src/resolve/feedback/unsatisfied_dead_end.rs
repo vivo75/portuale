@@ -57,6 +57,7 @@ pub(crate) fn step_unsatisfied_dead_end(
             gate: ctx.gate(),
             empty: ctx.empty,
             usepkg: ctx.usepkg,
+            tree_pin_refuses: false,
         });
         // The update probe's forcing half, for a child the walk left installed.
         let mut scheduled = scan.scheduled;
