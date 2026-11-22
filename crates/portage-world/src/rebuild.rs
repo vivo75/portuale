@@ -11,6 +11,10 @@ use portage_vdb::EntryKey;
 
 use crate::{DEP_KEYS, Memos, World};
 
+/// The `*DEPEND` variables whose `:=` binding breaks an installed package
+/// the walk from the world did not reach.
+const OUTSIDE_WALK_KEYS: [&str; 3] = ["RDEPEND", "PDEPEND", "IDEPEND"];
+
 impl World {
     /// One installed package the plan does not replace: its `cat/pkg:slot`
     /// node at the main slot, with the installed record. The set `plan_json`
@@ -55,12 +59,10 @@ pub struct RefusedBinding {
     /// `cat/pkg` of the kept consumer.
     pub consumer: String,
     /// The recorded atom that forbids the repair, or the stale `:=` atom
-    /// itself when the consumer has no slot in the plan's walk.
+    /// itself when the consumer has no visible ebuild in its installed slot.
     pub atom: String,
-    /// `cat/pkg-ver` of the provider version the plan leaves behind, `None`
-    /// when the consumer has no slot in the plan's walk (it was not reached
-    /// from `@world`, or no version was chosen in its slot); its ebuild may
-    /// be visible.
+    /// `cat/pkg-ver` of the provider version the plan leaves behind; `None`
+    /// when the consumer has no visible ebuild in its installed slot.
     pub provider: Option<String>,
 }
 
@@ -85,7 +87,7 @@ fn recorded_use(db: &Arc<dyn portage_vdb::InstalledDb>, key: &EntryKey) -> HashS
 /// The non-blocker atoms of one recorded `*DEPEND` text, with `||` groups
 /// and `flag? ( )` conditionals reduced against the installed `USE` the way
 /// the planner reduces tree metadata. `None` when the text does not reduce:
-/// the caller refuses the consumer rather than mis-judging it.
+/// the caller falls back to the tree ebuild.
 fn reduced_recorded_atoms(
     text: &str,
     use_flags: &HashSet<String>,
@@ -122,6 +124,7 @@ fn tree_names_provider(args: TreeNamesProviderArgs<'_>) -> bool {
         category,
         package,
         providers,
+        keys,
         memos,
         config,
     } = args;
@@ -141,7 +144,7 @@ fn tree_names_provider(args: TreeNamesProviderArgs<'_>) -> bool {
     .iter()
     .cloned()
     .collect();
-    DEP_KEYS.iter().any(|dep| {
+    keys.iter().any(|dep| {
         let text = meta.get(*dep).map(String::as_str).unwrap_or_default();
         reduced_recorded_atoms(text, &use_flags, memos, config)
             .unwrap_or_default()
@@ -160,6 +163,7 @@ struct TreeNamesProviderArgs<'a> {
     category: &'a str,
     package: &'a str,
     providers: &'a [(String, String)],
+    keys: &'a [&'a str],
     memos: &'a Memos<'a>,
     config: &'a Config,
 }
@@ -223,15 +227,6 @@ impl Scan<'_> {
         // equal to the slot; an empty read means the entry is gone.
         let sub = raw.split_once('/').map_or(raw.as_str(), |(_, sub)| sub);
         (!sub.is_empty()).then(|| (sub.to_string(), format!("{cp}-{version}")))
-    }
-
-    /// `cat/pkg-ver` of the provider version the final state binds `atom_str`
-    /// against; `None` when the atom names no slot or no version is left.
-    fn provider_cpv(&self, atom_str: &str) -> Option<String> {
-        let a = portage_repo::parse_dep_atom(atom_str, "rebuild_provider")?;
-        let slot = a.slot.as_deref()?;
-        self.final_provider((&a.category, &a.package, slot))
-            .map(|(_, cpv)| cpv)
     }
 
     /// The recorded `:=` atoms in `texts` naming a sub-slot the final
@@ -316,7 +311,14 @@ impl Scan<'_> {
             installed.category.clone(),
             format!("{}-{}", installed.package, installed.version),
         );
-        let texts: Vec<String> = DEP_KEYS
+        // Build-time variables bind only a consumer the walk from the world reached.
+        let walked = self.world.walked.contains(node);
+        let keys: &[&str] = if walked {
+            &DEP_KEYS
+        } else {
+            &OUTSIDE_WALK_KEYS
+        };
+        let texts: Vec<String> = keys
             .iter()
             .map(|dep| {
                 self.db
@@ -327,50 +329,60 @@ impl Scan<'_> {
             })
             .collect();
         let raw = self.stale_atoms(&texts);
-        let Some(first) = raw.first() else {
+        if raw.is_empty() {
             return Ok(false);
-        };
-        // Reduced atoms for the confirmation and the hold-back check; a text
-        // that does not reduce refuses the consumer rather than mis-judging it.
+        }
+        // A text that does not reduce gives its raw stale atoms and no
+        // hold-back atom: the tree ebuild decides.
         let use_flags = recorded_use(&self.db, &key);
         let mut reduced: Vec<String> = Vec::new();
+        let mut unreduced: Vec<String> = Vec::new();
         for text in texts.iter().filter(|t| !t.trim().is_empty()) {
-            let Some(atoms) = reduced_recorded_atoms(text, &use_flags, self.memos, self.config)
-            else {
-                return Err(refuse(installed, first, self.provider_cpv(first)));
-            };
-            reduced.extend(atoms);
+            match reduced_recorded_atoms(text, &use_flags, self.memos, self.config) {
+                Some(atoms) => reduced.extend(atoms),
+                None => unreduced.extend(self.stale_atoms(std::slice::from_ref(text))),
+            }
         }
         let active: HashSet<&str> = reduced.iter().map(String::as_str).collect();
         let stale: Vec<&String> = raw
             .iter()
             .filter(|tok| {
-                active.contains(
-                    portage_dep::evaluate_atom_conditionals(tok, &use_flags)
-                        .unwrap_or_else(|| (*tok).clone())
-                        .as_str(),
-                )
+                unreduced.contains(*tok)
+                    || active.contains(
+                        portage_dep::evaluate_atom_conditionals(tok, &use_flags)
+                            .unwrap_or_else(|| (*tok).clone())
+                            .as_str(),
+                    )
             })
             .collect();
         let Some(first) = stale.first() else {
             return Ok(false);
         };
-        // The final provider version a rebuild would use must exist.
-        let Some(chosen) = self
+        // The version a rebuild installs: the walk's choice, else the best
+        // visible ebuild of the installed slot.
+        let slot = installed.slot.split('/').next().unwrap_or_default();
+        let walk_choice = self
             .world
             .slots
             .iter()
             .find(|s| s.node() == node)
             .and_then(|s| s.chosen())
-        else {
+            .cloned();
+        let Some(chosen) = walk_choice.or_else(|| {
+            self.memos.best_visible_in_slot(
+                &installed.category,
+                &installed.package,
+                Some(slot),
+                self.config,
+            )
+        }) else {
             return Err(refuse(installed, first, None));
         };
         if let Some(refusal) = self.held_back(installed, &reduced) {
             return Err(refusal);
         }
         // A rebuild re-records the chosen ebuild's live dependencies: when
-        // its tree no longer names any stale provider, there is nothing stale
-        // left to repair, so the consumer stays out silently.
+        // its tree no longer names any stale provider, nothing stale is left.
         let providers: Vec<(String, String)> = stale
             .iter()
             .filter_map(|tok| {
@@ -378,10 +390,11 @@ impl Scan<'_> {
             })
             .collect();
         Ok(tree_names_provider(TreeNamesProviderArgs {
-            chosen,
+            chosen: &chosen,
             category: &installed.category,
             package: &installed.package,
             providers: &providers,
+            keys,
             memos: self.memos,
             config: self.config,
         }))
@@ -392,9 +405,9 @@ impl Scan<'_> {
 /// dependency no longer matches the provider version the plan leaves behind (a
 /// binding already stale is repaired too). A `:*` dependency never counts.
 ///
-/// A stale consumer is rebuilt only when no other recorded atom forbids it; one
-/// with no slot in the plan's walk, or whose text does not reduce, is refused
-/// rather than mis-judged.
+/// A stale consumer is rebuilt only when no other recorded atom forbids it. One
+/// the walk does not reach is judged by its best visible ebuild and on its
+/// runtime variables only; one with no visible ebuild is refused.
 ///
 /// PMS `dependencies.tex`, `sec:slot-dep`: `:=` binds the consumer to the
 /// slot and sub-slot it was built against.

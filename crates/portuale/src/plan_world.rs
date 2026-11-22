@@ -270,7 +270,7 @@ fn entry_json(
 
 /// Why one stale slot-operator binding stays unrepaired: the recorded atom
 /// names a provider version the plan leaves behind, or the consumer has no
-/// slot in the plan's walk (the "no visible ebuild" text does not say so).
+/// visible ebuild in its installed slot.
 fn refusal_reason(refusal: &portage_world::RefusedBinding) -> String {
     match &refusal.provider {
         Some(provider) => format!("not satisfied by {provider}"),
@@ -1260,6 +1260,40 @@ mod tests {
         assert_eq!(rc, 0, "{out}");
         assert!(
             out.contains("\"stale-bindings\":[{\"consumer\":\"dev-libs/w741user\",\"atom\":\"=dev-libs/w741prov-1*\",\"provider\":\"dev-libs/w741prov-2\""),
+            "{out}"
+        );
+    }
+
+    /// A stale consumer outside the walk is a rebuild row of the plan; the
+    /// check of the same world, which never seeds, names no requester for it.
+    #[test]
+    fn a_plan_rebuilds_a_stale_consumer_outside_the_walk() {
+        fn tree(root: &Path) {
+            add_ebuild(root, "dev-libs/w768prov-2", "0/2", &[]);
+            add_ebuild(
+                root,
+                "dev-libs/w768user-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w768prov:=")],
+            );
+            add_installed(root, "dev-libs/w768prov-1", "0/1", &[]);
+            add_installed(
+                root,
+                "dev-libs/w768user-1",
+                "0",
+                &[("RDEPEND", "dev-libs/w768prov:0/1=")],
+            );
+        }
+        let world = ["dev-libs/w768prov"];
+        let (rc, out, err) = run_on_copy_with_stderr(&["--check-world"], &world, &[], "", tree);
+        assert!(
+            !out.contains("<- dev-libs/w768user:0") && !err.contains("<- dev-libs/w768user:0"),
+            "{rc}\n{out}\n{err}"
+        );
+        let (rc, out, err) = run_on_copy_with_stderr(&["--plan-world"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert!(
+            out.contains("[ebuild   R    ] dev-libs/w768user-1:0"),
             "{out}"
         );
     }

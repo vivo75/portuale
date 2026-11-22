@@ -291,6 +291,28 @@ impl<'a> Memos<'a> {
             })
     }
 
+    /// The best visible candidate of `category/package`: in main slot `slot`
+    /// when one is named (never a parallel one), else of the whole package.
+    pub(crate) fn best_visible_in_slot(
+        &self,
+        category: &str,
+        package: &str,
+        slot: Option<&str>,
+        config: &Config,
+    ) -> Option<Candidate> {
+        let all = portage_repo::list_candidates(self.repos, category, package).ok()?;
+        let mut best: Option<&Candidate> = None;
+        for c in all.iter() {
+            if slot.is_some_and(|s| s != c.slot) || !self.visible(c, category, package, config) {
+                continue;
+            }
+            if best.is_none_or(|b| rank(c, true, b, true) == Ordering::Greater) {
+                best = Some(c);
+            }
+        }
+        best.cloned()
+    }
+
     /// [`branch_preference`](Self::branch_preference) without the memo.
     fn branch_preference_uncached(&self, branch: &[String], config: &Config) -> AltPreference {
         let kept: Vec<(&String, portage_dep::Atom)> = branch
@@ -315,24 +337,8 @@ impl<'a> Memos<'a> {
             };
         }
         let best_visible = kept.iter().all(|(t, a)| {
-            let Ok(all) = portage_repo::list_candidates(self.repos, &a.category, &a.package) else {
-                return false;
-            };
-            let mut best: Option<&Candidate> = None;
-            for c in all.iter() {
-                // No slot named: the package's best visible; a slot named:
-                // the best visible in that main slot (never a parallel one).
-                if a.slot.as_deref().is_some_and(|s| s != c.slot) {
-                    continue;
-                }
-                if !self.visible(c, &a.category, &a.package, config) {
-                    continue;
-                }
-                if best.is_none_or(|b| rank(c, true, b, true) == Ordering::Greater) {
-                    best = Some(c);
-                }
-            }
-            best.is_some_and(|c| self.atom_matches(t, c, (&a.category, &a.package), config))
+            self.best_visible_in_slot(&a.category, &a.package, a.slot.as_deref(), config)
+                .is_some_and(|c| self.atom_matches(t, &c, (&a.category, &a.package), config))
         });
         match (best_visible, installed) {
             (true, true) => AltPreference::BestVisibleInstalled,
@@ -510,6 +516,10 @@ pub struct World {
     /// actually needs. An atom without a slot aims at every slot of its
     /// package, so a [`SlotSet`] alone does not tell.
     pub reached: BTreeSet<String>,
+    /// The slots reached from the world atoms alone, before any rebuild was
+    /// seeded into the walk. A consumer outside it is judged on its runtime
+    /// dependencies only.
+    pub walked: BTreeSet<String>,
     /// The reached slots whose installed version a plan keeps but builds
     /// again (`cat/pkg:slot`): a recorded `:slot/sub-slot=` dependency no longer
     /// matches the provider the plan chooses, or (with `newuse`) the USE changed.
@@ -573,8 +583,12 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
     // A package that must be built again follows more dependencies, which
     // can need more rebuilds: walk again until the set stops growing.
     let mut rebuilds = BTreeSet::new();
+    // What the first walk reaches from the world atoms; later walks are
+    // seeded with rebuilds, so their `reached` is wider.
+    let mut walked: Option<BTreeSet<String>> = None;
     loop {
         let mut world = walk(opts, (&repos, &config), &rebuilds)?;
+        world.walked = walked.get_or_insert_with(|| world.reached.clone()).clone();
         if !opts.rebuilds {
             world.bootstrap = bootstrap::select(&world, &config);
             return Ok(world);
@@ -633,6 +647,19 @@ fn walk(
             .insert("@world".into());
     }
     let mut frontier: Vec<String> = seeds.into_iter().collect();
+    // A package the plan builds again is followed even when the world does
+    // not reach it; it asks for itself.
+    if !opts.emptytree {
+        for node in rebuilds {
+            if !frontier.contains(node) {
+                requesters
+                    .entry(node.clone())
+                    .or_default()
+                    .insert(node.clone());
+                frontier.push(node.clone());
+            }
+        }
+    }
     let mut done: BTreeSet<String> = BTreeSet::new();
     let mut unmatched: BTreeSet<String> = BTreeSet::new();
     // atom -> the slots it reaches; slot -> the atoms it depends on.
@@ -726,6 +753,7 @@ fn walk(
         edges,
         edge_kinds,
         reached,
+        walked: BTreeSet::new(),
         rebuilds: BTreeSet::new(),
         refused: Vec::new(),
         planned_use,
@@ -1476,6 +1504,217 @@ mod tests {
                 .collect();
             assert_eq!(world.refused, expected, "{name}");
         }
+    }
+
+    /// `(cpv, slot, extra ebuild variables)` of one scratch ebuild.
+    type TestEbuild<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// One scratch world for the consumer-outside-the-walk tests: `ebuilds`
+    /// are added to a copy of the fixture tree, `installed` to the VDB, and
+    /// `recorded` writes `(cpf, key, text)` into the installed entries.
+    fn outside_world(
+        world_atoms: &[&str],
+        ebuilds: &[TestEbuild],
+        installed: &[(&str, &str)],
+        recorded: &[(&str, &str, &str)],
+    ) -> World {
+        let tree = fixture_copy();
+        for (cpv, slot, fields) in ebuilds {
+            add_ebuild_fields(tree.path(), cpv, slot, fields);
+        }
+        testkit::analyse_fixture_with(world_atoms, installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            for (cpf, key, text) in recorded {
+                std::fs::write(o.root.join("var/db/pkg/dev-libs").join(cpf).join(key), text)
+                    .expect("recorded dependency");
+            }
+        })
+    }
+
+    const PROV_MOVES: [(&str, &str); 2] =
+        [("dev-libs/w768prov-1", "0/1"), ("dev-libs/w768user-1", "0")];
+
+    /// Charter property 5: a stale consumer the walk from `@world` does not
+    /// reach is judged by its best visible ebuild, so the refusal names the
+    /// recorded pin and the provider version, not "no visible ebuild".
+    #[test]
+    fn a_stale_consumer_outside_the_walk_is_judged_by_its_best_visible_ebuild() {
+        let world = outside_world(
+            &["dev-libs/w768prov"],
+            &[
+                ("dev-libs/w768prov-2", "0/2", &[]),
+                (
+                    "dev-libs/w768user-1",
+                    "0",
+                    &[("RDEPEND", "=dev-libs/w768prov-1*")],
+                ),
+            ],
+            &PROV_MOVES,
+            &[(
+                "w768user-1",
+                "RDEPEND",
+                "=dev-libs/w768prov-1* dev-libs/w768prov:0/1=",
+            )],
+        );
+        assert!(world.rebuilds.is_empty(), "{:?}", world.rebuilds);
+        assert_eq!(
+            world.refused,
+            [crate::rebuild::RefusedBinding {
+                consumer: "dev-libs/w768user".to_string(),
+                atom: "=dev-libs/w768prov-1*".to_string(),
+                provider: Some("dev-libs/w768prov-2".to_string()),
+            }]
+        );
+    }
+
+    /// Charter property 1 (PMS `dependencies.tex`, `sec:slot-dep`): a stale
+    /// consumer outside the walk that nothing holds is rebuilt, and the
+    /// rebuild is a row of the plan, not only a member of `rebuilds`.
+    #[test]
+    fn a_stale_consumer_outside_the_walk_is_rebuilt_when_nothing_holds_it() {
+        let world = outside_world(
+            &["dev-libs/w768prov"],
+            &[
+                ("dev-libs/w768prov-2", "0/2", &[]),
+                (
+                    "dev-libs/w768user-1",
+                    "0",
+                    &[("RDEPEND", "dev-libs/w768prov:=")],
+                ),
+            ],
+            &PROV_MOVES,
+            &[("w768user-1", "RDEPEND", "dev-libs/w768prov:0/1=")],
+        );
+        assert_eq!(
+            world.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w768user:0"]
+        );
+        assert!(world.refused.is_empty(), "{:?}", world.refused);
+        let rows = world.ordered(&Order::Alpha);
+        let row = rows.iter().find(|s| s.node() == "dev-libs/w768user:0");
+        assert!(row.is_some(), "the rebuild has no row");
+        assert!(matches!(world.change(row.unwrap()), Some(Change::Rebuild)));
+    }
+
+    /// A seeded consumer brings its tree dependencies into the walk: when its
+    /// tree pins the old provider, the provider stays and the consumer is
+    /// still a row.
+    #[test]
+    fn a_seeded_consumer_whose_tree_pins_the_provider_keeps_the_provider() {
+        let world = outside_world(
+            &["dev-libs/w768prov"],
+            &[
+                ("dev-libs/w768prov-1", "0/1", &[]),
+                ("dev-libs/w768prov-2", "0/2", &[]),
+                (
+                    "dev-libs/w768user-1",
+                    "0",
+                    &[("RDEPEND", "=dev-libs/w768prov-1* dev-libs/w768prov:=")],
+                ),
+            ],
+            &PROV_MOVES,
+            &[("w768user-1", "RDEPEND", "dev-libs/w768prov:0/1=")],
+        );
+        let rows: Vec<String> = world
+            .ordered(&Order::Alpha)
+            .iter()
+            .map(|s| s.node())
+            .collect();
+        assert!(
+            rows.contains(&"dev-libs/w768user:0".to_string()),
+            "the consumer is rebuilt: {rows:?}"
+        );
+        assert!(
+            !rows.contains(&"dev-libs/w768prov:0".to_string()),
+            "the provider is not moved: {rows:?}"
+        );
+    }
+
+    /// PMS `dependencies.tex` (`:=` breaks a runtime binding): a binding
+    /// recorded only in `DEPEND` counts for a consumer the walk reached, and
+    /// not for one outside it.
+    #[test]
+    fn a_depend_only_binding_outside_the_walk_is_not_rebuilt() {
+        let ebuilds: [TestEbuild; 2] = [
+            ("dev-libs/w768prov-2", "0/2", &[]),
+            (
+                "dev-libs/w768user-1",
+                "0",
+                &[("DEPEND", "dev-libs/w768prov:=")],
+            ),
+        ];
+        let recorded = [("w768user-1", "DEPEND", "dev-libs/w768prov:0/1=")];
+        let outside = outside_world(&["dev-libs/w768prov"], &ebuilds, &PROV_MOVES, &recorded);
+        assert!(
+            outside.rebuilds.is_empty() && outside.refused.is_empty(),
+            "{:?} {:?}",
+            outside.rebuilds,
+            outside.refused
+        );
+        let walked = outside_world(
+            &["dev-libs/w768prov", "dev-libs/w768user"],
+            &ebuilds,
+            &PROV_MOVES,
+            &recorded,
+        );
+        assert_eq!(
+            walked.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w768user:0"]
+        );
+    }
+
+    /// A seeded consumer is judged on the same keys in every pass: a pin
+    /// recorded only in `DEPEND` never turns its rebuild into a refusal.
+    #[test]
+    fn a_seeded_consumer_is_judged_on_the_same_keys_in_every_iteration() {
+        let world = outside_world(
+            &["dev-libs/w768prov"],
+            &[
+                ("dev-libs/w768prov-2", "0/2", &[]),
+                (
+                    "dev-libs/w768user-1",
+                    "0",
+                    &[("RDEPEND", "dev-libs/w768prov:=")],
+                ),
+            ],
+            &PROV_MOVES,
+            &[
+                ("w768user-1", "RDEPEND", "dev-libs/w768prov:0/1="),
+                ("w768user-1", "DEPEND", "=dev-libs/w768prov-1*"),
+            ],
+        );
+        assert_eq!(
+            world.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w768user:0"]
+        );
+        assert!(world.refused.is_empty(), "{:?}", world.refused);
+        assert!(!world.walked.contains("dev-libs/w768user:0"));
+        assert!(world.reached.contains("dev-libs/w768user:0"));
+    }
+
+    /// Owner decision Q3(a) of 2026-11-16: a recorded text that does not
+    /// reduce is not a refusal; the tree ebuild decides, as in the resolver.
+    #[test]
+    fn an_unreduced_record_falls_back_to_the_tree() {
+        let world = outside_world(
+            &["dev-libs/w768prov", "dev-libs/w768user"],
+            &[
+                ("dev-libs/w768prov-2", "0/2", &[]),
+                (
+                    "dev-libs/w768user-1",
+                    "0",
+                    &[("RDEPEND", "dev-libs/w768prov:=")],
+                ),
+            ],
+            &PROV_MOVES,
+            &[("w768user-1", "RDEPEND", "|| ( dev-libs/w768prov:0/1=")],
+        );
+        assert_eq!(
+            world.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w768user:0"]
+        );
+        assert!(world.refused.is_empty(), "{:?}", world.refused);
     }
 
     /// A tree where `w746auto` builds with `w746help`, which needs `w746loc` at run time.

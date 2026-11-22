@@ -1,0 +1,1164 @@
+   Compiling portage-world v300.83.0 (/home/vivo/repo/PORTUALE/portuale/crates/portage-world)
+    Finished `release` profile [optimized] target(s) in 7.07s
+     Running unittests src/lib.rs (target/release/deps/portage_world-6271ed96c0a4f699)
+
+running 6 tests
+test tests::a_depend_only_binding_outside_the_walk_is_not_rebuilt ... FAILED
+test tests::a_seeded_consumer_is_judged_on_the_same_keys_in_every_iteration ... FAILED
+test tests::a_stale_consumer_outside_the_walk_is_judged_by_its_best_visible_ebuild ... FAILED
+test tests::a_seeded_consumer_whose_tree_pins_the_provider_keeps_the_provider ... FAILED
+test tests::an_unreduced_record_falls_back_to_the_tree ... FAILED
+test tests::a_stale_consumer_outside_the_walk_is_rebuilt_when_nothing_holds_it ... FAILED
+
+failures:
+
+---- tests::a_depend_only_binding_outside_the_walk_is_not_rebuilt stdout ----
+
+thread 'tests::a_depend_only_binding_outside_the_walk_is_not_rebuilt' (4118282) panicked at crates/portage-world/src/lib.rs:1588:9:
+{} [RefusedBinding { consumer: "dev-libs/w768user", atom: "dev-libs/w768prov:0/1=", provider: None }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::a_seeded_consumer_is_judged_on_the_same_keys_in_every_iteration stdout ----
+
+thread 'tests::a_seeded_consumer_is_judged_on_the_same_keys_in_every_iteration' (4118283) panicked at crates/portage-world/src/lib.rs:1609:9:
+assertion `left == right` failed
+  left: []
+ right: ["dev-libs/w768user:0"]
+
+---- tests::a_stale_consumer_outside_the_walk_is_judged_by_its_best_visible_ebuild stdout ----
+
+thread 'tests::a_stale_consumer_outside_the_walk_is_judged_by_its_best_visible_ebuild' (4118285) panicked at crates/portage-world/src/lib.rs:1526:9:
+assertion `left == right` failed
+  left: [RefusedBinding { consumer: "dev-libs/w768user", atom: "dev-libs/w768prov:0/1=", provider: None }]
+ right: [RefusedBinding { consumer: "dev-libs/w768user", atom: "=dev-libs/w768prov-1*", provider: Some("dev-libs/w768prov-2") }]
+
+---- tests::a_seeded_consumer_whose_tree_pins_the_provider_keeps_the_provider stdout ----
+
+thread 'tests::a_seeded_consumer_whose_tree_pins_the_provider_keeps_the_provider' (4118284) panicked at crates/portage-world/src/lib.rs:1574:9:
+assertion `left == right` failed: the consumer is rebuilt, the provider is not moved
+  left: ["dev-libs/newpkg:0", "dev-libs/systempkg:0", "dev-libs/upgradepkg:0", "dev-libs/w768prov:0", "dev-libs/withdeps:0"]
+ right: ["dev-libs/w768user:0"]
+
+---- tests::an_unreduced_record_falls_back_to_the_tree stdout ----
+
+thread 'tests::an_unreduced_record_falls_back_to_the_tree' (4118287) panicked at crates/portage-world/src/lib.rs:1628:9:
+assertion `left == right` failed
+  left: []
+ right: ["dev-libs/w768user:0"]
+
+---- tests::a_stale_consumer_outside_the_walk_is_rebuilt_when_nothing_holds_it stdout ----
+
+thread 'tests::a_stale_consumer_outside_the_walk_is_rebuilt_when_nothing_holds_it' (4118286) panicked at crates/portage-world/src/lib.rs:1550:9:
+assertion `left == right` failed
+  left: []
+ right: ["dev-libs/w768user:0"]
+
+
+failures:
+    tests::a_depend_only_binding_outside_the_walk_is_not_rebuilt
+    tests::a_seeded_consumer_is_judged_on_the_same_keys_in_every_iteration
+    tests::a_seeded_consumer_whose_tree_pins_the_provider_keeps_the_provider
+    tests::a_stale_consumer_outside_the_walk_is_judged_by_its_best_visible_ebuild
+    tests::a_stale_consumer_outside_the_walk_is_rebuilt_when_nothing_holds_it
+    tests::an_unreduced_record_falls_back_to_the_tree
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.31s
+
+error: test failed, to rerun pass `-p portage-world --lib`
+....FFFFFFFFFFFFFsFFFFFFFF.                                              [100%]
+=================================== FAILURES ===================================
+_ test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o4')
+solver = '', name = 'prov', rows = set(), reinstalls = set(), virt = True
+default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o5')
+solver = 'pubgrub', name = 'prov', rows = set(), reinstalls = set(), virt = True
+default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o6')
+solver = '', name = 'bdw', rows = set(), reinstalls = {'dev-libs/p698rebuild'}
+virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o7')
+solver = 'pubgrub', name = 'bdw', rows = set()
+reinstalls = {'dev-libs/p698rebuild'}, virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o8')
+solver = '', name = 'unred', rows = set(), reinstalls = {'dev-libs/p698rebuild'}
+virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o9')
+solver = 'pubgrub', name = 'unred', rows = set()
+reinstalls = {'dev-libs/p698rebuild'}, virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o10')
+solver = '', name = 'outr', rows = set(), reinstalls = {'dev-libs/p698rebuild'}
+virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o11')
+solver = 'pubgrub', name = 'outr', rows = set()
+reinstalls = {'dev-libs/p698rebuild'}, virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 2 more items:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild'],
+E          'stale reinstalls only the resolver lists': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o12')
+solver = '', name = 'bdout', rows = set(), reinstalls = set(), virt = True
+default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 1 more item:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o13')
+solver = 'pubgrub', name = 'bdout', rows = set(), reinstalls = set()
+virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {'consumers o...p698rebuild']} == {'consumers o...bs/p569virt']}
+E         
+E         Left contains 1 more item:
+E         {'consumers only the fast plan names': ['dev-libs/p698rebuild']}
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o14')
+solver = '', name = 'outpin'
+rows = {('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+reinstalls = set(), virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-pubgrub] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o15')
+solver = 'pubgrub', name = 'outpin'
+rows = {('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+reinstalls = set(), virt = True, default_only = False
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+>       assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+E       AssertionError: assert {} == {'consumers o...bs/p569virt']}
+E         
+E         Right contains 2 more items:
+E         {'consumers only the resolver names': ['dev-libs/p569virt'],
+E          'stale reinstalls only the fast plan lists': ['dev-libs/p569virt']}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:290: AssertionError
+_ test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-default] _
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_two_plans_agree_o16')
+solver = '', name = 'pull'
+rows = {('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+reinstalls = {'dev-libs/p569virt'}, virt = False, default_only = True
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, rows, reinstalls, virt, default_only", [
+        pytest.param("ctl", set(), set(), False, False, id="ctl-nothing-stale"),
+        pytest.param("r703", set(), set(), False, False, id="r703-provider-held-back"),
+        # Only the p569virt difference (owner decision 2026-11-22).
+        pytest.param("prov", set(), set(), True, False, id="prov-consumer-outside-the-walk"),
+        # A consumer inside the walk with the binding in DEPEND: both rebuild it.
+        pytest.param("bdw", set(), {"dev-libs/p698rebuild"}, True, False, id="bdw-consumer-inside-the-walk"),
+        # A recorded text that does not reduce: the tree decides on both sides (owner Q3(a)).
+        pytest.param("unred", set(), {"dev-libs/p698rebuild"}, True, False, id="unred-tree-decides"),
+        # Outside the walk, nothing holds it back: both rebuild it (owner Q1(a)).
+        pytest.param("outr", set(), {"dev-libs/p698rebuild"}, True, False, id="outr-rebuilt-outside-the-walk"),
+        # Outside the walk, binding only in DEPEND: silent on both sides (Q-A (i)).
+        pytest.param("bdout", set(), set(), True, False, id="bdout-depend-only-outside"),
+        # Outside the walk with a recorded pin and no `||`: refused on both sides, the tree is not asked.
+        pytest.param("outpin", {_REINST_PIN_766}, set(), True, False, id="outpin-pin-outside"),
+        # p569virt is walked here and both rebuild it; pubgrub does not yet (#770).
+        pytest.param("pull", {_PULL_766}, {_VIRT_766}, False, True, id="pull-walked-consumer"),
+    ])
+    def test_766_the_two_plans_agree_on_the_stale_consumers(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, rows, reinstalls, virt, default_only
+    ):
+        """Backlog #766, #768: charter property 1 (a `:=` binding the plan breaks is repaired or
+        said) and property 5 (named). On these roots `mrg --plan-world` and `emerge -puDN @world`
+        (both solvers) print the same refusal ROWS (consumer, atom, provider) and rebuild the same
+        consumers, except, where `virt` is set, the shared VDB's out-of-walk `p569virt-1`: the fast
+        plan rebuilds it and the resolver refuses it (owner decision 2026-11-22, residue #793).
+        Expected sets come from how each root is built (PMS `sec:slot-dep`) and from the owner's
+        decisions of 2026-11-16 (Q1(a), Q3(a), Q-A (i)) and 2026-11-22, not from either program."""
+        if default_only and solver:
+            pytest.skip("pubgrub schedules no rebuild of a walked stale consumer: backlog #770")
+        env = _root_766(fixture_env, tmp_path, name)
+        root = tmp_path / "root"
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver)
+        bound = _bound_766(root)
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        assert _differences_766(fast, res) == (_VIRT_DIFF_768 if virt else {})
+>       assert fast == (rows, reinstalls | ({_VIRT_766} if virt else set())), fast
+E       AssertionError: ({('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)}, {'dev-libs/p569virt'})
+E       assert ({('dev-libs/...bs/p569virt'}) == ({('dev-libs/...bs/p569virt'})
+E         
+E         At index 0 diff: {('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)} != {('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:291: AssertionError
+____ test_766_the_known_differences_are_pinned_exactly[r698-D-698-default] _____
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences0')
+solver = '', name = 'r698', extra = (), klass = 'D-698'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}, {'dev-libs/p698rebuild'})
+E       assert ({('dev-libs/...p698rebuild'}) == ({('dev-libs/...p698rebuild'})
+E         
+E         At index 0 diff: {('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')} != {('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+____ test_766_the_known_differences_are_pinned_exactly[r698-D-698-pubgrub] _____
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences1')
+solver = 'pubgrub', name = 'r698', extra = (), klass = 'D-698'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}, {'dev-libs/p698rebuild'})
+E       assert ({('dev-libs/...p698rebuild'}) == ({('dev-libs/...p698rebuild'})
+E         
+E         At index 0 diff: {('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')} != {('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+______ test_766_the_known_differences_are_pinned_exactly[gone-A1-default] ______
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences2')
+solver = '', name = 'gone', extra = (), klass = 'A1'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None)}, set())
+E       assert ({('dev-libs/...None)}, set()) == ({('dev-libs/...bs/p569virt'})
+E         
+E         At index 0 diff: {('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)} != {('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None)}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+______ test_766_the_known_differences_are_pinned_exactly[gone-A1-pubgrub] ______
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences3')
+solver = 'pubgrub', name = 'gone', extra = (), klass = 'A1'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None)}, set())
+E       assert ({('dev-libs/...None)}, set()) == ({('dev-libs/...bs/p569virt'})
+E         
+E         At index 0 diff: {('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None), ('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)} != {('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None)}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+______ test_766_the_known_differences_are_pinned_exactly[pull-S-default] _______
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences4')
+solver = '', name = 'pull', extra = (), klass = 'S'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)}, {'dev-libs/p569virt'})
+E       assert ({('dev-libs/...bs/p569virt'}) == ({('dev-libs/...bs/p569virt'})
+E         
+E         At index 0 diff: {('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)} != {('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+______ test_766_the_known_differences_are_pinned_exactly[pull-S-pubgrub] _______
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences5')
+solver = 'pubgrub', name = 'pull', extra = (), klass = 'S'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)}, {'dev-libs/p569virt'})
+E       assert ({('dev-libs/...bs/p569virt'}) == ({('dev-libs/...bs/p569virt'})
+E         
+E         At index 0 diff: {('dev-libs/p573virt', 'dev-libs/p569prov:0/5.42=', None)} != {('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')}
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+___ test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-default] ___
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences6')
+solver = '', name = 'bdw', extra = ('--usepkg',), klass = 'A4'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)}, {'dev-libs/p698rebuild'})
+E       assert ({('dev-libs/...p698rebuild'}) == (set(), {'dev...p698rebuild'})
+E         
+E         At index 0 diff: {('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)} != set()
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+___ test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-pubgrub] ___
+
+mrg_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/mrg-symlink0/mrg')
+emerge_binary = PosixPath('/var/tmp/pmtest/pytest-basetemp/emerge-symlink0/emerge')
+fixture_env = {'SHELL': '/bin/bash', 'CLAUDE_CODE_SUBAGENT_MODEL': 'sonnet', 'COREPACK_ENABLE_AUTO_PIN': '0', 'COLORTERM': 'truecolor', ...}
+tmp_path = PosixPath('/var/tmp/pmtest/pytest-basetemp/test_766_the_known_differences7')
+solver = 'pubgrub', name = 'bdw', extra = ('--usepkg',), klass = 'A4'
+
+    @pytest.mark.parametrize("solver", _SOLVERS_766)
+    @pytest.mark.parametrize("name, extra, klass", [
+        # D-698: the fast plan refuses what the resolver's holder route reinstalls (#769).
+        pytest.param("r698", (), "D-698", id="r698-D-698"),
+        # A1: the fast plan names a consumer that has no ebuild; the resolver is silent (#768).
+        pytest.param("gone", (), "A1", id="gone-A1"),
+        # S: the default solver files the `rR` of a walked stale consumer, pubgrub does not (#770).
+        pytest.param("pull", (), "S", id="pull-S"),
+        # A4: under --usepkg bdeps are off, so the resolver does not read DEPEND (#769).
+        pytest.param("bdw", ("--usepkg",), "A4", id="bdw-usepkg-A4"),
+    ])
+    def test_766_the_known_differences_are_pinned_exactly(
+        mrg_binary, emerge_binary, fixture_env, tmp_path, solver, name, extra, klass
+    ):
+        """Backlog #766: the differences between the fast plan and the resolver that probes found
+        (`LLM/evidence/02.766/before/classes.txt`), each as the exact fast set and the exact resolver
+        set. These pins record CURRENT behaviour, not what is right: a change to either side moves a
+        pin and has to be judged, not absorbed. Class S differs only on pubgrub: there the resolver set has no reinstall (the two plans agree
+        on the default solver)."""
+        env = _root_766(fixture_env, tmp_path, name)
+        fast_doc, res_doc = _both_766(mrg_binary, emerge_binary, env, solver, extra)
+        bound = _bound_766(tmp_path / "root")
+        fast, res = _view_766(fast_doc, bound, False), _view_766(res_doc, bound, True)
+        frows, freinst, rrows, rreinst = _PINS_766[name]
+        if klass == "S" and solver:  # pubgrub schedules no rebuild of the walked consumer
+            rreinst = set()
+>       assert fast == (frows, freinst), fast
+E       AssertionError: ({('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)}, {'dev-libs/p698rebuild'})
+E       assert ({('dev-libs/...p698rebuild'}) == (set(), {'dev...p698rebuild'})
+E         
+E         At index 0 diff: {('dev-libs/p569virt', 'dev-libs/p569prov:0/5.42=', None)} != set()
+E         Use -v to get more diff
+
+pytests-contract-suite/test_plan_world.py:336: AssertionError
+=============================== warnings summary ===============================
+../../../../../usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[prov-consumer-outside-the-walk-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdw-consumer-inside-the-walk-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[unred-tree-decides-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[outr-rebuilt-outside-the-walk-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[bdout-depend-only-outside-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[outpin-pin-outside-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[pull-walked-consumer-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[r698-D-698-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[r698-D-698-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[gone-A1-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[gone-A1-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[pull-S-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[pull-S-pubgrub]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences_are_pinned_exactly[bdw-usepkg-A4-pubgrub]
+21 failed, 5 passed, 1 skipped, 9 deselected, 2 warnings in 9.01s
+
+# Task 5 step 5 note
+a_plan_rebuilds_a_stale_consumer_outside_the_walk: the --plan-world half (R row) is the real assertion.
+The --check-world half is a characterisation only: --check-world never sets opts.rebuilds, so it never
+seeds, and that half holds before and after Task 5. It is not the plan's STOP-2 guard.
