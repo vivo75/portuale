@@ -1,0 +1,308 @@
+== a10
+  fast: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p573virt']
+  df: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls ['dev-libs/p573virt']
+  pg: rc=0 pg_lines=2694
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p573virt']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p573virt']
+  df == pg: refusals False reinstalls True
+== a2
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/hardmaskedpkg', 'dev-libs/p569prov:0/5.42=', None)]
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2686
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast ['dev-libs/hardmaskedpkg']; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== a5or
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44'), ('dev-libs/p698rebuild', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2690
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44'), ('dev-libs/p698rebuild', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt', 'dev-libs/p698rebuild']; both []
+  reinstalls only fast ['dev-libs/p569virt', 'dev-libs/p698rebuild']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== a7
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  pg: rc=0 pg_lines=2688
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast []; only resolver []; both ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df == pg: refusals True reinstalls True
+== a8
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  pg: rc=0 pg_lines=2690
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p698rebuild']
+  df == pg: refusals True reinstalls True
+== bdout
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2690
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== bdw
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  pg: rc=0 pg_lines=4050
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p698rebuild']
+  df == pg: refusals True reinstalls True
+== ctl
+  fast: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  df: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  pg: rc=0 pg_lines=2668
+    provider versions {}
+    refusals []
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast []; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== gone
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p766gone', 'dev-libs/p569prov:0/5.42=', None)]
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2686
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast ['dev-libs/p766gone']; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== outpin
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44'), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2690
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44'), ('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both ['dev-libs/p698reinst']
+    dev-libs/p698reinst: atom/provider same=True  fast=[('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')] resolver=[('dev-libs/p698reinst', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== outr
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  pg: rc=0 pg_lines=2690
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p698rebuild']
+  df == pg: refusals True reinstalls True
+== prov
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  pg: rc=0 pg_lines=2676
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== pull
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p569virt']
+  pg: rc=0 pg_lines=7441
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver []; both ['dev-libs/p573virt']
+    dev-libs/p573virt: atom/provider same=True  fast=[('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')] resolver=[('dev-libs/p573virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+  reinstalls only fast []; only resolver []; both ['dev-libs/p569virt']
+  df == pg: refusals True reinstalls False
+== r698
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild', 'dev-libs/p698reinst']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild', 'dev-libs/p698reinst']
+  pg: rc=0 pg_lines=4146
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild', 'dev-libs/p698reinst']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p698rebuild', 'dev-libs/p698reinst']
+  df == pg: refusals True reinstalls True
+== r703
+  fast: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  df: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  pg: rc=0 pg_lines=2766
+    provider versions {}
+    refusals []
+    reinstalls []
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast []; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== unred
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt', 'dev-libs/p698rebuild']
+  df: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  pg: rc=0 pg_lines=2694
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals [('dev-libs/p569virt', '=dev-libs/p569prov-5.42*', 'dev-libs/p569prov-5.44')]
+    reinstalls ['dev-libs/p698rebuild']
+  provider-version differences fast vs df: []
+  consumers only fast []; only resolver ['dev-libs/p569virt']; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both ['dev-libs/p698rebuild']
+  df == pg: refusals True reinstalls True
+== virtw
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  pg: rc=0 pg_lines=7363
+    provider versions {}
+    refusals []
+    reinstalls []
+  provider-version differences fast vs df: ['dev-libs/p569prov']
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True
+== vw2
+  fast: rc=0 pg_lines=0
+    provider versions {'dev-libs/p569prov': '5.44'}
+    refusals []
+    reinstalls ['dev-libs/p569virt']
+  df: rc=0 pg_lines=0
+    provider versions {}
+    refusals []
+    reinstalls []
+  pg: rc=0 pg_lines=7377
+    provider versions {}
+    refusals []
+    reinstalls []
+  provider-version differences fast vs df: ['dev-libs/p569prov']
+  consumers only fast []; only resolver []; both []
+  reinstalls only fast ['dev-libs/p569virt']; only resolver []; both []
+  df == pg: refusals True reinstalls True

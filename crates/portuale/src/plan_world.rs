@@ -1247,7 +1247,7 @@ mod tests {
                 &[("RDEPEND", "=dev-libs/w741prov-1* dev-libs/w741prov:0/1=")],
             );
         }
-        let world = ["dev-libs/w741user"];
+        let world = ["dev-libs/w741prov"];
         let (rc, out, err) =
             run_on_copy_with_stderr(&["--plan-world"], &world, &[], "", stale_tree);
         assert_eq!(rc, 0, "{out}\n{err}");

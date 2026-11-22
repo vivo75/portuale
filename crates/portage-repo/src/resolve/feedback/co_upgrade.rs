@@ -23,7 +23,7 @@ pub(crate) type Followers = ((String, String), (String, String));
 
 /// The version the installed holder `(category, package, version)` should move to so it can follow an
 /// upgrade of `provider` to the versions rendered in `new_provider`
-/// (`cat/pkg-ver:slot/sub::repo`): some visible candidate of the holder, in
+/// (`cat/pkg-ver:slot/sub::repo`): some candidate of the holder (masked ones included), in
 /// its installed slot and not older than it, whose `*DEPEND` names `provider`
 /// only in ways the new versions satisfy. A rebuild of the same version
 /// counts (its tree dependencies, not the vdb ones, are what binds).
@@ -297,7 +297,7 @@ pub(crate) fn provider_atoms(
 /// Whether `atoms` (as returned by [`provider_atoms`]) accept the provider
 /// rendered `new` (`cat/pkg-ver:slot/sub::repo`). Versioned atoms are a menu
 /// (one must match); unversioned ones (`:=`, `:0`) must all match.
-pub(crate) fn provider_atoms_accept(atoms: &[String], new: &str) -> bool {
+pub fn provider_atoms_accept(atoms: &[String], new: &str) -> bool {
     let accepts =
         |atom: &&String| portage_dep::match_from_list(atom, &[new]).is_some_and(|m| !m.is_empty());
     let (versioned, plain): (Vec<&String>, Vec<&String>) = atoms

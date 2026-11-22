@@ -1162,3 +1162,36 @@ FAILED pytests-contract-suite/test_plan_world.py::test_766_the_known_differences
 a_plan_rebuilds_a_stale_consumer_outside_the_walk: the --plan-world half (R row) is the real assertion.
 The --check-world half is a characterisation only: --check-world never sets opts.rebuilds, so it never
 seeds, and that half holds before and after Task 5. It is not the plan's STOP-2 guard.
+=== S2 red 2026-11-22 ===
+--- portage-world table (red expected)
+assertion `left == right` failed: a pin the tree lets go is rebuilt
+  left: []
+ right: ["dev-libs/w741user:0"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::a_stale_binding_is_rebuilt_or_refused
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 76 filtered out; finished in 0.37s
+
+error: test failed, to rerun pass `-p portage-world --lib`
+--- portuale plan_world (characterisation, passes)
+running 1 test
+test plan_world::tests::a_stale_binding_the_plan_cannot_repair_is_named ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1413 filtered out; finished in 0.39s
+
+--- pmtest -k 766 (red on r698-holder-route)
+  /usr/lib/python3.14/site-packages/snakeoil/klass/util.py:184: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class combined(*klses):
+
+../../../../../usr/lib/python3.14/site-packages/snakeoil/caching.py:99
+  /usr/lib/python3.14/site-packages/snakeoil/caching.py:99: DeprecationWarning: WeakInstMeta has been replaced by snakeoil.klass.memoize.WeaklyCachedMeta, however you should instead just inherit the non-meta snakeoil.klass.memoize.WeaklyCached
+    class c(cls):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[r698-holder-route-default]
+FAILED pytests-contract-suite/test_plan_world.py::test_766_the_two_plans_agree_on_the_stale_consumers[r698-holder-route-pubgrub]
+2 failed, 24 passed, 1 skipped, 9 deselected, 2 warnings in 9.66s

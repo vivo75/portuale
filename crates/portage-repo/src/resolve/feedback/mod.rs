@@ -17,7 +17,10 @@ mod solvable_slot_conflicts;
 mod unsatisfied_dead_end;
 pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
-pub(crate) use co_upgrade::*;
+pub use co_upgrade::provider_atoms_accept;
+pub(crate) use co_upgrade::{
+    Followers, WithheldProvider, co_upgrade_request, holder_routes, provider_atoms, request_updates,
+};
 pub(crate) use missing_dep::*;
 pub(crate) use no_leaf_restart::*;
 pub(crate) use rebuild_if_restart::*;

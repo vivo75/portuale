@@ -157,7 +157,40 @@ fn tree_names_provider(args: TreeNamesProviderArgs<'_>) -> bool {
     })
 }
 
+/// The chosen ebuild's tree atoms over `keys`, with `||` groups and USE
+/// conditionals reduced the way the planner reduces them. `None` when the
+/// metadata is unreadable or a text does not reduce.
+fn tree_reduced_atoms(args: TreeNamesProviderArgs<'_>, keys: &[&str]) -> Option<Vec<String>> {
+    let pf = format!("{}-{}", args.package, args.chosen.version);
+    let meta =
+        portage_repo::repo_aux_metadata(&args.chosen.repo_location, args.category, &pf).ok()?;
+    let use_flags: HashSet<String> = portage_repo::effective_use_flags(EffectiveUseFlagsArgs {
+        config: args.config,
+        iuse: &args.chosen.iuse,
+        keywords: &args.chosen.keywords,
+        candidate_str: &args.chosen.match_str(args.category, args.package),
+        build_id: None,
+        category: args.category,
+        package: args.package,
+    })
+    .iter()
+    .cloned()
+    .collect();
+    let mut out = Vec::new();
+    for key in keys {
+        let text = meta.get(*key).map(String::as_str).unwrap_or_default();
+        out.extend(reduced_recorded_atoms(
+            text,
+            &use_flags,
+            args.memos,
+            args.config,
+        )?);
+    }
+    Some(out)
+}
+
 /// Arguments of [`tree_names_provider`].
+#[derive(Clone, Copy)]
 struct TreeNamesProviderArgs<'a> {
     chosen: &'a portage_repo::Candidate,
     category: &'a str,
@@ -190,6 +223,14 @@ fn refuse(
         atom: atom.to_string(),
         provider,
     }
+}
+
+/// One recorded atom the plan's choice breaks: the refusal, the provider it
+/// names and the version the plan chooses there (`cat/pkg-ver:slot/sub`).
+struct HoldBack {
+    refusal: RefusedBinding,
+    provider: (String, String),
+    new: String,
 }
 
 impl Scan<'_> {
@@ -256,14 +297,14 @@ impl Scan<'_> {
         raw
     }
 
-    /// The first recorded non-`:=` atom of `reduced` that the version the
-    /// plan chooses in a slot it changes no longer matches: a rebuild would
-    /// hold that package back.
+    /// Every recorded non-`:=` atom of `reduced` that the version the plan
+    /// chooses in a slot it changes no longer matches.
     fn held_back(
         &self,
         installed: &portage_repo::InstalledPackage,
         reduced: &[String],
-    ) -> Option<RefusedBinding> {
+    ) -> Vec<HoldBack> {
+        let mut hits = Vec::new();
         for tok in reduced {
             let Some(a) = portage_repo::parse_dep_atom(tok, "rebuild_holdback") else {
                 continue;
@@ -293,11 +334,17 @@ impl Scan<'_> {
                     let provider = self
                         .final_provider((&a.category, &a.package, &s.slot))
                         .map(|(_, cpv)| cpv);
-                    return Some(refuse(installed, tok, provider));
+                    hits.push(HoldBack {
+                        refusal: refuse(installed, tok, provider),
+                        provider: (a.category.clone(), a.package.clone()),
+                        // match-str-ok: partial form (no ::repo) built from the chosen candidate's fields
+                        new: format!("{cp}-{}:{}/{}", next.version, s.slot, next.sub_slot),
+                    });
+                    break;
                 }
             }
         }
-        None
+        hits
     }
 
     /// Whether the kept `installed` consumer at `node` is rebuilt (`Ok(true)`),
@@ -378,9 +425,6 @@ impl Scan<'_> {
         }) else {
             return Err(refuse(installed, first, None));
         };
-        if let Some(refusal) = self.held_back(installed, &reduced) {
-            return Err(refusal);
-        }
         // A rebuild re-records the chosen ebuild's live dependencies: when
         // its tree no longer names any stale provider, nothing stale is left.
         let providers: Vec<(String, String)> = stale
@@ -389,7 +433,7 @@ impl Scan<'_> {
                 portage_repo::parse_dep_atom(tok, "rebuild_naming").map(|a| (a.category, a.package))
             })
             .collect();
-        Ok(tree_names_provider(TreeNamesProviderArgs {
+        let tree_args = TreeNamesProviderArgs {
             chosen: &chosen,
             category: &installed.category,
             package: &installed.package,
@@ -397,7 +441,36 @@ impl Scan<'_> {
             keys,
             memos: self.memos,
             config: self.config,
-        }))
+        };
+        // A pin recorded at build time does not refuse a consumer the walk
+        // reached whose tree ebuild accepts the new provider.
+        let hits = self.held_back(installed, &reduced);
+        if !hits.is_empty() {
+            let tree = if walked {
+                tree_reduced_atoms(tree_args, keys)
+            } else {
+                None
+            };
+            for hit in hits {
+                let waived = tree.as_ref().is_some_and(|atoms| {
+                    let on_provider: Vec<String> = atoms
+                        .iter()
+                        .filter(|tok| {
+                            portage_repo::parse_dep_atom(tok, "rebuild_naming").is_some_and(|a| {
+                                a.blocker == portage_dep::Blocker::None
+                                    && (a.category, a.package) == hit.provider
+                            })
+                        })
+                        .cloned()
+                        .collect();
+                    portage_repo::provider_atoms_accept(&on_provider, &hit.new)
+                });
+                if !waived {
+                    return Err(hit.refusal);
+                }
+            }
+        }
+        Ok(tree_names_provider(tree_args))
     }
 }
 

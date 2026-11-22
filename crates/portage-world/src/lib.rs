@@ -1433,13 +1433,14 @@ mod tests {
     fn a_stale_binding_is_rebuilt_or_refused() {
         type Case<'a> = (
             &'a str,                            // case name
-            &'a [(&'a str, &'a str, &'a str)],  // ebuilds: cpv, SLOT, RDEPEND
+            &'a [(&'a str, &'a str, &'a str)],  // ebuilds: cpv, SLOT, "RDEPEND[;DEPEND]"
             &'a [(&'a str, &'a str)],           // installed: cpf, SLOT
             (&'a str, &'a str),                 // the consumer and its recorded RDEPEND
             &'a [&'a str],                      // expected rebuilds
             Option<(&'a str, Option<&'a str>)>, // expected refusal: atom, provider
+            &'a [&'a str],                      // world atoms; empty means the consumer
         );
-        let cases: [Case; 3] = [
+        let cases: [Case; 7] = [
             (
                 "stale :=, provider left alone",
                 &[
@@ -1450,17 +1451,19 @@ mod tests {
                 ("w741user-1", "dev-libs/w741prov:0/1="),
                 &["dev-libs/w741user:0"],
                 None,
+                &[],
             ),
             (
-                "a pin would hold the changed provider back",
+                "a pin the tree lets go is rebuilt",
                 &[
                     ("dev-libs/w741core-2", "0/2", ""),
                     ("dev-libs/w741user-1", "0", "dev-libs/w741core"),
                 ],
                 &[("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")],
                 ("w741user-1", "=dev-libs/w741core-1* dev-libs/w741core:0/9="),
+                &["dev-libs/w741user:0"],
+                None,
                 &[],
-                Some(("=dev-libs/w741core-1*", Some("dev-libs/w741core-2"))),
             ),
             (
                 "no visible ebuild for the consumer",
@@ -1469,15 +1472,97 @@ mod tests {
                 ("w741gone-1", "dev-libs/w741prov:0/1="),
                 &[],
                 Some(("dev-libs/w741prov:0/1=", None)),
+                &[],
+            ),
+            (
+                "the tree pins the old provider too",
+                &[
+                    ("dev-libs/w741core-1", "0/1", ""),
+                    ("dev-libs/w741core-2", "0/2", ""),
+                    ("dev-libs/w741user-1", "0", ";=dev-libs/w741core-1*"),
+                    ("dev-libs/w741pull-1", "0", ">=dev-libs/w741core-2"),
+                ],
+                &[("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")],
+                ("w741user-1", "=dev-libs/w741core-1* dev-libs/w741core:0/9="),
+                &[],
+                Some(("=dev-libs/w741core-1*", Some("dev-libs/w741core-2"))),
+                &["dev-libs/w741user", "dev-libs/w741pull"],
+            ),
+            (
+                "outside the walk the tree is not read for the hold-back",
+                &[
+                    ("dev-libs/w741core-2", "0/2", ""),
+                    ("dev-libs/w741user-1", "0", "dev-libs/w741core"),
+                ],
+                &[("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")],
+                ("w741user-1", "=dev-libs/w741core-1* dev-libs/w741core:0/1="),
+                &[],
+                Some(("=dev-libs/w741core-1*", Some("dev-libs/w741core-2"))),
+                &["dev-libs/w741core"],
+            ),
+            (
+                "two pins, the tree lets one go: refused on the other",
+                &[
+                    ("dev-libs/w741core-2", "0/2", ""),
+                    ("dev-libs/w741side-1", "0/1", ""),
+                    ("dev-libs/w741side-2", "0/2", ""),
+                    (
+                        "dev-libs/w741user-1",
+                        "0",
+                        "dev-libs/w741core;=dev-libs/w741side-1*",
+                    ),
+                    ("dev-libs/w741pull-1", "0", ">=dev-libs/w741side-2"),
+                ],
+                &[
+                    ("dev-libs/w741core-1", "0/1"),
+                    ("dev-libs/w741side-1", "0/1"),
+                    ("dev-libs/w741user-1", "0"),
+                ],
+                (
+                    "w741user-1",
+                    "=dev-libs/w741core-1* =dev-libs/w741side-1* dev-libs/w741core:0/9=",
+                ),
+                &[],
+                Some(("=dev-libs/w741side-1*", Some("dev-libs/w741side-2"))),
+                &["dev-libs/w741user", "dev-libs/w741pull"],
+            ),
+            (
+                "the tree follows the new provider through another || arm",
+                &[
+                    ("dev-libs/w741core-2", "0/2", ""),
+                    ("dev-libs/w741alt-1", "0", ""),
+                    (
+                        "dev-libs/w741user-1",
+                        "0",
+                        "|| ( =dev-libs/w741core-1* dev-libs/w741alt ) dev-libs/w741core:=",
+                    ),
+                ],
+                &[("dev-libs/w741core-1", "0/1"), ("dev-libs/w741user-1", "0")],
+                ("w741user-1", "=dev-libs/w741core-1* dev-libs/w741core:0/1="),
+                &["dev-libs/w741user:0"],
+                None,
+                &[],
             ),
         ];
-        for (name, ebuilds, installed, (consumer, recorded), rebuilds, refusal) in cases {
+        for (name, ebuilds, installed, (consumer, recorded), rebuilds, refusal, world_atoms) in
+            cases
+        {
             let tree = fixture_copy();
-            for (cpv, slot, rdepend) in ebuilds {
-                add_ebuild(tree.path(), cpv, slot, rdepend);
+            for (cpv, slot, text) in ebuilds {
+                let (rdepend, depend) = text.split_once(';').unwrap_or((text, ""));
+                let fields: Vec<(&str, &str)> = [("RDEPEND", rdepend), ("DEPEND", depend)]
+                    .into_iter()
+                    .filter(|(_, v)| !v.is_empty())
+                    .collect();
+                add_ebuild_fields(tree.path(), cpv, slot, &fields);
             }
             let atom = format!("dev-libs/{}", consumer.rsplit_once('-').unwrap().0);
-            let world = testkit::analyse_fixture_with(&[&atom], installed, |o| {
+            let atoms: Vec<&str> = if world_atoms.is_empty() {
+                vec![atom.as_str()]
+            } else {
+                world_atoms.to_vec()
+            };
+            let world = testkit::analyse_fixture_with(&atoms, installed, |o| {
                 o.config_root = tree.path().to_path_buf();
                 o.rebuilds = true;
                 std::fs::write(

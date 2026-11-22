@@ -18,3 +18,5 @@ Co-upgrade (#698): installed holders of a pin follow an upgrade when each has a 
 
 - Backlog #718 (a): `holder_fix` returns, next to the rebuild and atom lists, the `(holder, provider)` pair of every holder it routes; `resolve_pubgrub_unstale` collects them over its rounds and `name_holder_parents` adds the provider to `required_by` of the holder's row in the final plan, as `backtracking_resolve` does for the default solver (#713). `--tree` is not touched (owner decision 2026-11-12: it follows the real dependency edges).
 
+## fn provider_atoms_accept
+- Public since #769 S2: `portage-world`'s stale-binding scan (`rebuild.rs`, `Scan::judge`) uses it to decide whether a walked consumer's tree ebuild accepts the new provider, so a recorded pin the tree has let go is not a refusal. Differences from the holder route: the fast plan tests one candidate (the chosen ebuild) where the route searches all candidates of the holder; and it reads the tree with the planner's `||` reduction (`tree_reduced_atoms`) where the route's `provider_atoms` keeps every `||` arm as a menu (see #781 in plan `02.770`).

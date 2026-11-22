@@ -63,6 +63,7 @@ pub(crate) use disjunction_stack::*;
 pub(crate) use driver::*;
 pub(crate) use enqueue::*;
 pub use entry::*;
+pub use feedback::provider_atoms_accept;
 pub(crate) use feedback::*;
 pub use graph_lookup::*;
 pub(crate) use greedy_slots::*;
