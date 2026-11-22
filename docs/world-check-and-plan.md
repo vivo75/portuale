@@ -111,16 +111,32 @@ runtime dependencies order, its dependencies' dependencies may be cut, so a
 runtime dependency two levels below a build tool can merge after the package
 built with it (a documented limitation, owner ruling 2026-11-15, #764; the
 charter's literal rule allows it); a cycle that no runtime edge may be cut in
-only because of that rule is ordered by the walk and is not reported (#771); a
-`PDEPEND` orders nothing, as the PMS says (`dependencies.tex`). A cycle of
-build-time edges that survives every cuttable runtime edge is genuine: no
-order satisfies it — except the charter 2a bootstrap, which serializes the one shape a single USE-flag reduction breaks. With a
+only because of that rule is ordered by the walk, which can put a package
+before a build dependency a legal order would place first (#771, open: the
+fix was measured and moved bed rows, so it did not ship); the plan reports
+that as a late need (below). A
+`PDEPEND` orders nothing, as the PMS says (`dependencies.tex`). The plan
+checks its own order (#772): for every build atom whose target is merged
+after the package that needs it, and that nothing installed, nothing
+earlier and no other `||` arm meets, it prints one line. If a build path
+leads back from the target to the package, the line is `plan-world: build
+cycle: A -> B -> A; this order builds A before its build dependency "B",
+merged later (disable a USE flag on one of these packages to break the
+cycle)`, the path being real build edges, never a list of the members of a
+strongly connected component; otherwise it is `plan-world: this order builds
+A before its build dependency "B", merged later; no build cycle joins them,
+so the order itself is wrong` (the #771 shape). A cycle whose late edges an
+installed version meets prints nothing, since charter 2a asks only that a
+build dependency be installed before, not that it be earlier in this plan
+(a `DEPEND` `:=` on a provider the plan moves to another sub-slot is still a
+need, PMS `dependencies.tex:348-350`). The charter 2a bootstrap serializes
+the one shape a single USE-flag reduction breaks. With a
 reduction the plan carries three rows (the boot row with the reduced USE,
 the middle, the definitive rebuild with the declared USE) and the report
 line names the reduction:
 
 ```
-plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)
+plan-world: build cycle: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 broken by a bootstrap: USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE
 [ebuild  N     ] dev-libs/w749otherpkg-1:0 (bootstrap: USE="-useboh" temporary — will be rebuilt with the declared USE)
 [ebuild  N     ] dev-libs/w749pkgnew-1:0
 [ebuild  N     ] dev-libs/w749otherpkg-1:0

@@ -15,7 +15,7 @@ from `docs/charter.md` for the properties themselves.
 | Property | Checked by | Not covered |
 |---|---|---|
 | 1. Dependencies hold (runtime and post-merge atoms matched, no blocker, `REQUIRED_USE` holds, one package per slot) | `health_checker.py` `check_final_state`, on `emerge -pv --json` (a plan) and, with `--installed ROOT`, on the VDB a real merge left. Also `output_invariants.py` (every owner is an entry or installed, every entry reachable, no duplicate slot without a reported conflict) and the dependency-drop guard (see `portuale-resolver`) | |
-| 2. Order is legal (build dependencies installed or merged earlier; charter-literal since #749, tool usability per PMS 8.1 is not checked; the fast plan orders a build tool's direct runtime edges only, #764) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: a cycle no order satisfies is reported, never built twice (the `plan-world` report line plus the checker's `build-order`; the one recognised rebuild is the #753 bootstrap) |
+| 2. Order is legal (build dependencies installed or merged earlier; charter-literal since #749, tool usability per PMS 8.1 is not checked; the fast plan orders a build tool's direct runtime edges only, #764) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: a build need the produced order breaks is reported, never built twice (the `plan-world` late-need line, a check of the final rows since #772, not a list of cycle members, plus the checker's `build-order`; the one recognised rebuild is the #753 bootstrap) |
 | 3. Newest visible version that every constraint allows | `health_checker.py` `check_best_versions` (needs the VDB and `-v --json`). Candidates are the repositories' ebuilds and the binary packages of the local index (`PKGDIR/Packages`), as far as the plan's `options` (`usepkg`, `usepkgonly`) let the run use them; a binary whose USE differs from the configured one is not a candidate | a remote binhost (`--getbinpkg`) is not read (a note); entries absent from the metadata cache or the index (`checker-limitation`) |
 | 4. Removal keeps the libraries remaining programs link | `health_checker.py` `check_removal_plan` on `-C`, `--depclean`, `--prune` with `--pretend --json`; `--installed ROOT` checks that every installed ELF still finds its libraries after a real merge (a preserved library is a file on disk); Rust tests `ebuild_merge/tests/plib_*.rs` for the preserve-libs mechanics | a real unmerge on a real tree is compared with Portage (the L32 cells), not gated |
 | 5. Messages name the cause and an action | **no program** | everything; only pinned text exists, and it fixes known messages, not the rule |
@@ -102,7 +102,11 @@ go.
    contract case.
 4. Property 2a: an identical second build is no longer modelled or emitted
    (#749, 2026-11-14 — it cannot change the artefact, so it was an illegal
-   attempt to break a cycle). A cycle no order satisfies is reported, and the
+   attempt to break a cycle). A build need the produced order breaks is reported (since #772 the
+   `plan-world` line checks the final rows: a build atom whose target is merged
+   later and that nothing installed or earlier meets; an uncuttable runtime
+   cycle the walk orders badly shows as "no build cycle joins them", #771
+   open), and the
    only recognised rebuild is the bootstrap with a reduced first USE (#753,
    done 2026-11-14).
 5. Property 3 reads only the local binary index, not a remote binhost (#690).
