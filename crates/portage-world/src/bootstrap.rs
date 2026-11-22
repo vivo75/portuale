@@ -25,17 +25,9 @@ pub struct Bootstrap {
 }
 
 impl Bootstrap {
-    /// Whether the reduction drops an edge of `cycle`, so the report line
-    /// can say the plan bootstraps there.
+    /// Whether the reduction drops the build edge `from -> to`.
     #[must_use]
-    pub fn breaks(&self, cycle: &[String]) -> bool {
-        cycle.contains(&self.node)
-            && self.guards.iter().any(|((from, to), flags)| {
-                *from == self.node && cycle.contains(to) && flags.contains(&self.flag)
-            })
-    }
-
-    fn drops(&self, from: &str, to: &str) -> bool {
+    pub fn drops(&self, from: &str, to: &str) -> bool {
         from == self.node
             && self
                 .guards
@@ -50,11 +42,9 @@ pub struct PlanRow<'a> {
     pub bootstrap: Option<BootstrapUse>,
 }
 
-/// The rows of a plan and the build-time cycles it reports.
+/// The rows of a plan and the bootstrap they carry.
 pub struct BuildPlan<'a> {
     pub rows: Vec<PlanRow<'a>>,
-    /// The genuine build-time cycles, members in walk order.
-    pub cycles: Vec<Vec<String>>,
     pub bootstrap: Option<&'a Bootstrap>,
 }
 
@@ -68,20 +58,30 @@ fn plain_rows<'a>(rows: &[&'a SlotSet]) -> Vec<PlanRow<'a>> {
 }
 
 impl World {
+    /// The build cycle the bootstrap breaks, as a path `node -> ... -> node`
+    /// whose first edge is one the reduction drops, or `None` without a
+    /// bootstrap. A plain shortest cycle through the node could leave that
+    /// edge out and name a cycle the reduction does not break.
+    #[must_use]
+    pub fn bootstrap_cycle(&self) -> Option<Vec<String>> {
+        let b = self.bootstrap.as_ref()?;
+        crate::order::drop_path(&self.edges, &self.edge_kinds, &b.node, &|from, to| {
+            b.drops(from, to)
+        })
+    }
+
     /// The rows in `how` order, with the bootstrap applied: the boot row
     /// takes the earliest of the boot slot's own place and its dependents',
     /// the definitive row follows the last of them.
     #[must_use]
     pub fn build_plan(&self, how: &Order<'_>) -> BuildPlan<'_> {
         let rows = self.ordered(how);
-        let cycles = build_time_cycles(&self.edges, &self.edge_kinds);
         let boot = self.bootstrap.as_ref();
         let Some((b, at)) =
             boot.and_then(|b| Some((b, rows.iter().position(|s| s.node() == b.node)?)))
         else {
             return BuildPlan {
                 rows: plain_rows(&rows),
-                cycles,
                 bootstrap: boot,
             };
         };
@@ -123,7 +123,6 @@ impl World {
         );
         BuildPlan {
             rows: out,
-            cycles,
             bootstrap: boot,
         }
     }

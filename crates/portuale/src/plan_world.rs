@@ -62,26 +62,18 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         },
         _ => Order::Alpha,
     };
-    // Charter 2a bootstrap: a single USE-flag reduction that breaks a
-    // reported build-time cycle adds the boot row; the checker accepts only
-    // the complete pair. A cycle the reduction does not break keeps the
-    // bare report line.
+    // Charter 2a: a build dependency is installed before the package that
+    // needs it. The plan checks its own order for that, and a bootstrap row
+    // (one USE-flag reduction that breaks a real build cycle) is announced.
     let plan = world.build_plan(&order);
-    for cycle in &plan.cycles {
-        let mut chain = cycle.to_vec();
-        chain.extend(cycle.first().cloned());
-        let mut line = format!(
-            "plan-world: build cycle with no serial order: {} (no order satisfies it; disable a USE flag on one of these packages to break the cycle",
-            chain.join(" -> ")
-        );
-        if let Some(boot) = plan.bootstrap.filter(|b| b.breaks(cycle)) {
-            line.push_str(&format!(
-                "; bootstrap with USE=\"-{}\" {} temporary — will be rebuilt with the declared USE",
-                boot.flag, boot.node
-            ));
-        }
-        line.push(')');
+    if let Some(line) = bootstrap_line(&world, &plan) {
         eprintln!("{line}");
+    }
+    match portage_world::late_build_needs(&world, &plan, &root, &config_root) {
+        Ok(needs) => needs
+            .iter()
+            .for_each(|need| eprintln!("{}", late_need_line(need))),
+        Err(message) => eprintln!("plan-world: build order not checked: {message}"),
     }
     let final_rows = plan.rows;
     if matches.get_flag("json") {
@@ -110,6 +102,49 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         eprintln!("{}", refused_line(&world));
     }
     ExitCode::SUCCESS
+}
+
+/// The line naming the build cycle a bootstrap row breaks, when the plan has one.
+fn bootstrap_line(world: &World, plan: &portage_world::BuildPlan<'_>) -> Option<String> {
+    let boot = plan
+        .bootstrap
+        .filter(|_| plan.rows.iter().any(|r| r.bootstrap.is_some()))?;
+    let reduction = format!(
+        "USE=\"-{}\" {} temporary — will be rebuilt with the declared USE",
+        boot.flag, boot.node
+    );
+    Some(match world.bootstrap_cycle() {
+        Some(path) => format!(
+            "plan-world: build cycle: {} broken by a bootstrap: {reduction}",
+            path.join(" -> ")
+        ),
+        None => format!("plan-world: bootstrap with {reduction}"),
+    })
+}
+
+/// The line for a build dependency the produced order has not met when its
+/// package is built.
+fn late_need_line(need: &portage_world::LateNeed) -> String {
+    let built = format!(
+        "this order builds {} before its build dependency \"{}\", merged later",
+        need.row, need.atom
+    );
+    let Some(path) = &need.path else {
+        return format!(
+            "plan-world: {built}; no build cycle joins them, so the order itself is wrong"
+        );
+    };
+    let fix = "(disable a USE flag on one of these packages to break the cycle)";
+    let stale = need.moved_binding.as_ref().map_or_else(String::new, |(installed, sub)| {
+        format!(
+            "; the installed {installed} meets it, but this plan replaces it with sub-slot {sub}, so {}'s binding would go stale",
+            need.row
+        )
+    });
+    format!(
+        "plan-world: build cycle: {}; {built}{stale} {fix}",
+        path.join(" -> ")
+    )
 }
 
 /// Which plan `--plan-world` works out.
@@ -760,9 +795,10 @@ mod tests {
             "{out}"
         );
         assert!(
-            err.contains("plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE=\"-useboh\" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)"),
+            err.contains("plan-world: build cycle: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 broken by a bootstrap: USE=\"-useboh\" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE"),
             "{err}"
         );
+        assert!(!err.contains("before its build dependency"), "{err}");
         assert!(
             err.contains("builds including 1 bootstrap), order depend"),
             "{err}"
@@ -825,6 +861,206 @@ mod tests {
             definitive_uses[0].contains("\"useblah\"") && definitive_uses[0].contains("\"useboh\""),
             "{text}"
         );
+    }
+
+    /// The stderr lines about build cycles and late build dependencies.
+    fn cycle_lines(err: &str) -> Vec<&str> {
+        err.lines()
+            .filter(|l| l.contains("build cycle") || l.contains("before its build dependency"))
+            .collect()
+    }
+
+    /// Two packages that build against each other, `-2` in the tree and `-1`
+    /// installed in `slots` (`SLOT` files): the name-ordered walk builds the
+    /// second one first. Charter 2a: a build dependency an installed version
+    /// provides is "installed before", so the order breaks nothing.
+    fn two_way_build_cycle(root: &Path, a: (&str, &str, &str), b: (&str, &str, &str)) {
+        add_ebuild(
+            root,
+            &format!("dev-libs/{}-2", a.0),
+            a.1,
+            &[("BDEPEND", a.2)],
+        );
+        add_ebuild(
+            root,
+            &format!("dev-libs/{}-2", b.0),
+            b.1,
+            &[("BDEPEND", b.2)],
+        );
+    }
+
+    #[test]
+    fn a_cycle_met_by_installed_versions_is_not_reported() {
+        fn tree(root: &Path) {
+            two_way_build_cycle(
+                root,
+                ("w772xaone", "0", "dev-libs/w772xatwo"),
+                ("w772xatwo", "0", "dev-libs/w772xaone"),
+            );
+            add_installed(root, "dev-libs/w772xaone-1", "0", &[]);
+            add_installed(root, "dev-libs/w772xatwo-1", "0", &[]);
+        }
+        let world = ["dev-libs/w772xaone", "dev-libs/w772xatwo"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert_eq!(
+            out.lines().filter(|l| l.contains("w772xa")).count(),
+            2,
+            "{out}"
+        );
+        assert_eq!(cycle_lines(&err), Vec::<&str>::new(), "{err}");
+    }
+
+    #[test]
+    fn an_installed_slot_meets_a_slotless_build_atom() {
+        fn tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w772xcuser-2",
+                "0",
+                &[("BDEPEND", "dev-libs/w772xcslot")],
+            );
+            add_ebuild(root, "dev-libs/w772xcslot-1", "1", &[]);
+            add_ebuild(
+                root,
+                "dev-libs/w772xcslot-2",
+                "2",
+                &[("BDEPEND", "dev-libs/w772xcuser")],
+            );
+            add_installed(root, "dev-libs/w772xcuser-1", "0", &[]);
+            add_installed(root, "dev-libs/w772xcslot-1", "1", &[]);
+        }
+        let world = ["dev-libs/w772xcuser", "dev-libs/w772xcslot"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert!(
+            out.contains("w772xcslot-2"),
+            "the newest slot is the one planned: {out}"
+        );
+        assert_eq!(cycle_lines(&err), Vec::<&str>::new(), "{err}");
+    }
+
+    /// PMS `dependencies.tex:348-350`: only a `DEPEND` `:=` binds; one in `BDEPEND`
+    /// alone leaves the installed provider a plain match.
+    #[test]
+    fn a_build_only_slot_operator_is_not_a_binding() {
+        fn tree(root: &Path) {
+            two_way_build_cycle(
+                root,
+                ("w772xeuser", "0", "dev-libs/w772xeprov:="),
+                ("w772xeprov", "0/2", "dev-libs/w772xeuser"),
+            );
+            add_installed(root, "dev-libs/w772xeuser-1", "0", &[]);
+            add_installed(root, "dev-libs/w772xeprov-1", "0/1", &[]);
+        }
+        let world = ["dev-libs/w772xeuser", "dev-libs/w772xeprov"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert_eq!(cycle_lines(&err), Vec::<&str>::new(), "{err}");
+    }
+
+    /// A `DEPEND` `:=` on an installed provider the plan replaces with another
+    /// sub-slot later: the installed version "meets" the atom, but the binding
+    /// goes stale, so the order still breaks a build dependency (PMS
+    /// `dependencies.tex:348-350`).
+    #[test]
+    fn a_slot_operator_need_on_a_replaced_provider_is_reported() {
+        fn tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w772xduser-2",
+                "0",
+                &[
+                    ("DEPEND", "dev-libs/w772xdprov:="),
+                    ("RDEPEND", "dev-libs/w772xdprov:="),
+                ],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w772xdprov-2",
+                "0/2",
+                &[("BDEPEND", "dev-libs/w772xduser")],
+            );
+            add_installed(root, "dev-libs/w772xduser-1", "0", &[]);
+            add_installed(root, "dev-libs/w772xdprov-1", "0/1", &[]);
+        }
+        let world = ["dev-libs/w772xduser", "dev-libs/w772xdprov"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert_eq!(
+            cycle_lines(&err),
+            [
+                "plan-world: build cycle: dev-libs/w772xduser:0 -> dev-libs/w772xdprov:0 -> dev-libs/w772xduser:0; \
+                 this order builds dev-libs/w772xduser:0 before its build dependency \"dev-libs/w772xdprov:=\", merged later; \
+                 the installed dev-libs/w772xdprov-1 meets it, but this plan replaces it with sub-slot 2, so \
+                 dev-libs/w772xduser:0's binding would go stale \
+                 (disable a USE flag on one of these packages to break the cycle)"
+            ],
+            "{err}"
+        );
+    }
+
+    /// Positional need: an atom nothing matches, or one whose earlier row lacks
+    /// a required `[flag]`, is not "merged later"; the checker and the "not
+    /// checked" line own those.
+    #[test]
+    fn an_unmatched_or_use_mismatched_atom_prints_no_merged_later_line() {
+        fn tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w772xuser-1",
+                "0",
+                &[("BDEPEND", "dev-libs/w772xnone")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w772xflaguser-1",
+                "0",
+                &[("BDEPEND", "dev-libs/w772xdep[w772flag]")],
+            );
+            add_ebuild(
+                root,
+                "dev-libs/w772xdep-1",
+                "0",
+                &[("IUSE", "w772flag"), ("BDEPEND", "dev-libs/w772xflaguser")],
+            );
+        }
+        let world = ["dev-libs/w772xuser", "dev-libs/w772xflaguser"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert!(!err.contains("merged later"), "{err}");
+    }
+
+    /// Characterised, not assumed: `<w772xfoo-2` and the bare world atom both
+    /// aim at slot `foo:0`, and the slot's chosen version has to satisfy every
+    /// requester, so the plan keeps the installed `foo-1` and no earlier row
+    /// replaces it. The installed version is present and meets the atom: no
+    /// line, and `foo-2` is not planned.
+    #[test]
+    fn an_installed_version_replaced_by_an_earlier_row_is_not_present() {
+        fn tree(root: &Path) {
+            add_ebuild(
+                root,
+                "dev-libs/w772xa-2",
+                "0",
+                &[("BDEPEND", "<dev-libs/w772xfoo-2")],
+            );
+            add_ebuild(root, "dev-libs/w772xfoo-1", "0", &[]);
+            add_ebuild(root, "dev-libs/w772xfoo-2", "0", &[]);
+            add_installed(root, "dev-libs/w772xa-1", "0", &[]);
+            add_installed(root, "dev-libs/w772xfoo-1", "0", &[]);
+        }
+        let world = ["dev-libs/w772xa", "dev-libs/w772xfoo"];
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world", "--sort", "depend"], &world, &[], "", tree);
+        assert_eq!(rc, 0, "{out}\n{err}");
+        assert!(!out.contains("w772xfoo"), "{out}");
+        assert_eq!(cycle_lines(&err), Vec::<&str>::new(), "{err}");
     }
 
     /// The P-proof for the 2a marker: an acyclic plan carries no `bootstrap`

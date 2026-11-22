@@ -1,0 +1,16 @@
+pytests-contract-suite/test_plan_world.py::test_772_a_late_need_without_a_cycle_is_reported PASSED [ 16%]
+pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772a-both-installed] PASSED [ 33%]
+pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772c-older-slot-installed] PASSED [ 50%]
+pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772e-bdepend-slot-operator] PASSED [ 66%]
+pytests-contract-suite/test_plan_world.py::test_772_an_unmet_build_cycle_names_its_real_path PASSED [ 83%]
+pytests-contract-suite/test_plan_world.py::test_772_a_moved_binding_is_still_a_need PASSED [100%]
+================= 6 passed, 41 deselected, 2 warnings in 0.50s =================
+# cargo test --release -p portage-world -p portuale (after the change)
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+test result: ok. 1417 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 32.03s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+# re-run after dropping a clone in walk()
+test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+test result: ok. 1417 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 32.56s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

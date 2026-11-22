@@ -8,3 +8,6 @@ The charter 2a bootstrap of the fast plan: choice and row placement.
 
 ## fn World::build_plan
 - Row placement: the boot row takes the earliest of the boot slot's own position and its dependents', the definitive row follows the last dependent. A dependent is a row that reaches the boot slot over `World::edges` minus the boot slot's flag-guarded edges (`portage_use_reduce::reaches`, shared with `boot_closure_reaches_member`). The old code dropped every flag-guarded edge of any slot, not only the boot's; with guards only for cycle edges that reading is gone.
+
+## fn World::bootstrap_cycle (#772)
+- The plan-world "broken by a bootstrap" line prints whenever the plan holds a boot row, on a path `node -> ... -> node` whose first edge `Bootstrap::drops` removes (`order::drop_path`). Its input is unchanged: the bootstrap is still chosen from `build_time_cycles` (owner decision Q7 of plan 02.771-772). `Bootstrap::breaks` and `BuildPlan::cycles` went away: the line no longer lists Tarjan members, and nothing else read them. `Bootstrap::drops` is public because `late.rs` skips the edges a boot row does not need.

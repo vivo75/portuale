@@ -1,0 +1,103 @@
+# red: Task 7 Step 2, before any #772 product code (build_path/drop_path are stubs returning None)
+# cargo test --release -p portuale plan_world::tests ; cargo test --release -p portage-world order::
+test plan_world::tests::a_build_only_slot_operator_is_not_a_binding ... FAILED
+test plan_world::tests::a_cycle_met_by_installed_versions_is_not_reported ... FAILED
+test plan_world::tests::an_installed_slot_meets_a_slotless_build_atom ... FAILED
+test plan_world::tests::a_genuine_build_cycle_bootstraps_with_a_marked_boot_row ... FAILED
+test plan_world::tests::a_slot_operator_need_on_a_replaced_provider_is_reported ... FAILED
+thread 'plan_world::tests::a_build_only_slot_operator_is_not_a_binding' (1750077) panicked at crates/portuale/src/plan_world.rs:927:9:
+assertion `left == right` failed: plan-world: build cycle with no serial order: dev-libs/w772xeprov:0 -> dev-libs/w772xeuser:0 -> dev-libs/w772xeprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)
+  left: ["plan-world: build cycle with no serial order: dev-libs/w772xeprov:0 -> dev-libs/w772xeuser:0 -> dev-libs/w772xeprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)"]
+ right: []
+thread 'plan_world::tests::a_cycle_met_by_installed_versions_is_not_reported' (1750080) panicked at crates/portuale/src/plan_world.rs:877:9:
+assertion `left == right` failed: plan-world: build cycle with no serial order: dev-libs/w772xaone:0 -> dev-libs/w772xatwo:0 -> dev-libs/w772xaone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)
+  left: ["plan-world: build cycle with no serial order: dev-libs/w772xaone:0 -> dev-libs/w772xatwo:0 -> dev-libs/w772xaone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)"]
+ right: []
+thread 'plan_world::tests::an_installed_slot_meets_a_slotless_build_atom' (1750103) panicked at crates/portuale/src/plan_world.rs:907:9:
+assertion `left == right` failed: plan-world: build cycle with no serial order: dev-libs/w772xcslot:2 -> dev-libs/w772xcuser:0 -> dev-libs/w772xcslot:2 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)
+  left: ["plan-world: build cycle with no serial order: dev-libs/w772xcslot:2 -> dev-libs/w772xcuser:0 -> dev-libs/w772xcslot:2 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)"]
+ right: []
+thread 'plan_world::tests::a_genuine_build_cycle_bootstraps_with_a_marked_boot_row' (1750083) panicked at crates/portuale/src/plan_world.rs:762:9:
+thread 'plan_world::tests::a_slot_operator_need_on_a_replaced_provider_is_reported' (1750095) panicked at crates/portuale/src/plan_world.rs:959:9:
+assertion `left == right` failed: plan-world: build cycle with no serial order: dev-libs/w772xdprov:0 -> dev-libs/w772xduser:0 -> dev-libs/w772xdprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)
+  left: ["plan-world: build cycle with no serial order: dev-libs/w772xdprov:0 -> dev-libs/w772xduser:0 -> dev-libs/w772xdprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)"]
+ right: ["plan-world: build cycle: dev-libs/w772xduser:0 -> dev-libs/w772xdprov:0 -> dev-libs/w772xduser:0; this order builds dev-libs/w772xduser:0 before its build dependency \"dev-libs/w772xdprov:=\", merged later; the installed dev-libs/w772xdprov-1 meets it, but this plan replaces it with sub-slot 2, so dev-libs/w772xduser:0's binding would go stale (disable a USE flag on one of these packages to break the cycle)"]
+test result: FAILED. 27 passed; 5 failed; 0 ignored; 0 measured; 1388 filtered out; finished in 1.19s
+test order::tests::build_path_follows_build_edges_only ... FAILED
+test order::tests::a_bootstrap_path_starts_with_a_dropped_edge ... FAILED
+test order::tests::build_path_is_the_shortest_in_name_order ... FAILED
+thread 'order::tests::build_path_follows_build_edges_only' (1751965) panicked at crates/portage-world/src/order.rs:710:9:
+assertion `left == right` failed
+  left: None
+ right: Some(["a", "c", "b"])
+thread 'order::tests::a_bootstrap_path_starts_with_a_dropped_edge' (1751957) panicked at crates/portage-world/src/order.rs:754:9:
+assertion `left == right` failed
+  left: None
+ right: Some(["a", "b", "c", "a"])
+thread 'order::tests::build_path_is_the_shortest_in_name_order' (1751966) panicked at crates/portage-world/src/order.rs:734:9:
+assertion `left == right` failed
+  left: None
+ right: Some(["a", "d", "e"])
+test result: FAILED. 24 passed; 3 failed; 0 ignored; 0 measured; 53 filtered out; finished in 0.03s
+
+# cd ../pmtest && python3 -m pytest pytests-contract-suite/test_plan_world.py -k 772 -q
+E       AssertionError: plan-world: 7 to install (7 builds including 0 bootstrap), order depend
+E         not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan
+E         
+E       assert 'plan-world: this order builds dev-libs/w764du:0 before its build dependency "dev-libs/w764db", merged later; no build cycle joins them, so the order itself is wrong\n' in "plan-world: 7 to install (7 builds including 0 bootstrap), order depend\nnot checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan\n"
+E       AssertionError: ['plan-world: build cycle with no serial order: dev-libs/w772aone:0 -> dev-libs/w772atwo:0 -> dev-libs/w772aone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)']
+E       assert ['plan-world:...k the cycle)'] == []
+E         
+E         Left contains one more item: 'plan-world: build cycle with no serial order: dev-libs/w772aone:0 -> dev-libs/w772atwo:0 -> dev-libs/w772aone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E         - []
+E         + [
+E         +     'plan-world: build cycle with no serial order: dev-libs/w772aone:0 -> '...
+E         
+E         ...Full output truncated, use '-vv' to show
+E       AssertionError: ['plan-world: build cycle with no serial order: dev-libs/w772cslot:2 -> dev-libs/w772cuser:0 -> dev-libs/w772cslot:2 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)']
+E       assert ['plan-world:...k the cycle)'] == []
+E         
+E         Left contains one more item: 'plan-world: build cycle with no serial order: dev-libs/w772cslot:2 -> dev-libs/w772cuser:0 -> dev-libs/w772cslot:2 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E         - []
+E         + [
+E         +     'plan-world: build cycle with no serial order: dev-libs/w772cslot:2 -> '...
+E         
+E         ...Full output truncated, use '-vv' to show
+E       AssertionError: ['plan-world: build cycle with no serial order: dev-libs/w772eprov:0 -> dev-libs/w772euser:0 -> dev-libs/w772eprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)']
+E       assert ['plan-world:...k the cycle)'] == []
+E         
+E         Left contains one more item: 'plan-world: build cycle with no serial order: dev-libs/w772eprov:0 -> dev-libs/w772euser:0 -> dev-libs/w772eprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E         - []
+E         + [
+E         +     'plan-world: build cycle with no serial order: dev-libs/w772eprov:0 -> '...
+E         
+E         ...Full output truncated, use '-vv' to show
+E       AssertionError: ['plan-world: build cycle with no serial order: dev-libs/w772bone:0 -> dev-libs/w772btwo:0 -> dev-libs/w772bone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)']
+E       assert ['plan-world:...k the cycle)'] == ['plan-world:...k the cycle)']
+E         
+E         At index 0 diff: 'plan-world: build cycle with no serial order: dev-libs/w772bone:0 -> dev-libs/w772btwo:0 -> dev-libs/w772bone:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)' != 'plan-world: build cycle: dev-libs/w772btwo:0 -> dev-libs/w772bone:0 -> dev-libs/w772btwo:0; this order builds dev-libs/w772btwo:0 before its build dependency "dev-libs/w772bone", merged later (disable a USE flag on one of these packages to break the cycle)'
+E         
+E         Full diff: (-: missing in left side, +: extra in left side)
+E           [
+E         +     'plan-world: build cycle wit...
+E         
+E         ...Full output truncated, use '-vv' to show
+E       AssertionError: ['plan-world: build cycle with no serial order: dev-libs/w772dprov:0 -> dev-libs/w772duser:0 -> dev-libs/w772dprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)']
+E       assert ['plan-world:...k the cycle)'] == ['plan-world:...k the cycle)']
+E         
+E         At index 0 diff: 'plan-world: build cycle with no serial order: dev-libs/w772dprov:0 -> dev-libs/w772duser:0 -> dev-libs/w772dprov:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle)' != 'plan-world: build cycle: dev-libs/w772duser:0 -> dev-libs/w772dprov:0 -> dev-libs/w772duser:0; this order builds dev-libs/w772duser:0 before its build dependency "dev-libs/w772dprov:=", merged later; the installed dev-libs/w772dprov-1 meets it, but this plan replaces it with sub-slot 2, so dev-libs/w772duser:0\'s binding would go stale (disable a U...
+E         
+E         ...Full output truncated, use '-vv' to show
+FAILED pytests-contract-suite/test_plan_world.py::test_772_a_late_need_without_a_cycle_is_reported
+FAILED pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772a-both-installed]
+FAILED pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772c-older-slot-installed]
+FAILED pytests-contract-suite/test_plan_world.py::test_772_a_cycle_the_installed_versions_satisfy_is_not_reported[w772e-bdepend-slot-operator]
+FAILED pytests-contract-suite/test_plan_world.py::test_772_an_unmet_build_cycle_names_its_real_path
+FAILED pytests-contract-suite/test_plan_world.py::test_772_a_moved_binding_is_still_a_need
+================= 6 failed, 41 deselected, 2 warnings in 0.43s =================

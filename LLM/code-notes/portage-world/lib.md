@@ -132,3 +132,6 @@ the slot sets the reorder pass ranks.
   recorded sub-slot already differs from the installed provider's (an
   earlier move the plan leaves alone, backlog #741); a `:*` consumer,
   and one whose other recorded pins forbid the plan, are not.
+
+## field World.node_atoms, World.atom_nodes (#772)
+- Kept past `walk()` (it used to drop them after building `edges`): per node the build and runtime atoms with their `*DEPEND` bits, and per atom the slots the walk aimed it at. `late_build_needs` needs the atom, not only the edge, to ask whether an installed version meets it (version, slot, sub-slot, `[flag]` against the VDB `USE`). A slotless atom aims at one slot in a plan (`narrow_slotless`, the best) and at the installed visible slots in a check, which is why the `World::reached` doc says a `SlotSet` alone does not tell.

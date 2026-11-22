@@ -1,0 +1,2 @@
+plan-world: 350 to install (350 builds including 0 bootstrap), order depend
+not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; run 'mrg -puDN @world' for the full plan

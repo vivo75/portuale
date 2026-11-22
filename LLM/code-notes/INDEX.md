@@ -298,6 +298,7 @@
 
 ## portage-world
 - [crates/portage-world/src/bootstrap.rs](portage-world/bootstrap.md) — The charter 2a bootstrap of the fast plan: choice and row placement.
+- [crates/portage-world/src/late.rs](portage-world/late.md) — The check of a fast plan's own order: which build atoms are not met when their row is built.
 - [crates/portage-world/src/lib.rs](portage-world/lib.md) — First-pass walk of `@world`: per-slot best ebuilds, dependency atoms, and
 - [crates/portage-world/src/order.rs](portage-world/order.md) — `--sort depend` order of the plan rows: each slot after the slots it needs.
 - [crates/portage-world/src/rebuild.rs](portage-world/rebuild.md) — Installed packages a plan keeps but must build again: slot-operator and USE

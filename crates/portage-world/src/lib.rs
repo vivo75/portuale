@@ -39,6 +39,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 mod bootstrap;
+mod late;
 mod memo;
 mod order;
 mod rebuild;
@@ -87,6 +88,7 @@ pub(crate) mod testkit {
 }
 
 pub use bootstrap::{Bootstrap, BuildPlan, PlanRow};
+pub use late::{LateNeed, late_build_needs};
 pub use order::{Order, build_time_cycles};
 pub use rebuild::RefusedBinding;
 pub use reorder::{Change, SlotSet};
@@ -513,8 +515,9 @@ pub struct World {
     /// edge, as bits of [`DEP_KEYS`].
     pub edge_kinds: BTreeMap<(String, String), u8>,
     /// The slots the first pass followed (`cat/pkg:slot`): the ones `@world`
-    /// actually needs. An atom without a slot aims at every slot of its
-    /// package, so a [`SlotSet`] alone does not tell.
+    /// actually needs. An atom without a slot aims at one slot in a plan (the
+    /// best) and at the installed visible slots in a check, so a [`SlotSet`]
+    /// alone does not tell.
     pub reached: BTreeSet<String>,
     /// The slots reached from the world atoms alone, before any rebuild was
     /// seeded into the walk. A consumer outside it is judged on its runtime
@@ -537,6 +540,11 @@ pub struct World {
     /// could not be read: they are no candidates, so their dependencies
     /// are missing from the walk. Sorted.
     pub unreadable: Vec<String>,
+    /// `cat/pkg:slot` -> its dependency atoms, each with the `*DEPEND`
+    /// variables naming it (bits of [`DEP_KEYS`]).
+    pub node_atoms: BTreeMap<String, BTreeMap<String, u8>>,
+    /// Dependency atom -> the slots the walk aimed it at.
+    pub atom_nodes: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl World {
@@ -735,11 +743,11 @@ fn walk(
     // slot -> the slots it depends on (itself left out).
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
-    for (node, atoms) in node_atoms {
+    for (node, atoms) in &node_atoms {
         let to = edges.entry(node.clone()).or_default();
-        for (atom, mask) in &atoms {
+        for (atom, mask) in atoms {
             for dep in atom_nodes.get(atom).into_iter().flatten() {
-                if *dep != node {
+                if dep != node {
                     to.insert(dep.clone());
                     *edge_kinds.entry((node.clone(), dep.clone())).or_default() |= mask;
                 }
@@ -759,6 +767,8 @@ fn walk(
         planned_use,
         bootstrap: None,
         unreadable,
+        node_atoms,
+        atom_nodes,
     })
 }
 

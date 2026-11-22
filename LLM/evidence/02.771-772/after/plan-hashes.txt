@@ -1,0 +1,5 @@
+sha256 of the --plan-world --json --sort depend stdout, first 16 hex; binary /var/tmp/771/bin-s2 (sha256 b0b335381ed755ee3a0bad271aa0a7100a58fdeba4f7ab99a306cab6e00d53f5)
+host update      aac2bcf01cf5755c  (before aac2bcf01cf5755c)
+host emptytree   55c313ca08697959  (before 55c313ca08697959)
+bed              96bc81c1e57d5e49  (before 96bc81c1e57d5e49)
+stderr: the lines of before/*.stderr minus the 'build cycle' lines (host 1 line, emptytree 3, bed 1); no 'build cycle' and no 'before its build dependency' line remains on any of the three plans.

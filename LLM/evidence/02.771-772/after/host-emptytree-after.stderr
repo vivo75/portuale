@@ -1,0 +1,2 @@
+plan-world: 2181 to install (2181 builds including 0 bootstrap), order depend
+not checked: blockers, REQUIRED_USE, slot conflicts; run 'mrg -pe @world' for the full plan

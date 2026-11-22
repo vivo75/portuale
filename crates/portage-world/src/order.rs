@@ -3,7 +3,7 @@
 //! runtime-only edge when it has one; a cycle with only build-time edges is
 //! genuine and is ordered implicitly, then reported for the checker to fail
 //! (charter 2a). One that no runtime edge may be cut in only because of the
-//! build-used rule is ordered by the walk and not reported (#771).
+//! build-used rule is ordered by the walk.
 //! No [`Order`] lists a slot twice; the plan adds a charter 2a boot row on top.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -18,7 +18,7 @@ pub enum Order<'a> {
     /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`); `PDEPEND` alone orders nothing
     /// (PMS). A cycle of build-time edges is genuine: [`build_time_cycles`] reports
     /// it and it is never built twice (charter 2a); one uncuttable only because of
-    /// the build-used rule is ordered by the walk, unreported (#771).
+    /// the build-used rule is ordered by the walk.
     Depend,
     /// By the position in an order the caller got elsewhere (the resolver's
     /// merge list), keyed `cat/pkg:slot`; a slot not in it comes last, in
@@ -94,8 +94,7 @@ impl World {
 /// Every node of `edges` (and every node it points at), each after the
 /// nodes it points at. Walks in name order, so the result is the same on
 /// every run. A cycle is cut at the first cuttable runtime-only edge; one with
-/// none is left to the walk, and [`build_time_cycles`] reports it only when all
-/// its edges are build-time (#771). `kinds` carries the `*DEPEND` bits
+/// none is left to the walk. `kinds` carries the `*DEPEND` bits
 /// ([`crate::DEP_KEYS`]); an edge without one counts as build-time.
 pub(crate) fn depend_order(
     edges: &BTreeMap<String, BTreeSet<String>>,
@@ -161,10 +160,10 @@ fn is_runtime_edge(kinds: &BTreeMap<(String, String), u8>, edge: &(String, Strin
 }
 
 /// The nodes the plan builds with: the direct targets of a `DEPEND`, `BDEPEND` or
-/// `IDEPEND` edge, except `virtual/*` (perl cluster, #751). Direct targets only: a
+/// `IDEPEND` edge, except `virtual/*`. Direct targets only: a
 /// tool's own `RDEPEND` edges still order, but deeper ones may be cut, so a tool's
 /// depth-2 runtime dependency can merge after its consumer. Documented limitation
-/// (owner ruling 2026-11-15, #764; charter 2a is literal).
+/// (charter 2a is literal).
 pub(crate) fn build_time_used(kinds: &BTreeMap<(String, String), u8>) -> BTreeSet<String> {
     kinds
         .iter()
@@ -229,8 +228,7 @@ fn runtime_cut(
 /// ancestor the back edge points at) to the current node, closed by the back
 /// edge last. The first cuttable runtime-only edge in that order; the back
 /// edge itself when only it is cuttable; `None` when nothing is: the walk below
-/// orders the cycle implicitly, and [`build_time_cycles`] reports it only when
-/// all its edges are build-time (#771).
+/// orders the cycle implicitly.
 fn cycle_cut(
     stack: &[(&String, Vec<&String>, usize)],
     kid: &String,
@@ -250,8 +248,8 @@ fn cycle_cut(
 
 /// The build-time cycles of `edges`: strongly connected components over
 /// build-kind edges only (an edge without kind information counts as
-/// build-time), members in walk order. Non-empty is genuine: the plan-world
-/// report reads this and the checker fails it (charter 2a).
+/// build-time), members in walk order. Non-empty is genuine: the bootstrap
+/// choice reads this and the checker fails it (charter 2a).
 pub fn build_time_cycles(
     edges: &BTreeMap<String, BTreeSet<String>>,
     kinds: &BTreeMap<(String, String), u8>,
@@ -336,6 +334,61 @@ pub fn build_time_cycles(
     }
     cycles.sort();
     cycles
+}
+
+/// The shortest path `from -> ... -> to` over build-kind edges (an edge
+/// without kind information counts as build-time), neighbours in name order.
+pub(crate) fn build_path(
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    kinds: &BTreeMap<(String, String), u8>,
+    from: &str,
+    to: &str,
+) -> Option<Vec<String>> {
+    let mask = build_mask();
+    let mut parent: HashMap<&str, &str> = HashMap::new();
+    let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::from([from]);
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            let mut path = vec![node.to_string()];
+            let mut at = node;
+            while let Some(&before) = parent.get(at) {
+                path.push(before.to_string());
+                at = before;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for next in edges.get(node).into_iter().flatten() {
+            let build = kinds
+                .get(&(node.to_string(), next.clone()))
+                .is_none_or(|m| m & mask != 0);
+            if build && next != from && !parent.contains_key(next.as_str()) {
+                parent.insert(next, node);
+                queue.push_back(next);
+            }
+        }
+    }
+    None
+}
+
+/// The shortest build cycle through `node` whose first edge `drops` removes:
+/// `node -> to -> ... -> node` for the first such `to` (name order) with a
+/// build path back.
+pub(crate) fn drop_path(
+    edges: &BTreeMap<String, BTreeSet<String>>,
+    kinds: &BTreeMap<(String, String), u8>,
+    node: &str,
+    drops: &dyn Fn(&str, &str) -> bool,
+) -> Option<Vec<String>> {
+    edges
+        .get(node)?
+        .iter()
+        .filter(|to| drops(node, to))
+        .find_map(|to| {
+            let mut path = vec![node.to_string()];
+            path.extend(build_path(edges, kinds, to, node)?);
+            Some(path)
+        })
 }
 
 #[cfg(test)]
@@ -604,11 +657,10 @@ mod tests {
         assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
     }
 
-    /// Backlog #764, shape V2: only the direct target `at` of `ab`'s `BDEPEND` is build-used, so the
+    /// Shape V2: only the direct target `at` of `ab`'s `BDEPEND` is build-used, so the
     /// runtime cycle `am -> au -> ax -> am` behind the tool is cut at `(am,au)` and `au`, the tool's
     /// depth-2 runtime dependency, merges after the consumer `ab` (PMS 8.1 would want it first;
-    /// charter 2a as ruled by the owner on 2026-11-15 does not). Order derived by hand from the cut
-    /// rule (plan 02.764 sec. 1).
+    /// charter 2a is literal and does not). Order derived by hand from the cut rule.
     #[test]
     fn w764_a_tool_runtime_dependency_on_a_cut_cycle_lands_after_its_consumer() {
         let (ab, at, am, au, ax) = (
@@ -635,8 +687,8 @@ mod tests {
         assert_eq!(depend_order(&g, &kinds), [am, at, ab, ax, au]);
     }
 
-    /// Backlog #764, shape V1: as V2, but `cu -B-> cb`, so `cu` after `cb` is the only legal order
-    /// and the one-level cut `(cm,cu)` gives it. Order derived by hand (plan 02.764 sec. 1).
+    /// Shape V1: as V2, but `cu -B-> cb`, so `cu` after `cb` is the only legal order
+    /// and the one-level cut `(cm,cu)` gives it. Order derived by hand.
     #[test]
     fn w764_an_unavoidable_late_tool_dependency_is_literal_legal() {
         let (cb, ct, cm, cu) = (
@@ -655,11 +707,10 @@ mod tests {
         assert_eq!(depend_order(&g, &kinds), [cm, ct, cb, cu]);
     }
 
-    /// Backlog #764, shape V3, OBSERVED DEFECT pinned exactly (residue #771; the owner decided on
-    /// 2026-11-16 not to fix it in #764): `dt` is build-used so its runtime edge is not cuttable and
-    /// the cycle has no cuttable edge, yet `build_time_cycles` sees build edges only, so it is
-    /// neither cut nor reported. The walk orders `du, dt, db`, which breaks the literal edge
-    /// `du -B-> db`; `dt, db, du` would not.
+    /// Shape V3, observed defect pinned exactly: `dt` is build-used so its runtime edge is not
+    /// cuttable and the cycle has no cuttable edge, yet `build_time_cycles` sees build edges only,
+    /// so it is neither cut nor listed there. The walk orders `du, dt, db`, which breaks the
+    /// literal edge `du -B-> db`; `dt, db, du` would not.
     #[test]
     fn w764_an_uncuttable_runtime_cycle_is_left_to_the_walk() {
         let (db, dt, du) = (
@@ -677,5 +728,63 @@ mod tests {
         assert_eq!(runtime_cut(&g, &kinds, &used), None);
         assert!(build_time_cycles(&g, &kinds).is_empty());
         assert_eq!(depend_order(&g, &kinds), [du, dt, db]);
+    }
+    #[test]
+    fn build_path_follows_build_edges_only() {
+        let g = graph(&[("a", &["b", "c"]), ("c", &["b"])]);
+        let k = kinds(&[
+            (("a", "b"), "RDEPEND"),
+            (("a", "c"), "BDEPEND"),
+            (("c", "b"), "BDEPEND"),
+        ]);
+        assert_eq!(
+            build_path(&g, &k, "a", "b"),
+            Some(vec!["a".into(), "c".into(), "b".into()])
+        );
+        assert_eq!(build_path(&g, &k, "b", "a"), None);
+        let runtime_only = kinds(&[
+            (("a", "b"), "RDEPEND"),
+            (("a", "c"), "RDEPEND"),
+            (("c", "b"), "RDEPEND"),
+        ]);
+        assert_eq!(build_path(&g, &runtime_only, "a", "b"), None);
+    }
+
+    #[test]
+    fn build_path_is_the_shortest_in_name_order() {
+        // `a, b, c, e` is longer than `a, d, e`.
+        let g = graph(&[
+            ("a", &["b", "d"]),
+            ("b", &["c"]),
+            ("c", &["e"]),
+            ("d", &["e"]),
+            ("e", &[]),
+        ]);
+        let k = kinds(&[]);
+        assert_eq!(
+            build_path(&g, &k, "a", "e"),
+            Some(vec!["a".into(), "d".into(), "e".into()])
+        );
+        // Two shortest paths: the one through the first neighbour in name order.
+        let g = graph(&[("a", &["b", "c"]), ("b", &["e"]), ("c", &["e"])]);
+        assert_eq!(
+            build_path(&g, &k, "a", "e"),
+            Some(vec!["a".into(), "b".into(), "e".into()])
+        );
+    }
+
+    /// A three-member build cycle `a -> b -> c -> a` with a chord `a -> c`:
+    /// when the bootstrap drops `a -> b`, the cycle it breaks is `a, b, c, a`,
+    /// not the shorter `a, c, a`, which the reduction leaves intact.
+    #[test]
+    fn a_bootstrap_path_starts_with_a_dropped_edge() {
+        let g = graph(&[("a", &["b", "c"]), ("b", &["c"]), ("c", &["a"])]);
+        let k = kinds(&[]);
+        let path = drop_path(&g, &k, "a", &|from, to| from == "a" && to == "b");
+        assert_eq!(
+            path,
+            Some(vec!["a".into(), "b".into(), "c".into(), "a".into()])
+        );
+        assert_eq!(drop_path(&g, &k, "a", &|_, _| false), None);
     }
 }

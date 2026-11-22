@@ -237,7 +237,8 @@
   build-kind edges only (`build_mask`; an edge without kind information
   counts as build-time, as before), members in walk order, deterministic.
   Empty means every build need is serializable; non-empty is genuine: the
-  plan-world report reads this, nothing else, and the checker fails it
+  bootstrap choice reads this (the plan-world report line no longer does:
+  it is a check of the produced order, `late.rs`), and the checker fails it
   (charter 2a: a cycle no order satisfies is reported, never papered over
   by building a package twice).
 
@@ -315,3 +316,31 @@
   `du -B-> db`. The fix (fall back to the first runtime-only edge, about three
   lines) would also move `the_virtual_provider_edge_is_the_only_cuttable_edge`.
   Proven by the `v3fix` mutation.
+
+## fn build_path
+- The shortest path `from -> ... -> to` over build-kind edges, breadth first,
+  neighbours in name order (an edge without kind information counts as build,
+  as in `build_time_cycles`). The plan-world cycle line names a cycle only
+  along such a path, never a Tarjan member list (a discovery order, not a
+  path: the 11- and 26-member lines of the host and bed plans were member
+  lists, and so was the 186-member emptytree one).
+
+## fn drop_path
+- The bootstrap announcement names the cycle the reduction really breaks: the
+  first edge is one `Bootstrap::drops` removes, then the shortest build path
+  back. A plain shortest cycle through the boot node could leave that edge out
+  (`a -> b -> c -> a` with a chord `a -> c`, `a -> b` dropped: `a, b, c, a`,
+  not `a, c, a`); pinned by `a_bootstrap_path_starts_with_a_dropped_edge`.
+
+## fn cycle_cut, build_time_used, depend_order (comment history)
+- The ten backlog numbers `466b1a2e` put in comments live here: shape V3 and
+  the fallback to the first runtime-only edge are #771 (owner decision
+  2026-11-16, Q1: it ships only if a measurement on the host and bed plans
+  moves no bed row and adds no literal failure; it did not, evidence
+  `LLM/evidence/02.771-772/before/v3fix-verdict.txt`, so `cycle_cut` is
+  unchanged and #771 stays open); the one-level build-time closure is #764
+  (owner ruling 2026-11-15: documented limitation, charter 2a is literal);
+  `virtual/*` is left out of `build_time_used` for the perl cluster (#751,
+  a heuristic, not PMS soundness). Since #772 a V3 order is not silent: the
+  plan-world check reports the late `du -> db` need ("no build cycle joins
+  them") because no build path joins the two.
