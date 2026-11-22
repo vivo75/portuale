@@ -223,9 +223,11 @@ pub(crate) struct SlotOperatorRebuilds {
 /// Legacy path for the `--solver=pubgrub` bridge only:
 /// the engine re-drives no pass, so it keeps the post-pass synthesiser --
 /// one `slot_operator_rebuild` reinstall entry per scheduled consumer,
-/// iterated until the set stops growing. The default solver seeds the
-/// consumer as a walked node instead; the bridge passes the installed
-/// packages its solve walked.
+/// iterated until the set stops growing. These rows are not walked nodes (the
+/// default solver seeds the consumer as one instead); the bridge passes the
+/// installed packages its solve walked, and the scan runs with
+/// `tree_pin_refuses` set: a consumer whose own tree ebuild rejects the
+/// provider the run leaves behind is not rebuilt (#773).
 pub(crate) fn slot_operator_rebuild_entries(
     args: SlotOperatorRebuildEntriesArgs<'_>,
 ) -> SlotOperatorRebuilds {

@@ -419,12 +419,12 @@ pub(crate) struct ReplacementAcceptsArgs<'a> {
 }
 
 /// Whether the tree ebuild that would replace an installed consumer accepts
-/// the candidate child: every unblocked atom it carries on the provider must
-/// match, where each `||` group contributes only its chosen arm's atoms
-/// (in-graph first, then installed -- an unselected arm binds nothing and a
-/// selected arm that rejects the candidate vetoes it, backlog #618).
-/// A consumer without a visible tree ebuild at its installed version
-/// or without such atoms accepts.
+/// the candidate child: every unblocked atom it carries on the provider, other
+/// than one the installed instance already matches, must match the candidate.
+/// Each `||` group contributes only its chosen arm's atoms (in-graph first,
+/// then installed; an unselected arm binds nothing, a selected arm that
+/// rejects the candidate vetoes it, backlog #618). A consumer without a
+/// visible tree ebuild at its installed version or without such atoms accepts.
 // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
 pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
     let ReplacementAcceptsArgs {
