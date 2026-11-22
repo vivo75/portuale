@@ -1,0 +1,26 @@
+# Runbook 3 Task 6 [HAIKU verify]: differences against before/ (2026-11-22)
+# Product HEAD: 5256f9ed (portuale), pmtest HEAD 4109336 (branch backlog/773-pubgrub-tree-pin)
+
+## Contract suite, pytest, compared by test name and status (xml2set.py | sort)
+Source: /var/tmp/773-after.xml (pytest-parallel.sh --junitxml, 5047 passed, 2 skipped, 2 xfailed)
+Baseline: LLM/evidence/02.773/before/suite-result-set.txt (5051 lines)
+Result: NO differences. `comm -3` of the two sorted sets is empty: no new failure, no
+newly fixed test, no added or removed pytest id.
+The #773 pin keeps its id and passes:
+  pytests-contract-suite.test_plan_world::test_773_a_consumer_whose_tree_pins_the_old_provider[default] pass
+  pytests-contract-suite.test_plan_world::test_773_a_consumer_whose_tree_pins_the_old_provider[pubgrub] pass
+
+## Contract suite, serial run inside gate.sh (/var/tmp/773-gate/contract.txt)
+5047 passed, 2 skipped, 2 xfailed, 3 warnings. No FAILED or ERROR line.
+The only CorpusDrift text is the self-test warning from
+test_drift_is_detected_for_a_slash_param_id_from_the_suite_dir
+(CorpusDrift: pytests-contract-suite/t.py::test_x[y/n]#0: stdout changed). It is expected, not a real drift.
+
+## Cargo, cargo test --release (gate.sh), compared by started test name
+Baseline: LLM/evidence/02.773/before/cargo.txt, 3570 passed, 0 failed, 5 ignored, 34 suites.
+After:    /var/tmp/773-gate/test.txt, 3572 passed, 0 failed, 5 ignored, 34 suites.
+Difference (names present only after):
+  solver_bridge::tests::pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects
+  solver_bridge::tests::pg773_bridge_still_rebuilds_when_the_tree_accepts
+No name removed. The count rose by exactly these two.
+(Names were taken from "test NAME ... " markers, because test stdout interleaves with result lines.)
