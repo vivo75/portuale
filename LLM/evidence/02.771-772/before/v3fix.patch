@@ -1,0 +1,16 @@
+diff --git a/crates/portage-world/src/order.rs b/crates/portage-world/src/order.rs
+index 7f969097..8336ec4e 100644
+--- a/crates/portage-world/src/order.rs
++++ b/crates/portage-world/src/order.rs
+@@ -244,8 +244,10 @@ fn cycle_cut(
+         .collect();
+     cycle.push((stack.last()?.0.clone(), kid.clone()));
+     cycle
+-        .into_iter()
++        .iter()
+         .find(|edge| is_cuttable_runtime_edge(kinds, build_used, edge))
++        .or_else(|| cycle.iter().find(|edge| is_runtime_edge(kinds, edge)))
++        .cloned()
+ }
+ 
+ /// The build-time cycles of `edges`: strongly connected components over

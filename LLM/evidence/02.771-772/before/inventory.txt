@@ -1,0 +1,78 @@
+crates/portage-world/src/order.rs:19:    /// (PMS). A cycle of build-time edges is genuine: [`build_time_cycles`] reports
+crates/portage-world/src/order.rs:62:                let order = depend_order(&edges, &self.edge_kinds);
+crates/portage-world/src/order.rs:97:/// none is left to the walk, and [`build_time_cycles`] reports it only when all
+crates/portage-world/src/order.rs:100:pub(crate) fn depend_order(
+crates/portage-world/src/order.rs:108:    while let Some((from, to)) = runtime_cut(&working, kinds, &build_used) {
+crates/portage-world/src/order.rs:190:fn runtime_cut(
+crates/portage-world/src/order.rs:212:                    if let Some(cut) = cycle_cut(&stack, kid, kinds, build_used) {
+crates/portage-world/src/order.rs:232:/// orders the cycle implicitly, and [`build_time_cycles`] reports it only when
+crates/portage-world/src/order.rs:234:fn cycle_cut(
+crates/portage-world/src/order.rs:255:pub fn build_time_cycles(
+crates/portage-world/src/order.rs:416:        let o = depend_order(&g, &no_kinds());
+crates/portage-world/src/order.rs:423:    /// the walk orders it (`y` before `x`) and `build_time_cycles` reports the pair.
+crates/portage-world/src/order.rs:432:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:435:            build_time_cycles(&g, &kinds),
+crates/portage-world/src/order.rs:444:            depend_order(&g, &no_kinds()),
+crates/portage-world/src/order.rs:470:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:500:            runtime_cut(&g, &kinds, &build_time_used(&kinds)),
+crates/portage-world/src/order.rs:503:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:551:            runtime_cut(&g, &kinds, &used),
+crates/portage-world/src/order.rs:554:        assert!(build_time_cycles(&g, &kinds).is_empty());
+crates/portage-world/src/order.rs:560:            runtime_cut(&rest, &kinds, &used),
+crates/portage-world/src/order.rs:585:        let o = depend_order(&g, &kinds);
+crates/portage-world/src/order.rs:591:    /// Charter property 2: `depend_order` on the mixed `R/B/R` `w745` graph yields
+crates/portage-world/src/order.rs:594:    fn the_mixed_cycle_cut_is_the_order_the_closure_walks() {
+crates/portage-world/src/order.rs:604:        assert_eq!(depend_order(&g, &kinds), [prov, virt, user]);
+crates/portage-world/src/order.rs:635:        assert_eq!(depend_order(&g, &kinds), [am, at, ab, ax, au]);
+crates/portage-world/src/order.rs:655:        assert_eq!(depend_order(&g, &kinds), [cm, ct, cb, cu]);
+crates/portage-world/src/order.rs:660:    /// the cycle has no cuttable edge, yet `build_time_cycles` sees build edges only, so it is
+crates/portage-world/src/order.rs:677:        assert_eq!(runtime_cut(&g, &kinds, &used), None);
+crates/portage-world/src/order.rs:678:        assert!(build_time_cycles(&g, &kinds).is_empty());
+crates/portage-world/src/order.rs:679:        assert_eq!(depend_order(&g, &kinds), [du, dt, db]);
+crates/portage-world/src/bootstrap.rs:12:use crate::{Order, SlotSet, World, build_time_cycles};
+crates/portage-world/src/bootstrap.rs:77:        let cycles = build_time_cycles(&self.edges, &self.edge_kinds);
+crates/portage-world/src/bootstrap.rs:201:    let cycles = build_time_cycles(&world.edges, &world.edge_kinds);
+crates/experiment-tree-diagram/src/levels.rs:317:    fn pdepend_orders_nothing() {
+crates/portage-world/src/lib.rs:90:pub use order::{Order, build_time_cycles};
+crates/portuale/src/plan_world.rs:74:            "plan-world: build cycle with no serial order: {} (no order satisfies it; disable a USE flag on one of these packages to break the cycle",
+crates/portuale/src/plan_world.rs:763:            err.contains("plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE=\"-useboh\" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)"),
+crates/portuale/src/plan_world.rs:1089:        assert!(!err.contains("build cycle"), "{err}");
+../pmtest/pytests-contract-suite/test_health_checker.py:224:    """Backlog #749: mutual `DEPEND` is a genuine build cycle — no order
+../pmtest/pytests-contract-suite/test_health_checker.py:232:    assert "build cycle" in finding.reason and "disable a USE flag" in finding.reason
+../pmtest/pytests-contract-suite/test_health_checker.py:483:# --- property 2a: a reported build cycle, never a second build ---------------
+../pmtest/pytests-contract-suite/test_health_checker.py:517:    `pkgnew[use3]` — a genuine build cycle, so a `build-order` failure
+../pmtest/pytests-contract-suite/test_health_checker.py:531:    assert "build cycle" in finding.reason and "disable a USE flag" in finding.reason
+../pmtest/pytests-contract-suite/test_plan_world.py:479:    runtime edge is not cuttable, `build_time_cycles` sees build edges only, so the cycle is neither
+../pmtest/pytests-contract-suite/test_plan_world.py:480:    cut by the rule nor reported (no `build cycle` line); the name-ordered walk puts `du` before
+../pmtest/pytests-contract-suite/test_plan_world.py:486:    assert "build cycle" not in err, err
+../pmtest/pytests-contract-suite/health_checker.py:21:   genuine build cycle.
+../pmtest/pytests-contract-suite/health_checker.py:711:    part of a genuine build cycle: no order satisfies it (breakable only
+../pmtest/pytests-contract-suite/health_checker.py:722:                           f"{what}: no order satisfies this build cycle "
+LLM/skills/portuale-health-checks/SKILL.md:58:  build cycles; a genuine build cycle is now a `build-order` failure), a blind spot of the checker, a dependency a removal leaves unmatched
+../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py:691:        "#753: the single-flag USE-gated build cycle bootstraps instead of suggesting (was: circular dep USE-flag suggestion (_find_suggestions); charter 2a, rc 0)",
+LLM/code-notes/portuale/plan_world.md:27:  build-time cycle is `build_time_cycles` non-empty → one stderr report
+LLM/code-notes/portage-world/order.md:4:## fn depend_order (#743)
+LLM/code-notes/portage-world/order.md:7:  no order); `depend_order` serializes the rest depth-first in name order
+LLM/code-notes/portage-world/order.md:12:  no cut is chosen, the walk orders it implicitly, and `build_time_cycles`
+LLM/code-notes/portage-world/order.md:16:  `w764d*`: `build_time_cycles` sees build edges only). Cutting a runtime edge keeps every
+LLM/code-notes/portage-world/order.md:47:  opens further cycles, so `depend_order` clones the edge set and rescans
+LLM/code-notes/portage-world/order.md:55:## fn runtime_cut (#745, #746)
+LLM/code-notes/portage-world/order.md:60:  "used at build time" set is computed once per `depend_order` call, as the
+LLM/code-notes/portage-world/order.md:90:  the walk orders it implicitly, and `build_time_cycles` reports it for
+LLM/code-notes/portage-world/order.md:124:## fn depend_order (#745, #746)
+LLM/code-notes/portage-world/order.md:138:  no order); `depend_order` serializes the rest depth-first in name order
+LLM/code-notes/portage-world/order.md:173:  opens further cycles, so `depend_order` clones the edge set and rescans
+LLM/code-notes/portage-world/order.md:186:## fn runtime_cut (#760)
+LLM/code-notes/portage-world/order.md:189:## fn the_mixed_cycle_cut_is_the_order_the_closure_walks
+LLM/code-notes/portage-world/order.md:191:- Charter property 2 (backlog #745): the middle link — `depend_order`
+LLM/code-notes/portage-world/order.md:231:  `build_time_cycles` reports the pair, which the checker fails.
+LLM/code-notes/portage-world/order.md:234:## fn build_time_cycles
+LLM/code-notes/portage-world/order.md:275:## fn depend_order
+LLM/code-notes/portage-world/order.md:281:  [`build_time_cycles`] reports it for the checker to fail. `kinds`
+LLM/code-notes/portage-world/order.md:292:  [`build_time_cycles`] reports it, for the checker to fail (charter
+LLM/code-notes/portage-world/order.md:298:- Pins shape V2 by `depend_order` on a literal graph: `am, at, ab, ax, au`. The
+LLM/code-notes/portage-world/order.md:313:  2026-11-16: not fixed in #764): `runtime_cut` is `None`, `build_time_cycles`
+docs/world-check-and-plan.md:123:plan-world: build cycle with no serial order: dev-libs/w749otherpkg:0 -> dev-libs/w749pkgnew:0 -> dev-libs/w749otherpkg:0 (no order satisfies it; disable a USE flag on one of these packages to break the cycle; bootstrap with USE="-useboh" dev-libs/w749otherpkg:0 temporary — will be rebuilt with the declared USE)
+--- sort depend
+17
+--- w772

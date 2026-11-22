@@ -1,0 +1,1 @@
+{"findings": [{"atom": "", "failure": false, "package": "sys-fs/zfs-2.4.4", "pre_existing": false, "property": "checker-limitation", "reason": "property 3: the repositories' metadata cache does not have it"}], "plan": "LLM/evidence/02.771-772/before/host-v3fix.json", "refused": "", "seconds": 11.743}

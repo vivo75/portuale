@@ -1,0 +1,7 @@
+V3 reproduces on the before binary: yes
+bed rows moved: 78            (must be 0)
+host rows moved: 84           (listed in rows-diff-host.txt; not a stop)
+literal build-order failures, before -> v3fix: host 0 -> 0, bed 0 -> 0, w764db 1 -> 0
+new literal failure anywhere: no   (must be no)
+strict findings, before -> v3fix: host 49 -> 175 (all build-order), bed 0 -> 1 (build-order)
+#771 may ship: no

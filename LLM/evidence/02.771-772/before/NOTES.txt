@@ -1,0 +1,3 @@
+portuale 2ad017ec1f29d868540071e91e5997dc5f2d256a backlog/771-772-build-cycle-cut
+pmtest   41093362fdd01ce3e0c76ad4053fd6c7fb96a22a backlog/771-772-build-cycle-cut
+449f1e0df5b98cc1755ca9b2b567a5a1d1e97dd012139fcc4d8d143658fb272e  /var/tmp/771/bin-before/portuale
