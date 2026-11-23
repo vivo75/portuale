@@ -237,21 +237,40 @@ pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize
         let Some(entry) = entry else {
             continue;
         };
+        let cmds_for = |repository: &str| -> &[UpdateCmd] {
+            map.iter()
+                .find_map(|(name, cmds)| {
+                    if name != "DEFAULT" && matcher.matches(name, repository) {
+                        Some(cmds.as_slice())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(&[])
+        };
+        // The `Packages` index already carries the dependency strings and
+        // the repository, so a file nothing would change is never opened
+        // (Portage's `aux_get` answers from the same index). Opening and
+        // verifying a gpkg reads all of it: gigabytes for a large package.
+        if let Some(stanza) = state.stanza(cpv)
+            && let Some(repository) = stanza.get("repository")
+        {
+            let cmds = cmds_for(repository);
+            let unchanged = cmds.is_empty()
+                || DEP_KEYS.iter().all(|key| {
+                    let collapsed = collapse_ws(stanza.get(*key).map_or("", String::as_str));
+                    portage_repo::apply_cmds_to_dep_string(&collapsed, cmds).is_none()
+                });
+            if unchanged {
+                continue;
+            }
+        }
         let meta = match read_file_meta(args.pkgdir, &entry) {
             Ok(meta) => meta,
             Err(_) => continue,
         };
         let repository = meta.repository().unwrap_or_else(|| entry.repo.clone());
-        let cmds: &[UpdateCmd] = map
-            .iter()
-            .find_map(|(name, cmds)| {
-                if name != "DEFAULT" && matcher.matches(name, &repository) {
-                    Some(cmds.as_slice())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(&[]);
+        let cmds = cmds_for(&repository);
         if cmds.is_empty() {
             continue;
         }
@@ -468,6 +487,13 @@ impl BinpkgState {
                     .cloned()
                     .unwrap_or_default(),
             })
+    }
+
+    /// The loaded stanza of one `CPV`.
+    fn stanza(&self, cpv: &str) -> Option<&HashMap<String, String>> {
+        self.stanzas
+            .iter()
+            .find(|s| s.get("CPV").is_some_and(|c| c == cpv))
     }
 
     /// Whether any stanza carries this `CPV`.
@@ -1915,6 +1941,64 @@ mod tests {
             "a read-only pkgdir is byte-identical to the fixture"
         );
         set_mode(&pkgdir, 0o755);
+    }
+
+    /// Portage's `update_ents` reads dependency strings and the repository
+    /// through `aux_get`, which answers from the `Packages` index, so a
+    /// file whose index entry needs no update is never opened (a gpkg read
+    /// costs all of its bytes). Here the index says nothing changes while
+    /// the files still carry the old names: nothing is rewritten.
+    #[test]
+    fn update_ents_trusts_the_index_and_leaves_unchanged_files_alone() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest.join("../../fixtures/global-updates");
+        let scratch = portage_util::TempDir::new("global_updates_binpkg_index");
+        let root = scratch.join("root");
+        let repo = scratch.join("repo");
+        for (from, to) in [
+            (&fixture.join("root"), &root),
+            (&fixture.join("repo"), &repo),
+        ] {
+            let ok = std::process::Command::new("cp")
+                .args(["-a", &from.to_string_lossy(), &to.to_string_lossy()])
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "cp -a {} failed", from.display());
+        }
+        let pkgdir = root.join("pkgdir");
+        let index = std::fs::read_to_string(pkgdir.join("Packages")).expect("index");
+        let calm = index
+            .lines()
+            .map(|l| {
+                if l.starts_with("RDEPEND:") {
+                    "RDEPEND: dev-libs/untouched"
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(pkgdir.join("Packages"), calm + "\n").expect("write index");
+        let before = tree_files(&pkgdir);
+        let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
+        let updated = update_binpkg_ents(UpdateBinpkgEntsArgs {
+            pkgdir: &pkgdir,
+            repos: &repos,
+            map: &map,
+            binpkg_compress: Some("zstd"),
+            binpkg_compress_flags: None,
+            portage_bzip2_command: None,
+            makeopts: None,
+            compress_index: true,
+            on_update: None,
+        })
+        .expect("update_ents runs");
+        assert_eq!(
+            updated, 0,
+            "the index needs no update, so no file is opened"
+        );
+        assert_eq!(tree_files(&pkgdir), before, "no file or index changed");
     }
 
     /// Portage 3.0.83 never rewrites a signed gpkg: `aux_update` removes

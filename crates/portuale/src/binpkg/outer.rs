@@ -33,7 +33,7 @@ pub(crate) fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool)
     let file =
         fs::File::open(gpkg).map_err(|e| BinpkgError::Fatal(format!("{}: {e}", gpkg.display())))?;
     let mut archive = tar::Archive::new(file);
-    let entries = archive.entries().map_err(|e| {
+    let entries = archive.entries_with_seek().map_err(|e| {
         BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
     })?;
     let mut members: Vec<OuterMember> = Vec::new();
@@ -115,7 +115,7 @@ where
     let file =
         fs::File::open(gpkg).map_err(|e| BinpkgError::Fatal(format!("{}: {e}", gpkg.display())))?;
     let mut archive = tar::Archive::new(file);
-    let entries = archive.entries().map_err(|e| {
+    let entries = archive.entries_with_seek().map_err(|e| {
         BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
     })?;
     for entry in entries {
