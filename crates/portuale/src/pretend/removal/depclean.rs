@@ -208,6 +208,26 @@ pub(crate) fn apply_depclean_lib_check(
     (recompute(&providers), true)
 }
 
+/// Halt when a walked package's stored dependency string could not be parsed:
+/// its dependencies are unknown, so everything only it keeps would be listed
+/// for removal. Removes nothing and exits 1. Not a Portage message: Portage
+/// reads its dependencies through a parser that raises instead.
+pub(crate) fn depclean_unreadable_halt(
+    unreadable: &[(String, String)],
+    color: &Colorizer,
+) -> Option<ExitCode> {
+    if unreadable.is_empty() {
+        return None;
+    }
+    let star = color.c("BAD", " * ");
+    eprintln!("{star}Refusing to remove anything: the stored dependencies of the following");
+    eprintln!("{star}installed packages could not be read, so what they keep is unknown:");
+    for (cpv, key) in unreadable {
+        eprintln!("{star}  {cpv} ({key})");
+    }
+    Some(ExitCode::from(1))
+}
+
 /// The unresolved-dependency halt: when a kept installed package has a hard
 /// runtime dependency nothing installed satisfies, print the block and exit
 /// 1 without removing anything. Returns `Some(exit 1)` when it halted,
@@ -452,6 +472,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         root,
         world_seeds: &world_seeds,
         system_atoms: &config.system_packages,
+        profile_atoms: &config.profile_packages,
         args: &args,
         deselect,
         lib_protected_providers: &[],
@@ -460,6 +481,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // The `unresolved_deps()` safety halt, checked before the lib scan.
     // Portage: _emerge/actions.py, _calc_depclean
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
+        return code;
+    }
+    if let Some(code) = depclean_unreadable_halt(&result.unreadable, color) {
         return code;
     }
     // `create_cleanlist`'s reverse-dep blocks (and the per-package cycle
@@ -483,6 +507,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
                 root,
                 world_seeds: &world_seeds,
                 system_atoms: &config.system_packages,
+                profile_atoms: &config.profile_packages,
                 args: &args,
                 deselect,
                 lib_protected_providers: providers,
@@ -507,6 +532,9 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         println!("Packages installed:   {installed_total}");
         println!("Packages in world:    {world_atom_count}");
         println!("Packages in system:   {}", config.system_packages.len());
+        if !config.profile_packages.is_empty() {
+            println!("Packages in profile:  {}", config.profile_packages.len());
+        }
         println!("Required packages:    {}", result.required_count);
         if pretend {
             println!("Number to remove:     {}", result.cleanlist.len());

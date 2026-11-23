@@ -33,6 +33,10 @@ pub struct DepcleanResult {
     /// no installed package satisfies: the caller prints the unresolvable
     /// block and exits 1 without removing anything. Sorted, deduped.
     pub unresolved: Vec<(String, String)>,
+    /// `(cpv, dependency key)` of every walked package whose stored dependency
+    /// string could not be parsed. Its dependencies are unknown, so everything
+    /// only it keeps would look removable: the caller halts, removing nothing.
+    pub unreadable: Vec<(String, String)>,
 }
 
 /// `_parent_atoms` of the depclean walk: child key -> `(parent cpv or set label, atom)`.
@@ -333,6 +337,9 @@ pub struct DepcleanCleanlistArgs<'a> {
     /// `world` line, `@<name>` for a nested `world_sets` set). Display only.
     pub world_seeds: &'a [(String, String)],
     pub system_atoms: &'a [String],
+    /// `@profile` atoms (the profile's unstarred `packages` lines): roots in
+    /// every mode, like `@system`, and unaffected by `--deselect`.
+    pub profile_atoms: &'a [String],
     pub args: &'a [String],
     /// Portage `action_depclean`'s `deselect` (default `true`): in `args` mode
     /// the `@selected`/`world` set is emptied (Portage actions), so a named
@@ -352,6 +359,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         root,
         world_seeds,
         system_atoms,
+        profile_atoms,
         args,
         deselect,
         lib_protected_providers,
@@ -393,14 +401,20 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     // Portage `_dynamic_config._parent_atoms`: child key -> [(parent, atom)],
     // recording every resolving dep edge, not just the first puller.
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
-    for (atom_str, label) in system_atoms.iter().map(|a| (a.as_str(), "@system")).chain(
-        // `args` mode drops the `@world` seeds (Portage empties `selected_set`)
-        // unless `--deselect=n`; `@system` seeds in every mode.
-        world_seeds
-            .iter()
-            .filter(|_| args.is_empty() || !deselect)
-            .map(|(a, l)| (a.as_str(), l.as_str())),
-    ) {
+    let mut unreadable: Vec<(String, String)> = Vec::new();
+    for (atom_str, label) in system_atoms
+        .iter()
+        .map(|a| (a.as_str(), "@system"))
+        .chain(profile_atoms.iter().map(|a| (a.as_str(), "@profile")))
+        .chain(
+            // `args` mode drops the `@world` seeds (Portage empties `selected_set`)
+            // unless `--deselect=n`; `@system` seeds in every mode.
+            world_seeds
+                .iter()
+                .filter(|_| args.is_empty() || !deselect)
+                .map(|(a, l)| (a.as_str(), l.as_str())),
+        )
+    {
         // `package.provided`: a seed atom this covers never becomes a graph root
         // (Portage intercepts before `_add_pkg`; the `-pc` "removed even if
         // in world" case). See `pprovided_matches`.
@@ -444,6 +458,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
                 continue;
             }
             let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                unreadable.push((parent_cpv.clone(), dep_key.to_string()));
                 continue;
             };
             for atom_str in atoms {
@@ -533,6 +548,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         kept_parents,
         cycle_suggestions,
         unresolved,
+        unreadable,
     }
 }
 
@@ -803,6 +819,9 @@ pub fn prune_cleanlist(
         kept_parents,
         cycle_suggestions: Vec::new(),
         unresolved,
+        // `--prune` seeds every installed package as a root: nothing hangs on a
+        // dependency string it cannot read.
+        unreadable: Vec::new(),
     }
 }
 

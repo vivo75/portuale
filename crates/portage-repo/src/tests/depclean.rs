@@ -43,6 +43,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
         system_atoms: &["dev-libs/systempkg".to_string()],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -64,6 +65,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
         system_atoms: &["dev-libs/systempkg".to_string()],
+        profile_atoms: &[],
         args: &["dev-libs/dcorphan".to_string()],
         deselect: true,
         lib_protected_providers: &[],
@@ -82,6 +84,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
         system_atoms: &["dev-libs/systempkg".to_string()],
+        profile_atoms: &[],
         args: &["dev-libs/dcsub".to_string()],
         deselect: true,
         lib_protected_providers: &[],
@@ -100,6 +103,7 @@ fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
         root: &root,
         world_seeds: &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
         system_atoms: &["dev-libs/systempkg".to_string()],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: std::slice::from_ref(&protected),
@@ -143,6 +147,7 @@ fn depclean_flags_a_kept_packages_unsatisfiable_runtime_dep() {
         root: &root,
         world_seeds: &[("dev-libs/uw".to_string(), "@selected".to_string())],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -175,6 +180,7 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args,
         deselect: true,
         lib_protected_providers: &[],
@@ -194,6 +200,7 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args,
         deselect: false,
         lib_protected_providers: &[],
@@ -225,6 +232,7 @@ fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
         root: &root,
         world_seeds: &[("dev-libs/rw".to_string(), "@selected".to_string())],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -294,6 +302,7 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -313,6 +322,7 @@ fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_depend
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -346,6 +356,7 @@ fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_pr
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -358,6 +369,7 @@ fn depclean_unresolved_halt_does_not_fire_for_a_dep_satisfied_only_by_package_pr
         root: &root,
         world_seeds: world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -396,6 +408,7 @@ fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
         root: &root,
         world_seeds: &[("dev-libs/dcw".to_string(), "@selected".to_string())],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -429,6 +442,7 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
         root: &root,
         world_seeds: &[],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -459,6 +473,7 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
         root: &root2,
         world_seeds: &[],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -709,6 +724,7 @@ fn depclean_cycle_notice_names_the_pair_when_only_the_cycle_keeps_it() {
             root: &root,
             world_seeds: &world,
             system_atoms: &[],
+            profile_atoms: &[],
             args,
             deselect: true,
             lib_protected_providers: &[],
@@ -758,6 +774,7 @@ fn depclean_cycle_notice_is_silenced_by_a_parent_outside_the_cycle() {
         root: &root,
         world_seeds: &world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &["dev-libs/dccyca".to_string()],
         deselect: true,
         lib_protected_providers: &[],
@@ -784,6 +801,7 @@ fn depclean_cycle_notice_lists_every_member_of_a_three_cycle() {
         root: &root,
         world_seeds: &world,
         system_atoms: &[],
+        profile_atoms: &[],
         args: &["dev-libs/dccycx".to_string()],
         deselect: true,
         lib_protected_providers: &[],
@@ -810,6 +828,7 @@ fn depclean_cycle_notice_ignores_a_package_that_only_requires_itself() {
         root: &root,
         world_seeds: &[],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &["dev-libs/dccyca".to_string()],
         deselect: true,
         lib_protected_providers: &[],
@@ -867,6 +886,7 @@ fn depclean_cleanlist_keeps_sub_slot_dependencies_and_idepend_targets() {
         root: &root,
         world_seeds: &[("dev-libs/sworld".to_string(), "@selected".to_string())],
         system_atoms: &[],
+        profile_atoms: &[],
         args: &[],
         deselect: true,
         lib_protected_providers: &[],
@@ -874,4 +894,92 @@ fn depclean_cleanlist_keeps_sub_slot_dependencies_and_idepend_targets() {
     });
     let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
     assert_eq!(clean, vec!["dev-libs/sorphan-1.0".to_string()]);
+}
+
+/// A package that only the profile's `@profile` set (unstarred `packages`
+/// lines) reaches, directly or through its dependencies, must stay: Portage's
+/// `_calc_depclean` requires `@profile` next to `@selected` and `@system`.
+/// Expected text: charter property 1 (a depclean must not remove what the
+/// system still names). Seen on 2026-11-22: 286 packages removed (xterm,
+/// htop, mdadm, ...) that Portage kept as `@profile requires ...`.
+#[test]
+fn depclean_cleanlist_keeps_what_only_the_profile_set_reaches() {
+    let root = masters_test_root("depclean-profile");
+    let install = |name: &str, rdepend: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        if !rdepend.is_empty() {
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    install("worldpkg", "");
+    install("profilepkg", "dev-libs/profiledep");
+    install("profiledep", "");
+    install("orphan", "");
+
+    let run = |profile_atoms: &[String]| {
+        let result = depclean_cleanlist(DepcleanCleanlistArgs {
+            root: &root,
+            world_seeds: &[("dev-libs/worldpkg".to_string(), "@selected".to_string())],
+            system_atoms: &[],
+            profile_atoms,
+            args: &[],
+            deselect: true,
+            lib_protected_providers: &[],
+            package_provided: &[],
+        });
+        // The cleanlist is in removal order; compare as a sorted set.
+        let mut names: Vec<_> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        names.sort();
+        names
+    };
+    // Without the profile roots the profile packages look orphaned.
+    assert_eq!(
+        run(&[]),
+        vec![
+            "dev-libs/orphan-1.0".to_string(),
+            "dev-libs/profiledep-1.0".to_string(),
+            "dev-libs/profilepkg-1.0".to_string(),
+        ]
+    );
+    // With them only the real orphan is left.
+    assert_eq!(
+        run(&["dev-libs/profilepkg".to_string()]),
+        vec!["dev-libs/orphan-1.0".to_string()]
+    );
+}
+
+/// A walked package whose stored dependency string does not parse is reported
+/// instead of being treated as "no dependencies": silently dropping its edges
+/// would list everything only it keeps for removal.
+#[test]
+fn depclean_cleanlist_reports_a_package_whose_dependencies_cannot_be_read() {
+    let root = masters_test_root("depclean-unreadable");
+    let install = |name: &str, rdepend: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        if !rdepend.is_empty() {
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    install("worldpkg", "|| ( dev-libs/kept dev-libs/other");
+    install("kept", "");
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/worldpkg".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        profile_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert_eq!(
+        result.unreadable,
+        vec![("dev-libs/worldpkg-1.0".to_string(), "RDEPEND".to_string())]
+    );
 }
