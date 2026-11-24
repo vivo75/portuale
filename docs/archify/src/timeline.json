@@ -1,0 +1,128 @@
+{
+ "schema_version": 1,
+ "diagram_type": "timeline",
+ "meta": {
+  "title": "portuale history from git",
+  "output": "docs/archify/timeline.html",
+  "quality_profile": "showcase",
+  "evidence": "observed",
+  "timezone": "UTC",
+  "subtitle": "Commit timestamps converted to UTC; the tag at 1f9fdfc4 is portage-3.0.82.2."
+ },
+ "lanes": [
+  {
+   "id": "project",
+   "label": "Project"
+  },
+  {
+   "id": "merge",
+   "label": "Merge + store"
+  },
+  {
+   "id": "res",
+   "label": "Resolver"
+  },
+  {
+   "id": "pkg",
+   "label": "Packages + mrg"
+  }
+ ],
+ "events": [
+  {
+   "id": "start",
+   "at": "2026-08-14T14:29:30Z",
+   "title": "Repository created",
+   "detail": "04807b95 adds .gitignore, the first commit.",
+   "lane": "project",
+   "kind": "change"
+  },
+  {
+   "id": "vdbf",
+   "at": "2026-08-15T13:24:52Z",
+   "title": "VDB files backend",
+   "detail": "2085cc36 adds the files backend skeleton and write transaction.",
+   "lane": "merge",
+   "kind": "change"
+  },
+  {
+   "id": "brush",
+   "at": "2026-08-18T14:15:47Z",
+   "title": "Phases on brush or bash",
+   "detail": "c0d74483 dispatches a phase to either shell.",
+   "lane": "merge",
+   "kind": "change"
+  },
+  {
+   "id": "pub",
+   "at": "2026-08-24T18:37:35Z",
+   "title": "Merged entry published",
+   "detail": "65abc7bd populates and publishes the vdb entry.",
+   "lane": "merge",
+   "kind": "change"
+  },
+  {
+   "id": "gpkg",
+   "at": "2026-08-29T22:02:17Z",
+   "title": "gpkg reader begins",
+   "detail": "91b20b31 reads the gpkg outer container.",
+   "lane": "pkg",
+   "kind": "change"
+  },
+  {
+   "id": "slotop",
+   "at": "2026-08-31T15:17:48Z",
+   "title": "Slot-operator rebuilds",
+   "detail": "99844aad adds rebuild display and pinned reuse.",
+   "lane": "res",
+   "kind": "change"
+  },
+  {
+   "id": "mrg",
+   "at": "2026-08-31T22:59:20Z",
+   "title": "mrg traits",
+   "detail": "3a6a4b47 adds merge engine, scheduler and binhost traits.",
+   "lane": "pkg",
+   "kind": "change"
+  },
+  {
+   "id": "tag",
+   "at": "2026-09-01T17:05:44Z",
+   "title": "Tag portage-3.0.82.2",
+   "detail": "1f9fdfc4 vendors the bash phase runtime.",
+   "lane": "project",
+   "kind": "default"
+  },
+  {
+   "id": "args",
+   "at": "2026-10-03T22:49:49Z",
+   "title": "Argument subtrees (#298)",
+   "detail": "5990fd4f merges per-argument subtree ordering.",
+   "lane": "res",
+   "kind": "change"
+  },
+  {
+   "id": "charter",
+   "at": "2026-11-07T19:31:41Z",
+   "title": "Charter",
+   "detail": "64d3ec2a: no longer a Portage fork.",
+   "lane": "project",
+   "kind": "action"
+  },
+  {
+   "id": "world",
+   "at": "2026-11-09T08:36:35Z",
+   "title": "portage-world",
+   "detail": "09ca2812 adds mrg --check-world (#691).",
+   "lane": "pkg",
+   "kind": "change"
+  },
+  {
+   "id": "head",
+   "at": "2026-11-23T21:56:35Z",
+   "title": "Current HEAD",
+   "detail": "36b417db files backlog #797.",
+   "lane": "project",
+   "kind": "default"
+  }
+ ]
+}

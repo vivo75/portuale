@@ -1,0 +1,203 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "One package through a source merge",
+  "output": "docs/archify/lifecycle.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  }
+ },
+ "mainPath": [
+  "queued",
+  "building",
+  "collide",
+  "merging",
+  "postinst",
+  "merged"
+ ],
+ "states": [
+  {
+   "id": "queued",
+   "type": "start",
+   "label": "Queued",
+   "sublabel": "in merge list",
+   "tag": "pending"
+  },
+  {
+   "id": "building",
+   "type": "active",
+   "label": "Building",
+   "sublabel": "pretend to install",
+   "tag": "phase chain",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/mod.rs",
+     "line": 124,
+     "end_line": 139
+    }
+   ]
+  },
+  {
+   "id": "collide",
+   "type": "decision",
+   "label": "Collision check",
+   "sublabel": "before preinst",
+   "tag": "gate",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/collisions.rs",
+     "line": 196
+    }
+   ]
+  },
+  {
+   "id": "merging",
+   "type": "active",
+   "label": "Merging",
+   "sublabel": "preinst, copy, publish",
+   "tag": "merge",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 5
+    }
+   ]
+  },
+  {
+   "id": "postinst",
+   "type": "active",
+   "label": "postinst",
+   "sublabel": "pkg_postinst",
+   "tag": "last",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 322
+    }
+   ]
+  },
+  {
+   "id": "merged",
+   "type": "success",
+   "label": "Merged",
+   "sublabel": "env_update done",
+   "tag": "terminal",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 322
+    }
+   ]
+  },
+  {
+   "id": "failed",
+   "type": "failure",
+   "label": "Failed",
+   "sublabel": "build or merge error",
+   "tag": "stop",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 215
+    }
+   ]
+  },
+  {
+   "id": "skipped",
+   "type": "neutral",
+   "label": "Skipped",
+   "sublabel": "dependent of failure",
+   "tag": "keep-going",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 215
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "queued-building",
+   "from": "queued",
+   "to": "building"
+  },
+  {
+   "id": "building-collide",
+   "from": "building",
+   "to": "collide"
+  },
+  {
+   "id": "collide-merging",
+   "from": "collide",
+   "to": "merging"
+  },
+  {
+   "id": "merging-postinst",
+   "from": "merging",
+   "to": "postinst"
+  },
+  {
+   "id": "postinst-merged",
+   "from": "postinst",
+   "to": "merged"
+  },
+  {
+   "id": "building-failed",
+   "from": "building",
+   "to": "failed",
+   "label": "phase error",
+   "variant": "security"
+  },
+  {
+   "id": "collide-failed",
+   "from": "collide",
+   "to": "failed",
+   "label": "collision abort",
+   "variant": "security"
+  },
+  {
+   "id": "merging-failed",
+   "from": "merging",
+   "to": "failed",
+   "label": "preinst error",
+   "variant": "security"
+  },
+  {
+   "id": "failed-skipped",
+   "from": "failed",
+   "to": "skipped",
+   "label": "--keep-going",
+   "variant": "dashed"
+  },
+  {
+   "id": "failed-queued",
+   "from": "failed",
+   "to": "queued",
+   "label": "--resume",
+   "variant": "dashed"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Building",
+   "items": [
+    "One prerequisite chain: pretend, setup, unpack, prepare, configure, compile, test, install",
+    "Each phase runs the ones before it"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Failure",
+   "items": [
+    "Without --keep-going the loop stops at the first failure and records a resume list",
+    "Only the failure edges verified in the code are drawn"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,261 @@
+{
+ "schema_version": 1,
+ "diagram_type": "tree",
+ "meta": {
+  "title": "Repository layout",
+  "output": "docs/archify/tree.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  },
+  "subtitle": "Containment only. Selected directories; the remaining 13 crates are collapsed into one node."
+ },
+ "layout": {
+  "direction": "right"
+ },
+ "nodes": [
+  {
+   "id": "root",
+   "label": "portuale",
+   "sublabel": "workspace root",
+   "sources": [
+    {
+     "path": "."
+    }
+   ]
+  },
+  {
+   "id": "crates",
+   "label": "crates",
+   "parent": "root",
+   "sublabel": "18 members",
+   "sources": [
+    {
+     "path": "crates"
+    }
+   ]
+  },
+  {
+   "id": "docs",
+   "label": "docs",
+   "parent": "root",
+   "sublabel": "human docs",
+   "sources": [
+    {
+     "path": "docs"
+    }
+   ]
+  },
+  {
+   "id": "LLM",
+   "label": "LLM",
+   "parent": "root",
+   "sublabel": "agent material",
+   "sources": [
+    {
+     "path": "LLM"
+    }
+   ]
+  },
+  {
+   "id": "bin",
+   "label": "bin",
+   "parent": "root",
+   "sublabel": "ebuild phase scripts",
+   "sources": [
+    {
+     "path": "bin"
+    }
+   ]
+  },
+  {
+   "id": "thirdparty",
+   "label": "3rdparty",
+   "parent": "root",
+   "sublabel": "vendored sources",
+   "sources": [
+    {
+     "path": "3rdparty"
+    }
+   ]
+  },
+  {
+   "id": "c_portuale",
+   "label": "portuale",
+   "parent": "crates",
+   "sublabel": "multicall binary",
+   "sources": [
+    {
+     "path": "crates/portuale"
+    }
+   ]
+  },
+  {
+   "id": "c_repo",
+   "label": "portage-repo",
+   "parent": "crates",
+   "sublabel": "resolver",
+   "sources": [
+    {
+     "path": "crates/portage-repo"
+    }
+   ]
+  },
+  {
+   "id": "c_vdb",
+   "label": "portage-vdb",
+   "parent": "crates",
+   "sublabel": "installed DB",
+   "sources": [
+    {
+     "path": "crates/portage-vdb"
+    }
+   ]
+  },
+  {
+   "id": "c_mrg",
+   "label": "mrg-director",
+   "parent": "crates",
+   "sublabel": "traits",
+   "sources": [
+    {
+     "path": "crates/mrg-director"
+    }
+   ]
+  },
+  {
+   "id": "c_other",
+   "label": "13 other crates",
+   "parent": "crates",
+   "sublabel": "libs + harnesses",
+   "sources": [
+    {
+     "path": "crates"
+    }
+   ]
+  },
+  {
+   "id": "p_phases",
+   "label": "ebuild_phases",
+   "parent": "c_portuale",
+   "sublabel": "bash/brush runner",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases"
+    }
+   ]
+  },
+  {
+   "id": "p_merge",
+   "label": "ebuild_merge",
+   "parent": "c_portuale",
+   "sublabel": "merge into ROOT",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge"
+    }
+   ]
+  },
+  {
+   "id": "p_pretend",
+   "label": "pretend",
+   "parent": "c_portuale",
+   "sublabel": "emerge front end",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend"
+    }
+   ]
+  },
+  {
+   "id": "p_build",
+   "label": "emerge_build",
+   "parent": "c_portuale",
+   "sublabel": "merge loop",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build"
+    }
+   ]
+  },
+  {
+   "id": "p_binpkg",
+   "label": "binpkg",
+   "parent": "c_portuale",
+   "sublabel": "xpak + gpkg",
+   "sources": [
+    {
+     "path": "crates/portuale/src/binpkg"
+    }
+   ]
+  },
+  {
+   "id": "p_remote",
+   "label": "remote",
+   "parent": "c_portuale",
+   "sublabel": "remote merge",
+   "sources": [
+    {
+     "path": "crates/portuale/src/remote"
+    }
+   ]
+  },
+  {
+   "id": "r_resolve",
+   "label": "resolve",
+   "parent": "c_repo",
+   "sublabel": "resolver passes",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve"
+    }
+   ]
+  },
+  {
+   "id": "r_order",
+   "label": "merge_order",
+   "parent": "c_repo",
+   "sublabel": "install order",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/merge_order"
+    }
+   ]
+  },
+  {
+   "id": "r_slot",
+   "label": "slot_operator",
+   "parent": "c_repo",
+   "sublabel": "slot-op rebuilds",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/slot_operator"
+    }
+   ]
+  },
+  {
+   "id": "v_sqlite",
+   "label": "sqlite",
+   "parent": "c_vdb",
+   "sublabel": "backend",
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite"
+    }
+   ]
+  },
+  {
+   "id": "v_redb",
+   "label": "redb_db",
+   "parent": "c_vdb",
+   "sublabel": "backend",
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/redb_db"
+    }
+   ]
+  }
+ ]
+}

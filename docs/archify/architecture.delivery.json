@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "61009464-0fdd-4ccd-9425-c574fbdcf61b",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/architecture.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/architecture.html",
+  "specification": {
+    "sha256": "2394659e8ca1cb76ee69b3251f50fd003b96cf2c949d19f524383cbe98699fa8",
+    "bytes": 4987
+  },
+  "artifact": {
+    "sha256": "26a9fbc9a8c8397dd29381cb9c50b0562521add85adb36acb8456b7a92289361",
+    "bytes": 952907
+  }
+}

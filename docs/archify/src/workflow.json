@@ -1,0 +1,232 @@
+{
+ "schema_version": 2,
+ "diagram_type": "workflow",
+ "meta": {
+  "title": "emerge -pv <atom>: argv to merge list",
+  "output": "docs/archify/workflow.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  },
+  "visual_preset": "signal-flow"
+ },
+ "lanes": [
+  {
+   "id": "fe",
+   "label": "Front end (portuale)"
+  },
+  {
+   "id": "cfg",
+   "label": "Config + data"
+  },
+  {
+   "id": "res",
+   "label": "Resolver (portage-repo)"
+  },
+  {
+   "id": "out",
+   "label": "Output + merge"
+  }
+ ],
+ "mainPath": [
+  "argv",
+  "dispatch",
+  "run",
+  "cfg",
+  "resolver",
+  "order",
+  "display",
+  "exec"
+ ],
+ "nodes": [
+  {
+   "id": "argv",
+   "lane": "fe",
+   "col": 0,
+   "type": "external",
+   "label": "emerge -pv atom",
+   "sublabel": "operator"
+  },
+  {
+   "id": "dispatch",
+   "lane": "fe",
+   "col": 1,
+   "type": "frontend",
+   "label": "Applet dispatch",
+   "sublabel": "name of binary",
+   "sources": [
+    {
+     "path": "crates/portuale/src/main.rs",
+     "line": 70,
+     "end_line": 74
+    }
+   ]
+  },
+  {
+   "id": "run",
+   "lane": "fe",
+   "col": 2,
+   "type": "backend",
+   "label": "pretend::run",
+   "sublabel": "options + atoms",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/mod.rs",
+     "line": 187,
+     "end_line": 200
+    }
+   ]
+  },
+  {
+   "id": "cfg",
+   "lane": "cfg",
+   "col": 2,
+   "type": "backend",
+   "label": "resolve_config",
+   "sublabel": "profile, make.conf",
+   "sources": [
+    {
+     "path": "crates/portage-profile/src/resolve/mod.rs",
+     "line": 37
+    }
+   ]
+  },
+  {
+   "id": "cache",
+   "lane": "cfg",
+   "col": 3,
+   "type": "database",
+   "label": "md5-cache",
+   "sublabel": "no ebuild is run",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/metadata_cache.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "resolver",
+   "lane": "res",
+   "col": 3,
+   "type": "backend",
+   "label": "Resolver",
+   "sublabel": "slots, USE, blockers",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/request.rs",
+     "line": 252
+    }
+   ]
+  },
+  {
+   "id": "order",
+   "lane": "res",
+   "col": 4,
+   "type": "backend",
+   "label": "Merge order",
+   "sublabel": "_serialize_tasks",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/merge_order/mod.rs",
+     "line": 1,
+     "end_line": 3
+    }
+   ]
+  },
+  {
+   "id": "display",
+   "lane": "out",
+   "col": 4,
+   "type": "frontend",
+   "label": "Merge-list display",
+   "sublabel": "rows + counters",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/merge_list.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "exec",
+   "lane": "out",
+   "col": 5,
+   "type": "messagebus",
+   "label": "Source merge",
+   "sublabel": "only without -p",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/merge_run.rs",
+     "line": 65
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "from": "argv",
+   "to": "dispatch"
+  },
+  {
+   "id": "e2",
+   "from": "dispatch",
+   "to": "run",
+   "variant": "emphasis"
+  },
+  {
+   "id": "e3",
+   "from": "run",
+   "to": "cfg",
+   "label": "Config"
+  },
+  {
+   "id": "e4",
+   "from": "cache",
+   "to": "resolver",
+   "label": "candidates",
+   "variant": "dashed",
+   "role": "branch"
+  },
+  {
+   "id": "e5",
+   "from": "cfg",
+   "to": "resolver",
+   "variant": "emphasis"
+  },
+  {
+   "id": "e6",
+   "from": "resolver",
+   "to": "order",
+   "label": "graph",
+   "variant": "emphasis"
+  },
+  {
+   "id": "e7",
+   "from": "order",
+   "to": "display",
+   "label": "ordered",
+   "variant": "emphasis"
+  },
+  {
+   "id": "e8",
+   "from": "display",
+   "to": "exec",
+   "label": "no --pretend"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Reading it",
+   "items": [
+    "Config resolves before argv is re-parsed, so EMERGE_DEFAULT_OPTS can be prepended",
+    "Metadata comes from metadata/md5-cache, never by running the ebuild",
+    "With --pretend the run stops at the display; the last step is the merge side"
+   ]
+  }
+ ]
+}

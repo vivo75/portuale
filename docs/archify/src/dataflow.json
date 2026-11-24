@@ -1,0 +1,237 @@
+{
+ "schema_version": 1,
+ "diagram_type": "dataflow",
+ "meta": {
+  "title": "Data behind a merge list",
+  "output": "docs/archify/dataflow.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  }
+ },
+ "stages": [
+  {
+   "label": "On disk"
+  },
+  {
+   "label": "Load"
+  },
+  {
+   "label": "Resolve"
+  },
+  {
+   "label": "Order"
+  },
+  {
+   "label": "Show"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "conf",
+   "type": "database",
+   "label": "Config files",
+   "sublabel": "make.conf, profile",
+   "stage": 0,
+   "row": 0,
+   "sources": [
+    {
+     "path": "crates/portage-profile/src/make_conf.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "mdc",
+   "type": "database",
+   "label": "md5-cache",
+   "sublabel": "per repository",
+   "stage": 0,
+   "row": 1,
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/md5_dict.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "pkgdb",
+   "type": "database",
+   "label": "var/db/pkg",
+   "sublabel": "installed",
+   "stage": 0,
+   "row": 2,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/files.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "rc",
+   "type": "backend",
+   "label": "resolve_config",
+   "sublabel": "one Config",
+   "stage": 1,
+   "row": 0,
+   "sources": [
+    {
+     "path": "crates/portage-profile/src/resolve/mod.rs",
+     "line": 37
+    }
+   ]
+  },
+  {
+   "id": "mc",
+   "type": "backend",
+   "label": "Metadata cache",
+   "sublabel": "validated reads",
+   "stage": 1,
+   "row": 1,
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/metadata_cache.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "inst",
+   "type": "backend",
+   "label": "Installed reader",
+   "sublabel": "version, slot",
+   "stage": 1,
+   "row": 2,
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/installed.rs",
+     "line": 1
+    }
+   ]
+  },
+  {
+   "id": "rs",
+   "type": "backend",
+   "label": "Resolver",
+   "sublabel": "merge graph",
+   "stage": 2,
+   "row": 1,
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/request.rs",
+     "line": 252
+    }
+   ]
+  },
+  {
+   "id": "mo",
+   "type": "backend",
+   "label": "Merge order",
+   "sublabel": "install order",
+   "stage": 3,
+   "row": 1,
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/merge_order/mod.rs",
+     "line": 1,
+     "end_line": 3
+    }
+   ]
+  },
+  {
+   "id": "ds",
+   "type": "frontend",
+   "label": "Display",
+   "sublabel": "rows + counters",
+   "stage": 4,
+   "row": 1,
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/merge_list.rs",
+     "line": 1
+    }
+   ]
+  }
+ ],
+ "flows": [
+  {
+   "id": "f1",
+   "from": "conf",
+   "to": "rc",
+   "label": "settings",
+   "classification": "text",
+   "variant": "default"
+  },
+  {
+   "id": "f2",
+   "from": "mdc",
+   "to": "mc",
+   "label": "aux dict",
+   "classification": "entries",
+   "variant": "default"
+  },
+  {
+   "id": "f3",
+   "from": "pkgdb",
+   "to": "inst",
+   "label": "entries",
+   "classification": "installed",
+   "variant": "default"
+  },
+  {
+   "id": "f4",
+   "from": "rc",
+   "to": "rs",
+   "label": "Config",
+   "classification": "USE, masks",
+   "variant": "emphasis"
+  },
+  {
+   "id": "f5",
+   "from": "mc",
+   "to": "rs",
+   "label": "candidates",
+   "classification": "available",
+   "variant": "emphasis"
+  },
+  {
+   "id": "f6",
+   "from": "inst",
+   "to": "rs",
+   "label": "installed set",
+   "classification": "present",
+   "variant": "emphasis"
+  },
+  {
+   "id": "f7",
+   "from": "rs",
+   "to": "mo",
+   "label": "graph",
+   "classification": "nodes+edges",
+   "variant": "emphasis"
+  },
+  {
+   "id": "f8",
+   "from": "mo",
+   "to": "ds",
+   "label": "ordered list",
+   "classification": "merge order",
+   "variant": "emphasis"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "emerald",
+   "title": "Inputs",
+   "items": [
+    "Three on-disk inputs; none of them is an ebuild being executed",
+    "The resolver takes Config, candidates and the installed set",
+    "Display is the last step of a pretend run"
+   ]
+  }
+ ]
+}

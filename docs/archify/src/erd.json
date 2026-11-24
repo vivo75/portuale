@@ -1,0 +1,434 @@
+{
+ "schema_version": 1,
+ "diagram_type": "erd",
+ "meta": {
+  "title": "SQLite VDB schema",
+  "output": "docs/archify/erd.html",
+  "quality_profile": "standard",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  }
+ },
+ "layout": {
+  "mode": "grid"
+ },
+ "entities": [
+  {
+   "id": "entry",
+   "label": "entry",
+   "tag": "per package",
+   "row": 0,
+   "col": 0,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 56,
+     "end_line": 70
+    }
+   ],
+   "attributes": [
+    {
+     "name": "id",
+     "type": "INTEGER",
+     "key": "pk"
+    },
+    {
+     "name": "category",
+     "type": "TEXT"
+    },
+    {
+     "name": "pf",
+     "type": "TEXT"
+    },
+    {
+     "name": "state",
+     "type": "TEXT"
+    },
+    {
+     "name": "counter",
+     "type": "INTEGER"
+    },
+    {
+     "name": "slot",
+     "type": "TEXT"
+    },
+    {
+     "name": "subslot",
+     "type": "TEXT"
+    },
+    {
+     "name": "repo",
+     "type": "TEXT"
+    },
+    {
+     "name": "metadata_stamp",
+     "type": "TEXT"
+    },
+    {
+     "name": "dir_mode",
+     "type": "INTEGER"
+    },
+    {
+     "name": "dir_mtime_ns",
+     "type": "INTEGER"
+    }
+   ]
+  },
+  {
+   "id": "entry_file",
+   "label": "entry_file",
+   "tag": "per package",
+   "row": 0,
+   "col": 1,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 73,
+     "end_line": 80
+    }
+   ],
+   "attributes": [
+    {
+     "name": "entry_id",
+     "type": "INTEGER",
+     "key": [
+      "pk",
+      "fk"
+     ],
+     "references": "entry.id"
+    },
+    {
+     "name": "name",
+     "type": "TEXT",
+     "key": "pk"
+    },
+    {
+     "name": "data",
+     "type": "BLOB"
+    },
+    {
+     "name": "mode",
+     "type": "INTEGER"
+    },
+    {
+     "name": "mtime_ns",
+     "type": "INTEGER"
+    }
+   ]
+  },
+  {
+   "id": "owner",
+   "label": "owner",
+   "tag": "per package",
+   "row": 0,
+   "col": 2,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 82,
+     "end_line": 92
+    }
+   ],
+   "attributes": [
+    {
+     "name": "entry_id",
+     "type": "INTEGER",
+     "key": [
+      "pk",
+      "fk"
+     ],
+     "references": "entry.id"
+    },
+    {
+     "name": "seq",
+     "type": "INTEGER",
+     "key": "pk"
+    },
+    {
+     "name": "path",
+     "type": "BLOB"
+    },
+    {
+     "name": "kind",
+     "type": "TEXT"
+    },
+    {
+     "name": "md5",
+     "type": "TEXT"
+    },
+    {
+     "name": "mtime",
+     "type": "INTEGER"
+    },
+    {
+     "name": "target",
+     "type": "BLOB"
+    }
+   ]
+  },
+  {
+   "id": "dep_atom",
+   "label": "dep_atom",
+   "tag": "per package",
+   "row": 0,
+   "col": 3,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 94,
+     "end_line": 102
+    }
+   ],
+   "attributes": [
+    {
+     "name": "entry_id",
+     "type": "INTEGER",
+     "key": "fk",
+     "references": "entry.id"
+    },
+    {
+     "name": "class",
+     "type": "TEXT"
+    },
+    {
+     "name": "cp",
+     "type": "TEXT"
+    },
+    {
+     "name": "atom",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "id": "needed",
+   "label": "needed",
+   "tag": "per package",
+   "row": 0,
+   "col": 4,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 104,
+     "end_line": 112
+    }
+   ],
+   "attributes": [
+    {
+     "name": "entry_id",
+     "type": "INTEGER",
+     "key": "fk",
+     "references": "entry.id"
+    },
+    {
+     "name": "arch",
+     "type": "TEXT"
+    },
+    {
+     "name": "obj",
+     "type": "BLOB"
+    },
+    {
+     "name": "soname",
+     "type": "TEXT"
+    },
+    {
+     "name": "rpath",
+     "type": "TEXT"
+    },
+    {
+     "name": "needed",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "id": "preserved_lib",
+   "label": "preserved_lib",
+   "tag": "registries",
+   "row": 1,
+   "col": 0,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 114,
+     "end_line": 121
+    }
+   ],
+   "attributes": [
+    {
+     "name": "reg_key",
+     "type": "TEXT",
+     "key": "pk"
+    },
+    {
+     "name": "pos",
+     "type": "INTEGER",
+     "key": "pk"
+    },
+    {
+     "name": "cpv",
+     "type": "TEXT"
+    },
+    {
+     "name": "counter",
+     "type": "TEXT"
+    },
+    {
+     "name": "path",
+     "type": "BLOB"
+    }
+   ]
+  },
+  {
+   "id": "world",
+   "label": "world",
+   "tag": "registries",
+   "row": 1,
+   "col": 1,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 123,
+     "end_line": 126
+    }
+   ],
+   "attributes": [
+    {
+     "name": "pos",
+     "type": "INTEGER",
+     "key": "pk"
+    },
+    {
+     "name": "atom",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "id": "world_sets",
+   "label": "world_sets",
+   "tag": "registries",
+   "row": 1,
+   "col": 2,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 128,
+     "end_line": 131
+    }
+   ],
+   "attributes": [
+    {
+     "name": "pos",
+     "type": "INTEGER",
+     "key": "pk"
+    },
+    {
+     "name": "name",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "id": "config_memory",
+   "label": "config_memory",
+   "tag": "registries",
+   "row": 1,
+   "col": 3,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 133,
+     "end_line": 136
+    }
+   ],
+   "attributes": [
+    {
+     "name": "path",
+     "type": "BLOB",
+     "key": "pk"
+    },
+    {
+     "name": "md5",
+     "type": "TEXT"
+    }
+   ]
+  },
+  {
+   "id": "meta",
+   "label": "meta",
+   "tag": "registries",
+   "row": 1,
+   "col": 4,
+   "sources": [
+    {
+     "path": "crates/portage-vdb/src/sqlite.rs",
+     "line": 51,
+     "end_line": 54
+    }
+   ],
+   "attributes": [
+    {
+     "name": "key",
+     "type": "TEXT",
+     "key": "pk"
+    },
+    {
+     "name": "value",
+     "type": "TEXT"
+    }
+   ]
+  }
+ ],
+ "relationships": [
+  {
+   "id": "entry_file_entry",
+   "from": "entry_file",
+   "to": "entry",
+   "fromCardinality": "many",
+   "toCardinality": "one"
+  },
+  {
+   "id": "owner_entry",
+   "from": "owner",
+   "to": "entry",
+   "fromCardinality": "many",
+   "toCardinality": "one"
+  },
+  {
+   "id": "dep_atom_entry",
+   "from": "dep_atom",
+   "to": "entry",
+   "fromCardinality": "many",
+   "toCardinality": "one"
+  },
+  {
+   "id": "needed_entry",
+   "from": "needed",
+   "to": "entry",
+   "fromCardinality": "many",
+   "toCardinality": "one"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Keys",
+   "items": [
+    "Four child tables hang off entry and cascade on delete",
+    "entry is unique on (category, pf, state); state is merging or installed",
+    "Paths and file data are BLOB; world and world_sets keep file order in pos"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Standalone tables",
+   "items": [
+    "preserved_lib, world, world_sets, config_memory and meta have no foreign key"
+   ]
+  }
+ ]
+}

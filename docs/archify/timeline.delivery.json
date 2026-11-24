@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "fb1c2b44-01aa-422c-8693-1e6e9e528e3d",
+  "status": "current",
+  "command": "deliver",
+  "type": "timeline",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/timeline.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/timeline.html",
+  "specification": {
+    "sha256": "6e3f4dae58a02e54548e431be1c14cbffed33ca745ac77336f7046a4ea7518d2",
+    "bytes": 2886
+  },
+  "artifact": {
+    "sha256": "d4d895f4cc77b94a526a2ab7f57cf2766f5c24b38c5cf4c78d0a59e480bc29d0",
+    "bytes": 939258
+  }
+}

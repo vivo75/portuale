@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "f846228f-2d44-40e2-a911-9724a5ed85ed",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/erd.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/erd.html",
+  "specification": {
+    "sha256": "8e14774285ae77e2411e554c42c01bb73be5a7b4a5aebe416bb369e7bae61e0f",
+    "bytes": 6868
+  },
+  "artifact": {
+    "sha256": "831de4221b4b638eb0bb8ac9912ed0edfdca46f7c79fcb7a53368963f042e21b",
+    "bytes": 958631
+  }
+}

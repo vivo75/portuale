@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "eea17aa3-25b7-4248-a663-6d4167079dd5",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/workflow.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/workflow.html",
+  "specification": {
+    "sha256": "32ef1d84fa3b32ddea08d523e0d485e3b8cca4d2529e604f6234b8c6a3dc9808",
+    "bytes": 4058
+  },
+  "artifact": {
+    "sha256": "42f6de3d28cf5bb40afe3b15d3f10b11ec52d54e3985d87fcc93b5de8dcab33a",
+    "bytes": 932085
+  }
+}

@@ -1,0 +1,257 @@
+{
+ "schema_version": 1,
+ "diagram_type": "sequence",
+ "meta": {
+  "title": "Source merge of one package",
+  "output": "docs/archify/sequence.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  },
+  "column_fit": "spread"
+ },
+ "participants": [
+  {
+   "id": "op",
+   "type": "external",
+   "label": "Operator",
+   "sublabel": "emerge -v atom"
+  },
+  {
+   "id": "run",
+   "type": "backend",
+   "label": "pretend::run",
+   "sublabel": "front end",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/mod.rs",
+     "line": 187
+    }
+   ]
+  },
+  {
+   "id": "res",
+   "type": "backend",
+   "label": "Resolver",
+   "sublabel": "portage-repo",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/request.rs",
+     "line": 252
+    }
+   ]
+  },
+  {
+   "id": "mrg",
+   "type": "backend",
+   "label": "Merge driver",
+   "sublabel": "run_merge_with_hook",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/mod.rs",
+     "line": 165
+    }
+   ]
+  },
+  {
+   "id": "ph",
+   "type": "backend",
+   "label": "Phase runner",
+   "sublabel": "bash or brush",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/commands.rs",
+     "line": 387
+    }
+   ]
+  },
+  {
+   "id": "aft",
+   "type": "backend",
+   "label": "After install",
+   "sublabel": "image to ROOT",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 5
+    }
+   ]
+  },
+  {
+   "id": "vdb",
+   "type": "database",
+   "label": "var/db/pkg",
+   "sublabel": "installed entry",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/vdb_entry.rs",
+     "line": 10
+    }
+   ]
+  },
+  {
+   "id": "root",
+   "type": "database",
+   "label": "$ROOT",
+   "sublabel": "target filesystem",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 202
+    }
+   ]
+  }
+ ],
+ "segments": [
+  {
+   "from": 145,
+   "to": 235,
+   "label": "Resolve"
+  },
+  {
+   "from": 240,
+   "to": 325,
+   "label": "Build"
+  },
+  {
+   "from": 330,
+   "to": 595,
+   "label": "Merge into ROOT"
+  }
+ ],
+ "messages": [
+  {
+   "id": "m0",
+   "from": "op",
+   "to": "run",
+   "y": 160,
+   "label": "emerge -v atom",
+   "variant": "emphasis"
+  },
+  {
+   "id": "m1",
+   "from": "run",
+   "to": "res",
+   "y": 190,
+   "label": "resolve",
+   "variant": "default"
+  },
+  {
+   "id": "m2",
+   "from": "res",
+   "to": "run",
+   "y": 220,
+   "label": "ordered merge list",
+   "variant": "return"
+  },
+  {
+   "id": "m3",
+   "from": "run",
+   "to": "mrg",
+   "y": 250,
+   "label": "merge each entry",
+   "variant": "emphasis"
+  },
+  {
+   "id": "m4",
+   "from": "mrg",
+   "to": "ph",
+   "y": 280,
+   "label": "setup ... install",
+   "variant": "default"
+  },
+  {
+   "id": "m5",
+   "from": "ph",
+   "to": "mrg",
+   "y": 310,
+   "label": "image in D",
+   "variant": "return"
+  },
+  {
+   "id": "m6",
+   "from": "mrg",
+   "to": "aft",
+   "y": 340,
+   "label": "merge_after_install",
+   "variant": "default"
+  },
+  {
+   "id": "m7",
+   "from": "aft",
+   "to": "vdb",
+   "y": 370,
+   "label": "create -MERGING- tmp",
+   "variant": "default"
+  },
+  {
+   "id": "m8",
+   "from": "aft",
+   "to": "ph",
+   "y": 400,
+   "label": "pkg_preinst",
+   "variant": "default"
+  },
+  {
+   "id": "m9",
+   "from": "aft",
+   "to": "root",
+   "y": 430,
+   "label": "copy files, hash",
+   "variant": "emphasis"
+  },
+  {
+   "id": "m10",
+   "from": "aft",
+   "to": "vdb",
+   "y": 460,
+   "label": "unmerge same slot",
+   "variant": "security"
+  },
+  {
+   "id": "m11",
+   "from": "aft",
+   "to": "vdb",
+   "y": 490,
+   "label": "publish entry",
+   "variant": "emphasis"
+  },
+  {
+   "id": "m12",
+   "from": "aft",
+   "to": "ph",
+   "y": 520,
+   "label": "pkg_postinst",
+   "variant": "default"
+  },
+  {
+   "id": "m13",
+   "from": "aft",
+   "to": "mrg",
+   "y": 550,
+   "label": "merged",
+   "variant": "return"
+  },
+  {
+   "id": "m14",
+   "from": "mrg",
+   "to": "run",
+   "y": 580,
+   "label": "outcome",
+   "variant": "return"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "emerald",
+   "title": "Order in code",
+   "items": [
+    "Collision check runs before pkg_preinst",
+    "The replaced same-slot version is unmerged before the new entry is published",
+    "pkg_postinst runs last; env_update follows it"
+   ]
+  }
+ ]
+}

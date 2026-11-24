@@ -1,0 +1,62 @@
+{
+ "schema_version": 1,
+ "diagram_type": "waterfall",
+ "meta": {
+  "title": "Where an emerge -puD @world run spends time",
+  "output": "docs/archify/waterfall.html",
+  "quality_profile": "showcase",
+  "evidence": "illustrative",
+  "unit": "ms",
+  "subtitle": "Illustrative shape of the stages, not a measurement. Stages run one after another."
+ },
+ "spans": [
+  {
+   "id": "run",
+   "name": "emerge -puD @world",
+   "service": "portuale",
+   "start": 0,
+   "end": 4600,
+   "detail": "Parent of every stage below."
+  },
+  {
+   "id": "parse",
+   "name": "Parse options + resolve_config",
+   "service": "front end",
+   "start": 0,
+   "duration": 300,
+   "parent": "run"
+  },
+  {
+   "id": "load",
+   "name": "Read metadata cache + vdb",
+   "service": "portage-repo",
+   "start": 300,
+   "duration": 1000,
+   "parent": "run"
+  },
+  {
+   "id": "resolve",
+   "name": "Resolve dependencies",
+   "service": "portage-repo",
+   "start": 1300,
+   "duration": 2300,
+   "parent": "run"
+  },
+  {
+   "id": "order",
+   "name": "Merge order",
+   "service": "portage-repo",
+   "start": 3600,
+   "duration": 600,
+   "parent": "run"
+  },
+  {
+   "id": "show",
+   "name": "Display merge list",
+   "service": "front end",
+   "start": 4200,
+   "duration": 400,
+   "parent": "run"
+  }
+ ]
+}

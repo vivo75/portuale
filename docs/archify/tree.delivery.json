@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "2c59d237-2fe7-49a4-99db-c92dc258324f",
+  "status": "current",
+  "command": "deliver",
+  "type": "tree",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/tree.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/tree.html",
+  "specification": {
+    "sha256": "ba93840a53d3b6588182f10e6a53883cae0a03ac0af94a05e1096cecae0ac413",
+    "bytes": 4374
+  },
+  "artifact": {
+    "sha256": "3fb270070b1f13090eb82a22f7a0bcf0aca2c88b044ce0a7042645f699b5ff6d",
+    "bytes": 951630
+  }
+}

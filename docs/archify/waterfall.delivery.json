@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "3140836f-b23b-4811-b683-915cca5ffab8",
+  "status": "current",
+  "command": "deliver",
+  "type": "waterfall",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/waterfall.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/waterfall.html",
+  "specification": {
+    "sha256": "02985ac1446735fce404d495ea686fb4fdddc93965ead9e91a43d44668b318cd",
+    "bytes": 1263
+  },
+  "artifact": {
+    "sha256": "77ca53258b2662fea00428bc7c14e9124f277553546a2a1c1abf899b68b29d5b",
+    "bytes": 924505
+  }
+}

@@ -1,0 +1,282 @@
+{
+ "schema_version": 1,
+ "diagram_type": "architecture",
+ "meta": {
+  "title": "portuale crate dependencies",
+  "output": "docs/archify/architecture.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  }
+ },
+ "layout": {
+  "mode": "auto"
+ },
+ "components": [
+  {
+   "id": "user",
+   "type": "external",
+   "label": "Operator",
+   "sublabel": "emerge / ebuild / mrg"
+  },
+  {
+   "id": "portuale",
+   "type": "backend",
+   "label": "portuale",
+   "sublabel": "multicall binary",
+   "sources": [
+    {
+     "path": "crates/portuale"
+    }
+   ]
+  },
+  {
+   "id": "mrg_director",
+   "type": "backend",
+   "label": "mrg-director",
+   "sublabel": "trait contracts",
+   "sources": [
+    {
+     "path": "crates/mrg-director"
+    }
+   ]
+  },
+  {
+   "id": "world",
+   "type": "backend",
+   "label": "portage-world",
+   "sublabel": "@world check + plan",
+   "sources": [
+    {
+     "path": "crates/portage-world"
+    }
+   ]
+  },
+  {
+   "id": "repo",
+   "type": "backend",
+   "label": "portage-repo",
+   "sublabel": "resolver, merge order",
+   "sources": [
+    {
+     "path": "crates/portage-repo"
+    }
+   ]
+  },
+  {
+   "id": "profile",
+   "type": "backend",
+   "label": "portage-profile",
+   "sublabel": "profile + make.conf",
+   "sources": [
+    {
+     "path": "crates/portage-profile"
+    }
+   ]
+  },
+  {
+   "id": "vdb",
+   "type": "database",
+   "label": "portage-vdb",
+   "sublabel": "installed DB backends",
+   "sources": [
+    {
+     "path": "crates/portage-vdb"
+    }
+   ]
+  },
+  {
+   "id": "fetch",
+   "type": "cloud",
+   "label": "portage-fetch",
+   "sublabel": "SRC_URI + Manifest",
+   "sources": [
+    {
+     "path": "crates/portage-fetch"
+    }
+   ]
+  },
+  {
+   "id": "dep",
+   "type": "backend",
+   "label": "portage-dep",
+   "sublabel": "atoms",
+   "sources": [
+    {
+     "path": "crates/portage-dep"
+    }
+   ]
+  },
+  {
+   "id": "reduce",
+   "type": "backend",
+   "label": "portage-use-reduce",
+   "sublabel": "USE-conditional deps",
+   "sources": [
+    {
+     "path": "crates/portage-use-reduce"
+    }
+   ]
+  },
+  {
+   "id": "reqs",
+   "type": "backend",
+   "label": "portage-required-use",
+   "sublabel": "REQUIRED_USE",
+   "sources": [
+    {
+     "path": "crates/portage-required-use"
+    }
+   ]
+  },
+  {
+   "id": "versions",
+   "type": "backend",
+   "label": "portage-versions",
+   "sublabel": "vercmp",
+   "sources": [
+    {
+     "path": "crates/portage-versions"
+    }
+   ]
+  },
+  {
+   "id": "util",
+   "type": "backend",
+   "label": "portage-util",
+   "sublabel": "fs helpers",
+   "sources": [
+    {
+     "path": "crates/portage-util"
+    }
+   ]
+  },
+  {
+   "id": "solver",
+   "type": "external",
+   "label": "Pinned solver crates",
+   "sublabel": "portage-solver, -atom"
+  }
+ ],
+ "connections": [
+  {
+   "id": "user-portuale",
+   "from": "user",
+   "to": "portuale",
+   "label": "argv[0] picks applet",
+   "variant": "emphasis"
+  },
+  {
+   "id": "portuale-mrg_director",
+   "from": "portuale",
+   "to": "mrg_director",
+   "label": "mrg front end"
+  },
+  {
+   "id": "portuale-repo",
+   "from": "portuale",
+   "to": "repo",
+   "label": "resolve + order",
+   "variant": "emphasis"
+  },
+  {
+   "id": "portuale-world",
+   "from": "portuale",
+   "to": "world"
+  },
+  {
+   "id": "mrg_director-repo",
+   "from": "mrg_director",
+   "to": "repo"
+  },
+  {
+   "id": "world-repo",
+   "from": "world",
+   "to": "repo"
+  },
+  {
+   "id": "world-vdb",
+   "from": "world",
+   "to": "vdb"
+  },
+  {
+   "id": "repo-vdb",
+   "from": "repo",
+   "to": "vdb"
+  },
+  {
+   "id": "repo-profile",
+   "from": "repo",
+   "to": "profile"
+  },
+  {
+   "id": "repo-fetch",
+   "from": "repo",
+   "to": "fetch"
+  },
+  {
+   "id": "repo-reduce",
+   "from": "repo",
+   "to": "reduce"
+  },
+  {
+   "id": "repo-reqs",
+   "from": "repo",
+   "to": "reqs"
+  },
+  {
+   "id": "repo-dep",
+   "from": "repo",
+   "to": "dep"
+  },
+  {
+   "id": "repo-solver",
+   "from": "repo",
+   "to": "solver",
+   "label": "pubgrub bridge",
+   "variant": "dashed"
+  },
+  {
+   "id": "profile-dep",
+   "from": "profile",
+   "to": "dep"
+  },
+  {
+   "id": "dep-versions",
+   "from": "dep",
+   "to": "versions"
+  },
+  {
+   "id": "vdb-util",
+   "from": "vdb",
+   "to": "util"
+  },
+  {
+   "id": "fetch-util",
+   "from": "fetch",
+   "to": "util"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "How to read it",
+   "items": [
+    "An arrow A to B means crate A lists B under [dependencies]",
+    "Dependencies flow upward toward the portuale binary",
+    "Drawn edges omit portuale's direct links to vdb, fetch, profile, dep, use-reduce, required-use, versions and util"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Left out",
+   "items": [
+    "Four neutral CLI harnesses and harness-common wrap the leaf crates for tests",
+    "experiment-tree-diagram builds only with -p; it uses dep and world",
+    "portage-world appears in Cargo.toml but not in docs/architecture.md's crate map"
+   ]
+  }
+ ]
+}

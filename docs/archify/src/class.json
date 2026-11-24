@@ -1,0 +1,348 @@
+{
+ "schema_version": 1,
+ "diagram_type": "class",
+ "meta": {
+  "title": "mrg-director slots",
+  "output": "docs/archify/class.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
+  },
+  "subtitle": "Four of eight slots shown; Resolver, Fetcher, BinpkgIndex and NewsSelector are held the same way."
+ },
+ "layout": {
+  "mode": "grid"
+ },
+ "types": [
+  {
+   "id": "director",
+   "label": "Director",
+   "kind": "class",
+   "sublabel": "Holds one of each slot",
+   "row": 0,
+   "col": 1.5,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 949
+    }
+   ],
+   "attributes": [
+    {
+     "name": "solver",
+     "type": "S",
+     "visibility": "public"
+    },
+    {
+     "name": "packages_db",
+     "type": "D",
+     "visibility": "public"
+    },
+    {
+     "name": "repo_cache",
+     "type": "C",
+     "visibility": "public"
+    },
+    {
+     "name": "merge_engine",
+     "type": "M",
+     "visibility": "public"
+    },
+    {
+     "name": "scheduler_policy",
+     "type": "P",
+     "visibility": "public"
+    }
+   ],
+   "methods": [
+    {
+     "name": "plan",
+     "returns": "GraphResult",
+     "visibility": "public"
+    }
+   ]
+  },
+  {
+   "id": "pkgdb",
+   "label": "PackagesDb",
+   "kind": "interface",
+   "sublabel": "Installed packages",
+   "row": 1,
+   "col": 0,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 60
+    }
+   ],
+   "methods": [
+    {
+     "name": "installed_versions",
+     "returns": "Vec<String>",
+     "visibility": "public"
+    },
+    {
+     "name": "contents_files",
+     "returns": "Vec<String>",
+     "visibility": "public"
+    }
+   ]
+  },
+  {
+   "id": "rcache",
+   "label": "RepoCache",
+   "kind": "interface",
+   "sublabel": "Metadata cache",
+   "row": 1,
+   "col": 1,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 91
+    }
+   ],
+   "methods": [
+    {
+     "name": "metadata",
+     "returns": "aux dict",
+     "visibility": "public"
+    }
+   ]
+  },
+  {
+   "id": "engine",
+   "label": "MergeEngine",
+   "kind": "interface",
+   "sublabel": "Copy and install",
+   "row": 1,
+   "col": 2,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 275
+    }
+   ],
+   "methods": [
+    {
+     "name": "execute",
+     "returns": "MergeOutcome",
+     "visibility": "public"
+    }
+   ]
+  },
+  {
+   "id": "policy",
+   "label": "SchedulerPolicy",
+   "kind": "interface",
+   "sublabel": "-jN dispatch",
+   "row": 1,
+   "col": 3,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 402
+    }
+   ],
+   "methods": [
+    {
+     "name": "should_start",
+     "returns": "bool",
+     "visibility": "public"
+    },
+    {
+     "name": "max_jobs",
+     "returns": "usize",
+     "visibility": "public"
+    }
+   ]
+  },
+  {
+   "id": "vdbr",
+   "label": "VdbReader",
+   "kind": "class",
+   "sublabel": "Filesystem /var/db/pkg",
+   "row": 2,
+   "col": 0,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 419
+    }
+   ]
+  },
+  {
+   "id": "memdb",
+   "label": "MemoryDb",
+   "kind": "class",
+   "sublabel": "In memory",
+   "row": 3,
+   "col": 0,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 464
+    }
+   ]
+  },
+  {
+   "id": "md5c",
+   "label": "Md5Cache",
+   "kind": "class",
+   "sublabel": "Flat md5-cache file",
+   "row": 2,
+   "col": 1,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 575
+    }
+   ]
+  },
+  {
+   "id": "volc",
+   "label": "VolatileCache",
+   "kind": "class",
+   "sublabel": "In memory",
+   "row": 3,
+   "col": 1,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 655
+    }
+   ]
+  },
+  {
+   "id": "srce",
+   "label": "SourceMergeEngine",
+   "kind": "class",
+   "sublabel": "Ebuild build + merge",
+   "row": 2,
+   "col": 2,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 285
+    }
+   ]
+  },
+  {
+   "id": "bine",
+   "label": "BinaryMergeEngine",
+   "kind": "class",
+   "sublabel": "Binary package merge",
+   "row": 3,
+   "col": 2,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 306
+    }
+   ]
+  },
+  {
+   "id": "load",
+   "label": "LoadAwarePolicy",
+   "kind": "class",
+   "sublabel": "--jobs=N with load limit",
+   "row": 2,
+   "col": 3,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 879
+    }
+   ]
+  },
+  {
+   "id": "unl",
+   "label": "UnlimitedPolicy",
+   "kind": "class",
+   "sublabel": "Bare -j",
+   "row": 3,
+   "col": 3,
+   "sources": [
+    {
+     "path": "crates/mrg-director/src/lib.rs",
+     "line": 918
+    }
+   ]
+  }
+ ],
+ "relationships": [
+  {
+   "id": "d_db",
+   "from": "director",
+   "to": "pkgdb",
+   "kind": "aggregation"
+  },
+  {
+   "id": "d_rc",
+   "from": "director",
+   "to": "rcache",
+   "kind": "aggregation"
+  },
+  {
+   "id": "d_me",
+   "from": "director",
+   "to": "engine",
+   "kind": "aggregation"
+  },
+  {
+   "id": "d_sp",
+   "from": "director",
+   "to": "policy",
+   "kind": "aggregation"
+  },
+  {
+   "id": "vdbr_pkgdb",
+   "from": "vdbr",
+   "to": "pkgdb",
+   "kind": "realization"
+  },
+  {
+   "id": "memdb_pkgdb",
+   "from": "memdb",
+   "to": "pkgdb",
+   "kind": "realization"
+  },
+  {
+   "id": "md5c_rcache",
+   "from": "md5c",
+   "to": "rcache",
+   "kind": "realization"
+  },
+  {
+   "id": "volc_rcache",
+   "from": "volc",
+   "to": "rcache",
+   "kind": "realization"
+  },
+  {
+   "id": "srce_engine",
+   "from": "srce",
+   "to": "engine",
+   "kind": "realization"
+  },
+  {
+   "id": "bine_engine",
+   "from": "bine",
+   "to": "engine",
+   "kind": "realization"
+  },
+  {
+   "id": "load_policy",
+   "from": "load",
+   "to": "policy",
+   "kind": "realization"
+  },
+  {
+   "id": "unl_policy",
+   "from": "unl",
+   "to": "policy",
+   "kind": "realization"
+  }
+ ]
+}

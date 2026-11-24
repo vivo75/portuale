@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "71536b76-d508-40fe-9eb0-09ad63b63f55",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/sequence.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/sequence.html",
+  "specification": {
+    "sha256": "dbccde8ba9a2b6d09b83c7ad3791c1d772487dc6828a7c337f5c99ef898fd102",
+    "bytes": 4380
+  },
+  "artifact": {
+    "sha256": "0c1439f1de5189a2bdf5631fb0f32e97fbf522f476516a8d9bf8e58a32621555",
+    "bytes": 933787
+  }
+}
