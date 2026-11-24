@@ -9,6 +9,7 @@ mod buildpkgonly;
 mod entry_env;
 mod failure;
 mod fetchonly;
+mod installed_bridge;
 mod logs;
 mod merge_wait;
 mod pretend_pass;

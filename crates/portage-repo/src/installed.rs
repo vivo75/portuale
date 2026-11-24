@@ -664,6 +664,35 @@ pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Optio
     Some(flat.into_iter().filter(|t| t != "||").collect())
 }
 
+/// The `(category, package)` of every non-blocker atom in the installed `RDEPEND` and
+/// `PDEPEND` of each installed version of `category/package`, flattened against that
+/// version's recorded `USE`. Empty when nothing is installed. Sorted, deduplicated.
+// Portage: depgraph.py, _add_pkg_deps (installed packages' edges in the complete graph)
+pub fn installed_runtime_dep_cps(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String)> {
+    let mut out = std::collections::BTreeSet::new();
+    for version in installed_versions(root, category, package) {
+        let use_flags = read_vdb_flag_set(root, category, package, &version, "USE");
+        for key in ["RDEPEND", "PDEPEND"] {
+            let depstr = vdb_aux_get(root, category, package, &version, key);
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                if let Some(atom) = portage_dep::parse_atom(&atom_str)
+                    && atom.blocker == portage_dep::Blocker::None
+                {
+                    out.insert((atom.category, atom.package));
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// The `(category, package)` of every atom `virtual/libc`'s installed `RDEPEND` names
 /// (flattened against its installed `USE`) -- empty when `virtual/libc` isn't installed. One
 /// level only. Used by `deps_changed` to strip libc noise, and by `inject_libc_dep` for providers.
