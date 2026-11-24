@@ -132,6 +132,7 @@ mod bootstrap_merge;
 mod buildpkgonly;
 mod entries;
 mod entry_env;
+mod installed_bridge;
 mod logs;
 mod merge_wait;
 mod resume;

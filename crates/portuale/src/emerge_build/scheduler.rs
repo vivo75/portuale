@@ -881,6 +881,14 @@ pub(crate) fn run_build_scheduler(
         }
         deps
     };
+    // Add the order edges that run through installed packages, except where
+    // they would close a cycle the plan itself does not have.
+    let mut deps = deps;
+    for (i, j) in super::installed_bridge::installed_bridge_edges(entries, root) {
+        if !super::installed_bridge::reaches(&deps, j, i) {
+            deps[i].insert(j);
+        }
+    }
     // Inside a cycle post-merge edges do not gate a build; everything
     // else dispatches exactly as before.
     // Portage: _emerge/Scheduler.py, _find_cyclic_nodes
