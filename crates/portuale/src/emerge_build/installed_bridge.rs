@@ -35,6 +35,11 @@ pub(crate) fn installed_bridge_edges(entries: &[GraphEntry], root: &Path) -> Vec
     // One installed package's own runtime deps never change within a pass.
     let mut memo: HashMap<Cp, Vec<Cp>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
+        // An entry with nothing to build counts as merged from the start: an edge
+        // from it gates nothing and could only crowd out a real one.
+        if !super::scheduler_needs_build(e) {
+            continue;
+        }
         let mut seen: HashSet<Cp> = HashSet::new();
         let mut stack: Vec<Cp> = e
             .deps
