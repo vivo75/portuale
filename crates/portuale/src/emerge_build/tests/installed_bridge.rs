@@ -95,6 +95,22 @@ fn no_bridge_edge_where_the_plan_already_names_the_dependency() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// An entry with nothing to build counts as merged from the start, so it gets no
+/// edge even when its installed dependency reaches a plan entry.
+#[test]
+fn no_bridge_edge_from_an_entry_with_nothing_to_build() {
+    let root = tempdir();
+    installed(&root, "dev-libs/mid-1.0", "dev-libs/lib");
+    let mut app = new("app");
+    app.deps = vec![edge("dev-libs", "mid")];
+    app.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let entries = vec![app, new("lib")];
+    assert!(installed_bridge::installed_bridge_edges(&entries, &root).is_empty());
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn reaches_follows_edges_transitively() {
     let deps: Vec<HashSet<usize>> = vec![HashSet::from([1]), HashSet::from([2]), HashSet::new()];

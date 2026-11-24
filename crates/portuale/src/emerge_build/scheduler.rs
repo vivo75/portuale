@@ -883,10 +883,13 @@ pub(crate) fn run_build_scheduler(
     };
     // Add the order edges that run through installed packages, except where
     // they would close a cycle the plan itself does not have.
+    // A bridge dependency that fails or is skipped leaves its old version
+    // installed, so it releases the dependent instead of stranding it.
     let mut deps = deps;
+    let mut bridged: HashSet<(usize, usize)> = HashSet::new();
     for (i, j) in super::installed_bridge::installed_bridge_edges(entries, root) {
-        if !super::installed_bridge::reaches(&deps, j, i) {
-            deps[i].insert(j);
+        if !super::installed_bridge::reaches(&deps, j, i) && deps[i].insert(j) {
+            bridged.insert((i, j));
         }
     }
     // Inside a cycle post-merge edges do not gate a build; everything
@@ -1073,7 +1076,11 @@ pub(crate) fn run_build_scheduler(
                             && !started.contains(&i)
                             && !skip.contains(&i)
                             && !merged.contains(&i)
-                            && blocking[i].iter().all(|d| merged.contains(d))
+                            && blocking[i].iter().all(|&d| {
+                                merged.contains(&d)
+                                    || (bridged.contains(&(i, d))
+                                        && (gone.contains(&d) || skip.contains(&d)))
+                            })
                     });
                     let Some(idx) = next else { break };
                     started.insert(idx);
