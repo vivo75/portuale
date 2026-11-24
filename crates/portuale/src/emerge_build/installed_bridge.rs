@@ -18,8 +18,14 @@ type Cp = (String, String);
 /// runtime dependencies of every package an entry names but the plan does not
 /// contain. The walk stops at the first plan entry on each path.
 pub(crate) fn installed_bridge_edges(entries: &[GraphEntry], root: &Path) -> Vec<(usize, usize)> {
+    // Only entries that will be built are targets: one the plan merely lists as
+    // already installed (`kate-lib` for `kate`) is walked through like any
+    // installed package.
     let mut in_plan: HashMap<Cp, Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
+        if !super::scheduler_needs_build(e) {
+            continue;
+        }
         in_plan
             .entry((e.category.clone(), e.package.clone()))
             .or_default()

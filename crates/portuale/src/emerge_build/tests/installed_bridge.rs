@@ -62,6 +62,26 @@ fn a_plan_entry_waits_for_a_plan_entry_its_installed_dependency_needs() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// `kate` names `kate-lib`, which the plan lists as already installed (nothing to
+/// build); the walk goes through it to the `lib` the plan does build.
+#[test]
+fn the_walk_goes_through_an_entry_the_plan_lists_as_already_installed() {
+    let root = tempdir();
+    installed(&root, "dev-libs/mid-1.0", "dev-libs/lib");
+    let mut app = new("app");
+    app.deps = vec![edge("dev-libs", "mid")];
+    let mut mid = new("mid");
+    mid.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let entries = vec![app, mid, new("lib")];
+    assert_eq!(
+        installed_bridge::installed_bridge_edges(&entries, &root),
+        vec![(0, 2)]
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// A dependency the plan itself contains is already an edge, and an entry with no
 /// installed dependency in its way gets none.
 #[test]
