@@ -252,8 +252,48 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
         .collect();
     // Stable ascending length sort, so equal-length choices keep
     // version-desc order.
-    choices.sort_by_key(|c| c.parents.len());
+    // A built `:S/SS=` atom opposing a choice is healed by rebuilding its consumer,
+    // not by keeping the old version, so it weighs half a plain atom. Portage
+    // counts every atom alike; the half weight only breaks the ties that sent
+    // the walk into a long cascade (#799) and leaves a clear majority alone.
+    choices.sort_by_key(|c| conflict_rank(&c.parents));
     choices
+}
+
+/// A choice's weight for the ascending ranking: 2 per opposing atom, 1 for a built
+/// `:S/SS=` one.
+fn conflict_rank(parents: &[((String, String, String), String)]) -> usize {
+    parents
+        .iter()
+        .map(|(_, atom)| {
+            let built =
+                parse_dep_atom(atom, "mask_choice_rank").is_some_and(|a| is_built_slot_op(&a));
+            if built { 1 } else { 2 }
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod rank_tests {
+    use super::conflict_rank;
+
+    fn p(atom: &str) -> ((String, String, String), String) {
+        (("a".into(), "b".into(), "1".into()), atom.into())
+    }
+
+    /// #799: three installed consumers' built atoms weigh less than two plain
+    /// atoms, so the version the plan's own packages want is not masked first.
+    #[test]
+    fn built_slot_operator_atoms_weigh_half() {
+        let built = [
+            p("dev-qt/qtbase:6/6.11.3="),
+            p("dev-qt/qtbase:6/6.11.3="),
+            p("dev-qt/qtbase:6/6.11.3="),
+        ];
+        let plain = [p("~dev-qt/qtbase-6.12.1:6"), p("~dev-qt/qtbase-6.12.1:6")];
+        assert_eq!(conflict_rank(&built), 3);
+        assert_eq!(conflict_rank(&plain), 4);
+    }
 }
 
 /// One pass's outcome in `_backtrack_depgraph` terms. Every variant carries
