@@ -300,6 +300,9 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
                 if counts && restarts >= u64::from(ctx.backtrack_max) {
                     break;
                 }
+                if counts && std::env::var_os("PORTUALE_TRACE_RESTARTS").is_some() {
+                    eprintln!("restart {}: {}", restarts + 1, describe_feedback(&kind));
+                }
                 bt.feedback(kind);
                 if counts {
                     restarts += 1;
@@ -763,6 +766,39 @@ struct BlockerConflictOpts {
 // Portage: depgraph.py, _accept_blocker_conflicts
 fn accept_blocker_conflicts(backtrack_max: u32, opts: BlockerConflictOpts) -> bool {
     backtrack_max == 0 && (opts.buildpkgonly || opts.nodeps || opts.fetchonly || opts.fetch_all_uri)
+}
+
+/// One line for `PORTUALE_TRACE_RESTARTS`: why a restart was taken.
+fn describe_feedback(kind: &BacktrackFeedback) -> String {
+    match kind {
+        BacktrackFeedback::Config { .. } => "config".into(),
+        BacktrackFeedback::RevDep { .. } => "reverse-dependency pin".into(),
+        BacktrackFeedback::Circular { .. } => "circular dependency".into(),
+        BacktrackFeedback::SlotConflict { choices, .. } => format!(
+            "slot conflict: mask {}",
+            choices
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}/{}-{} (opposed by {}: {})",
+                        c.target.0,
+                        c.target.1,
+                        c.target.2,
+                        c.parents.len(),
+                        c.parents
+                            .iter()
+                            .map(|(p, a)| format!("{}/{}-{} wants {a}", p.0, p.1, p.2))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        BacktrackFeedback::MissingDep { owner, .. } => {
+            format!("missing dependency of {}/{}", owner.0, owner.1)
+        }
+    }
 }
 
 #[cfg(test)]
