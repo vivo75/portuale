@@ -475,6 +475,19 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     };
 
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    // The packages a dependency atom requires. An atom naming a slot (or an
+    // exact version) requires what it matches; an atom without a slot is met by
+    // one package, the highest version, so an older slot nobody names stays
+    // removable (Portage's depclean resolves such an atom to one package).
+    let required_by = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let mut found = matches_atom(atom_str);
+        let unslotted = portage_dep::parse_atom(atom_str).is_some_and(|a| a.slot.is_none());
+        if unslotted && found.len() > 1 {
+            found.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
+            found.drain(..found.len() - 1);
+        }
+        found
+    };
     let matched_by_args = |p: &InstalledPackage| -> bool {
         let cs = p.match_str(root);
         args.iter().any(|a| {
@@ -510,7 +523,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         if pprovided_matches(atom_str, package_provided) {
             continue;
         }
-        for p in matches_atom(atom_str) {
+        for p in required_by(atom_str) {
             parent_atoms
                 .entry(key(p))
                 .or_default()
@@ -574,7 +587,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
                 if pprovided_matches(atom_str, package_provided) {
                     continue;
                 }
-                for dep in matches_atom(atom_str) {
+                for dep in required_by(atom_str) {
                     parent_atoms
                         .entry(key(dep))
                         .or_default()
