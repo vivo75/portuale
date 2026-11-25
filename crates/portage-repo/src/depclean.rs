@@ -5,7 +5,8 @@ use crate::*;
 /// Portage `emerge --depclean`'s removal list (`_calc_depclean` +
 /// `create_cleanlist`): every installed package NOT reachable, over the
 /// installed dependency graph (vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`,
-/// flattened against vdb `USE`, every `||` branch kept), from the required
+/// flattened against vdb `USE`; a `||` group adds its first installed arm, and
+/// nothing when a required package already satisfies an arm), from the required
 /// roots. Roots, `args`-mode and lib-check details: see `DepcleanCleanlistArgs`.
 ///
 /// **Narrowings** (Portage runs the full `depgraph` in "remove" mode):
@@ -39,6 +40,101 @@ pub struct DepcleanResult {
     pub unreadable: Vec<(String, String)>,
 }
 
+/// One `||` group of a walked package whose arm is not chosen yet: `parent` is
+/// the package's cpv, `arms` the atoms of each arm in ebuild order.
+struct PendingAnyOf {
+    parent: String,
+    arms: Vec<Vec<String>>,
+}
+
+/// A dependency string with USE applied, split into the atoms every
+/// installation needs and its `||` groups (each a list of arms).
+struct AnyOfSplit {
+    plain: HashSet<String>,
+    groups: Vec<Vec<Vec<String>>>,
+}
+
+/// Splits `depstr` into plain atoms and `||` groups, keeping each arm apart so
+/// a caller can keep one arm instead of all of them. An arm that is itself a
+/// group or holds a nested `||` contributes all its atoms. `None` when
+/// `depstr` does not parse.
+fn split_any_of(depstr: &str, use_flags: &HashSet<String>) -> Option<AnyOfSplit> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let reduced = portage_use_reduce::use_reduce_structured(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    let mut pos = 0;
+    let mut out = AnyOfSplit {
+        plain: HashSet::new(),
+        groups: Vec::new(),
+    };
+    parse_dep_level(&reduced, &mut pos, &mut out)?;
+    (pos == reduced.len()).then_some(out)
+}
+
+/// Consumes one `( ... )` or `|| ( ... )` item and returns every atom in it.
+fn take_flat_atoms(tokens: &[String], pos: &mut usize) -> Option<Vec<String>> {
+    let mut depth = 0usize;
+    let mut atoms = Vec::new();
+    loop {
+        let tok = tokens.get(*pos)?;
+        *pos += 1;
+        match tok.as_str() {
+            "(" => depth += 1,
+            ")" => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(atoms);
+                }
+            }
+            "||" => {}
+            _ => atoms.push(tok.clone()),
+        }
+    }
+}
+
+/// Reads tokens up to the closing `)` of the current level (or the end).
+fn parse_dep_level(tokens: &[String], pos: &mut usize, out: &mut AnyOfSplit) -> Option<()> {
+    while let Some(tok) = tokens.get(*pos) {
+        match tok.as_str() {
+            ")" => return Some(()),
+            "(" => {
+                *pos += 1;
+                parse_dep_level(tokens, pos, out)?;
+                (tokens.get(*pos)?.as_str() == ")").then_some(())?;
+                *pos += 1;
+            }
+            "||" => {
+                *pos += 1;
+                (tokens.get(*pos)?.as_str() == "(").then_some(())?;
+                *pos += 1;
+                let mut arms: Vec<Vec<String>> = Vec::new();
+                while tokens.get(*pos)?.as_str() != ")" {
+                    if tokens[*pos] == "(" || tokens[*pos] == "||" {
+                        arms.push(take_flat_atoms(tokens, pos)?);
+                    } else {
+                        arms.push(vec![tokens[*pos].clone()]);
+                        *pos += 1;
+                    }
+                }
+                *pos += 1;
+                arms.retain(|arm| !arm.is_empty());
+                if !arms.is_empty() {
+                    out.groups.push(arms);
+                }
+            }
+            _ => {
+                out.plain.insert(tok.clone());
+                *pos += 1;
+            }
+        }
+    }
+    Some(())
+}
+
 /// `_parent_atoms` of the depclean walk: child key -> `(parent cpv or set label, atom)`.
 type ParentAtoms = HashMap<(String, String, String), Vec<(String, String)>>;
 
@@ -59,8 +155,8 @@ pub struct CycleSuggestion {
 /// Each edge carries its `*DEPEND` key's `UnmergeDepPriority` (higher = harder;
 /// `RDEPEND` bumps to -1 for a `slot_operator_built` atom, bug 916135). Cycles
 /// break via the `ignore_priority_range` scan, popping just the cpv-max node.
-/// One narrowing: `flat_dep_atoms` keeps every `||` branch (Portage resolves
-/// to one), adding extra ordering edges -- the conservative direction.
+/// One narrowing: `flat_dep_atoms` keeps every `||` branch (the walk above
+/// keeps one), adding extra ordering edges -- the conservative direction.
 pub(crate) fn topological_removal_order(
     root: &Path,
     cleanlist: Vec<InstalledPackage>,
@@ -449,31 +545,91 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             queue.push(p.clone());
         }
     }
-    while let Some(p) = queue.pop() {
-        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
-        let parent_cpv = p.cpv();
-        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
-            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
-            if depstr.trim().is_empty() {
-                continue;
-            }
-            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
-                unreadable.push((parent_cpv.clone(), dep_key.to_string()));
-                continue;
-            };
-            for atom_str in atoms {
-                // `package.provided`: satisfied without adding a graph edge to the
-                // installed provider (Portage dep_check intercept).
-                if pprovided_matches(&atom_str, package_provided) {
+    // `||` groups wait in `pending` until the closure of the plain atoms is
+    // known: a group already satisfied by a required package adds nothing.
+    let mut pending: Vec<PendingAnyOf> = Vec::new();
+    loop {
+        while let Some(p) = queue.pop() {
+            let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+            let parent_cpv = p.cpv();
+            for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
+                let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+                if depstr.trim().is_empty() {
                     continue;
                 }
-                for dep in matches_atom(&atom_str) {
-                    parent_atoms
-                        .entry(key(dep))
-                        .or_default()
-                        .push((parent_cpv.clone(), atom_str.clone()));
-                    if reachable.insert(key(dep)) {
-                        queue.push(dep.clone());
+                let Some(split) = split_any_of(&depstr, &use_flags) else {
+                    unreadable.push((parent_cpv.clone(), dep_key.to_string()));
+                    continue;
+                };
+                for atom_str in split.plain {
+                    // `package.provided`: satisfied without adding a graph edge to the
+                    // installed provider (Portage dep_check intercept).
+                    if pprovided_matches(&atom_str, package_provided) {
+                        continue;
+                    }
+                    for dep in matches_atom(&atom_str) {
+                        parent_atoms
+                            .entry(key(dep))
+                            .or_default()
+                            .push((parent_cpv.clone(), atom_str.clone()));
+                        if reachable.insert(key(dep)) {
+                            queue.push(dep.clone());
+                        }
+                    }
+                }
+                for arms in split.groups {
+                    pending.push(PendingAnyOf {
+                        parent: parent_cpv.clone(),
+                        arms,
+                    });
+                }
+            }
+        }
+        if pending.is_empty() {
+            break;
+        }
+        // Settle every group an already-required package satisfies; only when
+        // none is left to settle, make the first group pull in its first arm
+        // that is installed, then walk what that arm needs.
+        let satisfied_by = |atoms: &[String], only_required: bool| -> bool {
+            atoms.iter().all(|a| {
+                a.starts_with('!')
+                    || pprovided_matches(a, package_provided)
+                    || matches_atom(a)
+                        .iter()
+                        .any(|d| !only_required || reachable.contains(&key(d)))
+            })
+        };
+        let before = pending.len();
+        let mut still: Vec<PendingAnyOf> = Vec::new();
+        for group in std::mem::take(&mut pending) {
+            match group.arms.iter().find(|arm| satisfied_by(arm, true)) {
+                Some(arm) => {
+                    for atom_str in arm.iter().filter(|a| !a.starts_with('!')) {
+                        for dep in matches_atom(atom_str) {
+                            parent_atoms
+                                .entry(key(dep))
+                                .or_default()
+                                .push((group.parent.clone(), atom_str.clone()));
+                        }
+                    }
+                }
+                None => still.push(group),
+            }
+        }
+        pending = still;
+        if pending.len() == before && !pending.is_empty() {
+            let group = pending.remove(0);
+            if let Some(arm) = group.arms.iter().find(|arm| satisfied_by(arm, false)) {
+                for atom_str in arm.iter().filter(|a| !a.starts_with('!')) {
+                    for dep in matches_atom(atom_str) {
+                        parent_atoms
+                            .entry(key(dep))
+                            .or_default()
+                            .push((group.parent.clone(), atom_str.clone()));
+                        if reachable.insert(key(dep)) {
+                            queue.push(dep.clone());
+                        }
                     }
                 }
             }
