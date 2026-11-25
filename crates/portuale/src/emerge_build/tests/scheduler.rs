@@ -301,6 +301,77 @@ fn cycle_post_merge_dep_does_not_gate_the_build() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// A rebuild trigger is not a dependency. `schedcycb` (a reinstall caused by
+/// `schedcyca`'s slot-operator change) lists `schedcyca` in its `required_by`
+/// while `schedcyca` has no dependency on it, so the plan has one real edge,
+/// `schedcycb -> schedcyca`. Reading the trigger as a second edge made the two
+/// wait on each other: nothing was built and the run ended with rc 0
+/// (seed-desk run 2026-11-25, `quazip` / `qmapshack`). Property: the build
+/// order of the printed plan holds and every entry of the plan lands.
+#[test]
+fn a_rebuild_trigger_does_not_make_the_dependency_wait_for_its_dependent() {
+    use portage_repo::{DepEdge, DepPriority};
+    let edge = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+        walk_chosen: false,
+    };
+    let new = |package: &str| {
+        source_entry(
+            package,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    let mut lib = new("schedcyca");
+    lib.required_by = vec![("dev-libs".into(), "schedcycb".into())];
+    let mut consumer = new("schedcycb");
+    consumer.deps = vec![edge("schedcyca")];
+    consumer.required_by = vec![("dev-libs".into(), "schedcyca".into())];
+    let entries = vec![lib, consumer];
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let distdir = tempdir();
+    let portage_tmpdir = tempdir();
+    let options = ebuild_merge::MergeOptions {
+        distdir: distdir.path().to_path_buf(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    let display = scheduler_display(2);
+    let policy = mrg_director::LoadAwarePolicy::new(2, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: true,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("both entries merge");
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedcyca-1.0") < vdb_mtime(&root, "dev-libs/schedcycb-1.0"),
+        "the dependency merges before its dependent"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// Each package's pretend block replays whole, in merge-list order.
 #[test]
 fn pkg_pretend_replays_in_merge_list_order() {

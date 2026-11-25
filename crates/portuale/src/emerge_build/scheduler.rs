@@ -855,6 +855,22 @@ pub(crate) fn run_build_scheduler(
                 };
                 if !narrowing {
                     if let Some(&last) = owners.last() {
+                        // A rebuild parent (`required_by` with no `deps` record
+                        // on the owner) of an entry that itself names the owner
+                        // is the owner's rebuild trigger, not a dependency:
+                        // keeping the edge would make the two wait on each
+                        // other forever.
+                        let d_names_owner = d
+                            .deps
+                            .iter()
+                            .any(|e| (e.category.clone(), e.package.clone()) == *r_cp);
+                        let owner_names_d = entries[last]
+                            .deps
+                            .iter()
+                            .any(|e| e.category == d.category && e.package == d.package);
+                        if !owner_names_d && d_names_owner {
+                            continue;
+                        }
                         deps[last].insert(d_idx);
                     }
                     continue;
@@ -1243,6 +1259,43 @@ pub(crate) fn run_build_scheduler(
     });
     loop_result?;
 
+    // An entry that never started while nothing failed or was skipped means
+    // the wait graph holds a dependency that can never merge. Saying so beats
+    // finishing with rc 0 and packages missing from the system.
+    let stuck: Vec<String> = (0..n)
+        .filter(|&i| {
+            needs_work(i)
+                && !started.contains(&i)
+                && !skip.contains(&i)
+                && !gone.contains(&i)
+                && !merged.contains(&i)
+        })
+        .map(|i| {
+            let waits: Vec<String> = blocking[i]
+                .iter()
+                .filter(|d| !merged.contains(d))
+                .map(|&d| {
+                    let kind = if bridged.contains(&(i, d)) {
+                        " (installed bridge)"
+                    } else {
+                        ""
+                    };
+                    format!("{}/{}{kind}", entries[d].category, entries[d].package)
+                })
+                .collect();
+            format!(
+                "{}/{} was never started; it waits on {}",
+                entries[i].category,
+                entries[i].package,
+                if waits.is_empty() {
+                    "nothing (not dispatched)".to_string()
+                } else {
+                    waits.join(", ")
+                }
+            )
+        })
+        .collect();
+
     // The resumed pass: whatever never ran because a dependency failed is
     // dropped with a notice.
     // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
@@ -1271,6 +1324,18 @@ pub(crate) fn run_build_scheduler(
             atoms.dedup();
             ledger.dropped(&report, &entries[i], &atoms);
         }
+    }
+    if !stuck.is_empty() && skip.is_empty() {
+        // `finish` only reports recorded failures; this is none, so say it here.
+        let message = format!(
+            "emerge: the merge list cannot proceed:\n{}",
+            stuck.join("\n")
+        );
+        eprintln!("{message}");
+        return Err(MergePassError {
+            message,
+            report: pass_report,
+        });
     }
     let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
     match ledger.finish(&report, keep_going, first) {
