@@ -5,8 +5,8 @@ use crate::*;
 /// Portage `emerge --depclean`'s removal list (`_calc_depclean` +
 /// `create_cleanlist`): every installed package NOT reachable, over the
 /// installed dependency graph (vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`,
-/// flattened against vdb `USE`; a `||` group adds its first installed arm, and
-/// nothing when a required package already satisfies an arm), from the required
+/// flattened against vdb `USE`; a `||` group adds its first installed arm
+/// only), from the required
 /// roots. Roots, `args`-mode and lib-check details: see `DepcleanCleanlistArgs`.
 ///
 /// **Narrowings** (Portage runs the full `depgraph` in "remove" mode):
@@ -38,13 +38,6 @@ pub struct DepcleanResult {
     /// string could not be parsed. Its dependencies are unknown, so everything
     /// only it keeps would look removable: the caller halts, removing nothing.
     pub unreadable: Vec<(String, String)>,
-}
-
-/// One `||` group of a walked package whose arm is not chosen yet: `parent` is
-/// the package's cpv, `arms` the atoms of each arm in ebuild order.
-struct PendingAnyOf {
-    parent: String,
-    arms: Vec<Vec<String>>,
 }
 
 /// A dependency string with USE applied, split into the atoms every
@@ -545,91 +538,49 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             queue.push(p.clone());
         }
     }
-    // `||` groups wait in `pending` until the closure of the plain atoms is
-    // known: a group already satisfied by a required package adds nothing.
-    let mut pending: Vec<PendingAnyOf> = Vec::new();
-    loop {
-        while let Some(p) = queue.pop() {
-            let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
-            let parent_cpv = p.cpv();
-            for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
-                let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
-                if depstr.trim().is_empty() {
+    // A `||` group keeps its first arm that installed packages satisfy, as
+    // Portage's `dep_zapdeps` does for the installed tree; later arms are not
+    // required by it.
+    while let Some(p) = queue.pop() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let parent_cpv = p.cpv();
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(split) = split_any_of(&depstr, &use_flags) else {
+                unreadable.push((parent_cpv.clone(), dep_key.to_string()));
+                continue;
+            };
+            let satisfied = |atoms: &[String]| -> bool {
+                atoms.iter().all(|a| {
+                    a.starts_with('!')
+                        || pprovided_matches(a, package_provided)
+                        || !matches_atom(a).is_empty()
+                })
+            };
+            let chosen_arms = split
+                .groups
+                .iter()
+                .filter_map(|arms| arms.iter().find(|arm| satisfied(arm)));
+            let atoms = split
+                .plain
+                .iter()
+                .chain(chosen_arms.flatten().filter(|a| !a.starts_with('!')));
+            for atom_str in atoms {
+                // `package.provided`: satisfied without adding a graph edge to the
+                // installed provider (Portage dep_check intercept).
+                if pprovided_matches(atom_str, package_provided) {
                     continue;
                 }
-                let Some(split) = split_any_of(&depstr, &use_flags) else {
-                    unreadable.push((parent_cpv.clone(), dep_key.to_string()));
-                    continue;
-                };
-                for atom_str in split.plain {
-                    // `package.provided`: satisfied without adding a graph edge to the
-                    // installed provider (Portage dep_check intercept).
-                    if pprovided_matches(&atom_str, package_provided) {
-                        continue;
-                    }
-                    for dep in matches_atom(&atom_str) {
-                        parent_atoms
-                            .entry(key(dep))
-                            .or_default()
-                            .push((parent_cpv.clone(), atom_str.clone()));
-                        if reachable.insert(key(dep)) {
-                            queue.push(dep.clone());
-                        }
-                    }
-                }
-                for arms in split.groups {
-                    pending.push(PendingAnyOf {
-                        parent: parent_cpv.clone(),
-                        arms,
-                    });
-                }
-            }
-        }
-        if pending.is_empty() {
-            break;
-        }
-        // Settle every group an already-required package satisfies; only when
-        // none is left to settle, make the first group pull in its first arm
-        // that is installed, then walk what that arm needs.
-        let satisfied_by = |atoms: &[String], only_required: bool| -> bool {
-            atoms.iter().all(|a| {
-                a.starts_with('!')
-                    || pprovided_matches(a, package_provided)
-                    || matches_atom(a)
-                        .iter()
-                        .any(|d| !only_required || reachable.contains(&key(d)))
-            })
-        };
-        let before = pending.len();
-        let mut still: Vec<PendingAnyOf> = Vec::new();
-        for group in std::mem::take(&mut pending) {
-            match group.arms.iter().find(|arm| satisfied_by(arm, true)) {
-                Some(arm) => {
-                    for atom_str in arm.iter().filter(|a| !a.starts_with('!')) {
-                        for dep in matches_atom(atom_str) {
-                            parent_atoms
-                                .entry(key(dep))
-                                .or_default()
-                                .push((group.parent.clone(), atom_str.clone()));
-                        }
-                    }
-                }
-                None => still.push(group),
-            }
-        }
-        pending = still;
-        if pending.len() == before && !pending.is_empty() {
-            let group = pending.remove(0);
-            if let Some(arm) = group.arms.iter().find(|arm| satisfied_by(arm, false)) {
-                for atom_str in arm.iter().filter(|a| !a.starts_with('!')) {
-                    for dep in matches_atom(atom_str) {
-                        parent_atoms
-                            .entry(key(dep))
-                            .or_default()
-                            .push((group.parent.clone(), atom_str.clone()));
-                        if reachable.insert(key(dep)) {
-                            queue.push(dep.clone());
-                        }
+                for dep in matches_atom(atom_str) {
+                    parent_atoms
+                        .entry(key(dep))
+                        .or_default()
+                        .push((parent_cpv.clone(), atom_str.clone()));
+                    if reachable.insert(key(dep)) {
+                        queue.push(dep.clone());
                     }
                 }
             }

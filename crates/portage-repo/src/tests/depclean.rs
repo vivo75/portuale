@@ -1015,18 +1015,37 @@ fn dc_cleanlist(root: &std::path::Path, world: &[&str]) -> Vec<String> {
 
 /// Charter: a clean system (depclean removes what nothing needs) with the
 /// requirement itself intact (every `||` group keeps one satisfied arm).
-/// Shape of the `virtual/wine` case seen on seed-desk 2026-11-25: Portage
-/// resolves the group to one arm; the other installed arm is not required.
+/// Shape of the `virtual/wine` case seen on seed-desk 2026-11-25: Portage keeps
+/// the first installed arm (`wine-staging`), the later installed arm is not required.
 #[test]
-fn depclean_cleanlist_an_any_of_group_already_satisfied_does_not_keep_the_other_arm() {
+fn depclean_cleanlist_an_any_of_group_keeps_its_first_installed_arm_not_the_later_ones() {
     let root = masters_test_root("depclean-anyof-satisfied");
     install_dc_pkg(&root, "dcvirt", "|| ( dev-libs/dcfirst dev-libs/dcsecond )");
     install_dc_pkg(&root, "dcfirst", "");
     install_dc_pkg(&root, "dcsecond", "dev-libs/dcsecondlib");
     install_dc_pkg(&root, "dcsecondlib", "");
-    // dcsecond is also in the world, so it is required whatever the group does.
-    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt", "dev-libs/dcsecond"]);
-    assert_eq!(clean, vec!["dev-libs/dcfirst-1.0".to_string()]);
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt"]);
+    assert_eq!(
+        clean,
+        vec![
+            "dev-libs/dcsecond-1.0".to_string(),
+            "dev-libs/dcsecondlib-1.0".to_string()
+        ]
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// seed-desk 2026-11-25: `virtual/man` held `man-db` although another arm
+/// (`mandoc`) was required elsewhere; Portage keeps the first arm, so does depclean.
+#[test]
+fn depclean_cleanlist_an_any_of_arm_is_kept_even_when_a_later_arm_is_required_elsewhere() {
+    let root = masters_test_root("depclean-anyof-first-wins");
+    install_dc_pkg(&root, "dcvirt", "|| ( dev-libs/dcmandb dev-libs/dcmandoc )");
+    install_dc_pkg(&root, "dcmandb", "dev-libs/dcpipeline");
+    install_dc_pkg(&root, "dcpipeline", "");
+    install_dc_pkg(&root, "dcmandoc", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt", "dev-libs/dcmandoc"]);
+    assert!(clean.is_empty(), "{clean:?}");
     std::fs::remove_dir_all(&root).ok();
 }
 
