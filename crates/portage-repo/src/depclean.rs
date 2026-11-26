@@ -5,7 +5,8 @@ use crate::*;
 /// Portage `emerge --depclean`'s removal list (`_calc_depclean` +
 /// `create_cleanlist`): every installed package NOT reachable, over the
 /// installed dependency graph (vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`,
-/// flattened against vdb `USE`, every `||` branch kept), from the required
+/// flattened against vdb `USE`; a `||` group adds its first installed arm
+/// only), from the required
 /// roots. Roots, `args`-mode and lib-check details: see `DepcleanCleanlistArgs`.
 ///
 /// **Narrowings** (Portage runs the full `depgraph` in "remove" mode):
@@ -39,6 +40,94 @@ pub struct DepcleanResult {
     pub unreadable: Vec<(String, String)>,
 }
 
+/// A dependency string with USE applied, split into the atoms every
+/// installation needs and its `||` groups (each a list of arms).
+struct AnyOfSplit {
+    plain: HashSet<String>,
+    groups: Vec<Vec<Vec<String>>>,
+}
+
+/// Splits `depstr` into plain atoms and `||` groups, keeping each arm apart so
+/// a caller can keep one arm instead of all of them. An arm that is itself a
+/// group or holds a nested `||` contributes all its atoms. `None` when
+/// `depstr` does not parse.
+fn split_any_of(depstr: &str, use_flags: &HashSet<String>) -> Option<AnyOfSplit> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let reduced = portage_use_reduce::use_reduce_structured(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    let mut pos = 0;
+    let mut out = AnyOfSplit {
+        plain: HashSet::new(),
+        groups: Vec::new(),
+    };
+    parse_dep_level(&reduced, &mut pos, &mut out)?;
+    (pos == reduced.len()).then_some(out)
+}
+
+/// Consumes one `( ... )` or `|| ( ... )` item and returns every atom in it.
+fn take_flat_atoms(tokens: &[String], pos: &mut usize) -> Option<Vec<String>> {
+    let mut depth = 0usize;
+    let mut atoms = Vec::new();
+    loop {
+        let tok = tokens.get(*pos)?;
+        *pos += 1;
+        match tok.as_str() {
+            "(" => depth += 1,
+            ")" => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(atoms);
+                }
+            }
+            "||" => {}
+            _ => atoms.push(tok.clone()),
+        }
+    }
+}
+
+/// Reads tokens up to the closing `)` of the current level (or the end).
+fn parse_dep_level(tokens: &[String], pos: &mut usize, out: &mut AnyOfSplit) -> Option<()> {
+    while let Some(tok) = tokens.get(*pos) {
+        match tok.as_str() {
+            ")" => return Some(()),
+            "(" => {
+                *pos += 1;
+                parse_dep_level(tokens, pos, out)?;
+                (tokens.get(*pos)?.as_str() == ")").then_some(())?;
+                *pos += 1;
+            }
+            "||" => {
+                *pos += 1;
+                (tokens.get(*pos)?.as_str() == "(").then_some(())?;
+                *pos += 1;
+                let mut arms: Vec<Vec<String>> = Vec::new();
+                while tokens.get(*pos)?.as_str() != ")" {
+                    if tokens[*pos] == "(" || tokens[*pos] == "||" {
+                        arms.push(take_flat_atoms(tokens, pos)?);
+                    } else {
+                        arms.push(vec![tokens[*pos].clone()]);
+                        *pos += 1;
+                    }
+                }
+                *pos += 1;
+                arms.retain(|arm| !arm.is_empty());
+                if !arms.is_empty() {
+                    out.groups.push(arms);
+                }
+            }
+            _ => {
+                out.plain.insert(tok.clone());
+                *pos += 1;
+            }
+        }
+    }
+    Some(())
+}
+
 /// `_parent_atoms` of the depclean walk: child key -> `(parent cpv or set label, atom)`.
 type ParentAtoms = HashMap<(String, String, String), Vec<(String, String)>>;
 
@@ -59,8 +148,8 @@ pub struct CycleSuggestion {
 /// Each edge carries its `*DEPEND` key's `UnmergeDepPriority` (higher = harder;
 /// `RDEPEND` bumps to -1 for a `slot_operator_built` atom, bug 916135). Cycles
 /// break via the `ignore_priority_range` scan, popping just the cpv-max node.
-/// One narrowing: `flat_dep_atoms` keeps every `||` branch (Portage resolves
-/// to one), adding extra ordering edges -- the conservative direction.
+/// One narrowing: `flat_dep_atoms` keeps every `||` branch (the walk above
+/// keeps one), adding extra ordering edges -- the conservative direction.
 pub(crate) fn topological_removal_order(
     root: &Path,
     cleanlist: Vec<InstalledPackage>,
@@ -386,6 +475,19 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     };
 
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    // The packages a dependency atom requires. An atom naming a slot (or an
+    // exact version) requires what it matches; an atom without a slot is met by
+    // one package, the highest version, so an older slot nobody names stays
+    // removable (Portage's depclean resolves such an atom to one package).
+    let required_by = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let mut found = matches_atom(atom_str);
+        let unslotted = portage_dep::parse_atom(atom_str).is_some_and(|a| a.slot.is_none());
+        if unslotted && found.len() > 1 {
+            found.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
+            found.drain(..found.len() - 1);
+        }
+        found
+    };
     let matched_by_args = |p: &InstalledPackage| -> bool {
         let cs = p.match_str(root);
         args.iter().any(|a| {
@@ -421,7 +523,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         if pprovided_matches(atom_str, package_provided) {
             continue;
         }
-        for p in matches_atom(atom_str) {
+        for p in required_by(atom_str) {
             parent_atoms
                 .entry(key(p))
                 .or_default()
@@ -449,6 +551,9 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             queue.push(p.clone());
         }
     }
+    // A `||` group keeps its first arm that installed packages satisfy, as
+    // Portage's `dep_zapdeps` does for the installed tree; later arms are not
+    // required by it.
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
         let parent_cpv = p.cpv();
@@ -457,17 +562,32 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             if depstr.trim().is_empty() {
                 continue;
             }
-            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+            let Some(split) = split_any_of(&depstr, &use_flags) else {
                 unreadable.push((parent_cpv.clone(), dep_key.to_string()));
                 continue;
             };
+            let satisfied = |atoms: &[String]| -> bool {
+                atoms.iter().all(|a| {
+                    a.starts_with('!')
+                        || pprovided_matches(a, package_provided)
+                        || !matches_atom(a).is_empty()
+                })
+            };
+            let chosen_arms = split
+                .groups
+                .iter()
+                .filter_map(|arms| arms.iter().find(|arm| satisfied(arm)));
+            let atoms = split
+                .plain
+                .iter()
+                .chain(chosen_arms.flatten().filter(|a| !a.starts_with('!')));
             for atom_str in atoms {
                 // `package.provided`: satisfied without adding a graph edge to the
                 // installed provider (Portage dep_check intercept).
-                if pprovided_matches(&atom_str, package_provided) {
+                if pprovided_matches(atom_str, package_provided) {
                     continue;
                 }
-                for dep in matches_atom(&atom_str) {
+                for dep in required_by(atom_str) {
                     parent_atoms
                         .entry(key(dep))
                         .or_default()

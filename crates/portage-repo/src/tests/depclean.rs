@@ -983,3 +983,157 @@ fn depclean_cleanlist_reports_a_package_whose_dependencies_cannot_be_read() {
         vec![("dev-libs/worldpkg-1.0".to_string(), "RDEPEND".to_string())]
     );
 }
+
+/// Installs `dev-libs/<name>-1.0` with the given `RDEPEND` into `root`.
+fn install_dc_pkg(root: &std::path::Path, name: &str, rdepend: &str) {
+    let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    if !rdepend.is_empty() {
+        std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+    }
+}
+
+fn dc_cleanlist(root: &std::path::Path, world: &[&str]) -> Vec<String> {
+    let seeds: Vec<(String, String)> = world
+        .iter()
+        .map(|a| (a.to_string(), "@selected".to_string()))
+        .collect();
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root,
+        world_seeds: &seeds,
+        system_atoms: &[],
+        profile_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    result.cleanlist.iter().map(|p| p.cpv()).collect()
+}
+
+/// Charter: a clean system (depclean removes what nothing needs) with the
+/// requirement itself intact (every `||` group keeps one satisfied arm).
+/// Shape of the `virtual/wine` case seen on seed-desk 2026-11-25: Portage keeps
+/// the first installed arm (`wine-staging`), the later installed arm is not required.
+#[test]
+fn depclean_cleanlist_an_any_of_group_keeps_its_first_installed_arm_not_the_later_ones() {
+    let root = masters_test_root("depclean-anyof-satisfied");
+    install_dc_pkg(&root, "dcvirt", "|| ( dev-libs/dcfirst dev-libs/dcsecond )");
+    install_dc_pkg(&root, "dcfirst", "");
+    install_dc_pkg(&root, "dcsecond", "dev-libs/dcsecondlib");
+    install_dc_pkg(&root, "dcsecondlib", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt"]);
+    assert_eq!(
+        clean,
+        vec![
+            "dev-libs/dcsecond-1.0".to_string(),
+            "dev-libs/dcsecondlib-1.0".to_string()
+        ]
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// seed-desk 2026-11-25: `virtual/man` held `man-db` although another arm
+/// (`mandoc`) was required elsewhere; Portage keeps the first arm, so does depclean.
+#[test]
+fn depclean_cleanlist_an_any_of_arm_is_kept_even_when_a_later_arm_is_required_elsewhere() {
+    let root = masters_test_root("depclean-anyof-first-wins");
+    install_dc_pkg(&root, "dcvirt", "|| ( dev-libs/dcmandb dev-libs/dcmandoc )");
+    install_dc_pkg(&root, "dcmandb", "dev-libs/dcpipeline");
+    install_dc_pkg(&root, "dcpipeline", "");
+    install_dc_pkg(&root, "dcmandoc", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt", "dev-libs/dcmandoc"]);
+    assert!(clean.is_empty(), "{clean:?}");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn depclean_cleanlist_an_any_of_group_nothing_satisfies_keeps_the_first_installed_arm_only() {
+    let root = masters_test_root("depclean-anyof-first");
+    install_dc_pkg(
+        &root,
+        "dcvirt",
+        "|| ( dev-libs/dcabsent ( dev-libs/dcfirst dev-libs/dcfirstlib ) dev-libs/dcsecond )",
+    );
+    install_dc_pkg(&root, "dcfirst", "");
+    install_dc_pkg(&root, "dcfirstlib", "");
+    install_dc_pkg(&root, "dcsecond", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt"]);
+    assert_eq!(clean, vec!["dev-libs/dcsecond-1.0".to_string()]);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn depclean_cleanlist_an_any_of_group_chain_keeps_what_the_chosen_arm_needs() {
+    let root = masters_test_root("depclean-anyof-chain");
+    install_dc_pkg(&root, "dcvirt", "|| ( dev-libs/dcone dev-libs/dctwo )");
+    install_dc_pkg(&root, "dcone", "|| ( dev-libs/dcdeep dev-libs/dcother )");
+    install_dc_pkg(&root, "dctwo", "");
+    install_dc_pkg(&root, "dcdeep", "");
+    install_dc_pkg(&root, "dcother", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcvirt"]);
+    assert_eq!(
+        clean,
+        vec![
+            "dev-libs/dcother-1.0".to_string(),
+            "dev-libs/dctwo-1.0".to_string()
+        ]
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+fn install_dc_slot(root: &std::path::Path, name: &str, version: &str, slot: &str, rdepend: &str) {
+    let d = root
+        .join("var/db/pkg/dev-libs")
+        .join(format!("{name}-{version}"));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+    if !rdepend.is_empty() {
+        std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+    }
+}
+
+/// Owner rule 2026-11-25 (seed-desk `wine-proton`: world atom `wine-proton`,
+/// slots 11.0.2e and 11.0.3 installed, Portage removes the older): an atom
+/// without a slot is met by one package, the highest version.
+#[test]
+fn depclean_cleanlist_an_unslotted_atom_keeps_only_the_highest_version() {
+    let root = masters_test_root("depclean-unslotted-highest");
+    install_dc_slot(&root, "dca", "1", "1", "");
+    install_dc_slot(&root, "dca", "2", "2", "");
+    install_dc_slot(&root, "dcdep", "1", "0", "dev-libs/dca dev-libs/dcalib");
+    install_dc_slot(&root, "dcalib", "1", "0", "");
+    let clean = dc_cleanlist(&root, &["dev-libs/dca", "dev-libs/dcdep"]);
+    assert_eq!(clean, vec!["dev-libs/dca-1".to_string()]);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Two slots stay only when something names each slot: b -> a:1, c -> a:2.
+#[test]
+fn depclean_cleanlist_keeps_two_slots_when_each_is_named_by_a_package() {
+    let root = masters_test_root("depclean-two-slots-named");
+    install_dc_slot(&root, "dca", "1", "1", "");
+    install_dc_slot(&root, "dca", "2", "2", "");
+    install_dc_slot(&root, "dcb", "1", "0", "dev-libs/dca:1");
+    install_dc_slot(&root, "dcc", "1", "0", "dev-libs/dca:2");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcb", "dev-libs/dcc"]);
+    assert!(clean.is_empty(), "{clean:?}");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Only c names a slot: a:1 is not kept by an unslotted atom elsewhere.
+#[test]
+fn depclean_cleanlist_an_unslotted_atom_does_not_keep_the_older_slot_when_only_the_newer_is_named()
+{
+    let root = masters_test_root("depclean-slot-one-named");
+    install_dc_slot(&root, "dca", "1", "1", "");
+    install_dc_slot(&root, "dca", "2", "2", "");
+    install_dc_slot(&root, "dcb", "1", "0", "dev-libs/dca");
+    install_dc_slot(&root, "dcc", "1", "0", "dev-libs/dca:2");
+    let clean = dc_cleanlist(&root, &["dev-libs/dcb", "dev-libs/dcc"]);
+    assert_eq!(clean, vec!["dev-libs/dca-1".to_string()]);
+    std::fs::remove_dir_all(&root).ok();
+}
