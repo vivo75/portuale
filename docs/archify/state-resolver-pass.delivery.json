@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "8c622537-6312-4d2f-b1ec-d08c01d4983b",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-resolver-pass.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-resolver-pass.html",
+  "specification": {
+    "sha256": "2eaaa3e44b9401de6f40442672a8ae1faf9c4580e5829c81134fd94c9906c72e",
+    "bytes": 4684
+  },
+  "artifact": {
+    "sha256": "afe350242244c93b5dea1d111a182f859fac2f75e86627164fe24f69bff3b2e2",
+    "bytes": 936847
+  }
+}

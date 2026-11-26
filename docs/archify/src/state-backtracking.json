@@ -1,0 +1,202 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Backtracking search",
+  "subtitle": "Driver loop over mask and config choices",
+  "output": "docs/archify/state-backtracking.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "root",
+  "pass",
+  "decision",
+  "settled"
+ ],
+ "states": [
+  {
+   "id": "root",
+   "type": "start",
+   "label": "Root node",
+   "sublabel": "initial params",
+   "tag": "DFS",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/backtracker.rs",
+     "line": 94
+    }
+   ]
+  },
+  {
+   "id": "pass",
+   "type": "active",
+   "label": "Pass",
+   "sublabel": "run_pass on one node",
+   "tag": "walk",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/driver.rs",
+     "line": 79
+    }
+   ]
+  },
+  {
+   "id": "decision",
+   "type": "decision",
+   "label": "Decision",
+   "sublabel": "Settle, Feedback, DeadEnd",
+   "tag": "collect",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/driver.rs",
+     "line": 224
+    }
+   ]
+  },
+  {
+   "id": "feedback",
+   "type": "active",
+   "label": "Feedback",
+   "sublabel": "child nodes added",
+   "tag": "guards",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/backtracker.rs",
+     "line": 110
+    }
+   ]
+  },
+  {
+   "id": "stack",
+   "type": "waiting",
+   "label": "Unexplored",
+   "sublabel": "DFS stack",
+   "tag": "queued",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/backtracker.rs",
+     "line": 143
+    }
+   ]
+  },
+  {
+   "id": "fallback",
+   "type": "active",
+   "label": "Best-run fallback",
+   "sublabel": "deepest terminal node",
+   "tag": "budget",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/driver.rs",
+     "line": 313
+    }
+   ]
+  },
+  {
+   "id": "settled",
+   "type": "success",
+   "label": "Settled",
+   "sublabel": "result assembled",
+   "tag": "terminal"
+  },
+  {
+   "id": "error",
+   "type": "failure",
+   "label": "Root pass error",
+   "sublabel": "returned as Err",
+   "tag": "stop",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/driver.rs",
+     "line": 94
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "root-pass",
+   "from": "root",
+   "to": "pass"
+  },
+  {
+   "id": "pass-decision",
+   "from": "pass",
+   "to": "decision",
+   "label": "pass ran"
+  },
+  {
+   "id": "decision-settled",
+   "from": "decision",
+   "to": "settled",
+   "label": "Settle"
+  },
+  {
+   "id": "decision-feedback",
+   "from": "decision",
+   "to": "feedback",
+   "label": "Feedback"
+  },
+  {
+   "id": "feedback-stack",
+   "from": "feedback",
+   "to": "stack",
+   "label": "add_node accepts"
+  },
+  {
+   "id": "stack-pass",
+   "from": "stack",
+   "to": "pass",
+   "label": "pop",
+   "variant": "dashed"
+  },
+  {
+   "id": "decision-fallback",
+   "from": "decision",
+   "to": "fallback",
+   "label": "DeadEnd, budget out"
+  },
+  {
+   "id": "stack-fallback",
+   "from": "stack",
+   "to": "fallback",
+   "label": "stack empty",
+   "variant": "dashed"
+  },
+  {
+   "id": "fallback-settled",
+   "from": "fallback",
+   "to": "settled"
+  },
+  {
+   "id": "pass-error",
+   "from": "pass",
+   "to": "error",
+   "label": "root pass fails",
+   "variant": "security"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Two caps",
+   "items": [
+    "Mask-step cap on node creation: max(1, backtrack_max / 2)",
+    "Restart cap in the driver: restarts >= backtrack_max (default 10)"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Feedback kinds",
+   "items": [
+    "Config, RevDep, Circular add no mask step; SlotConflict and MissingDep add one",
+    "--backtrack=0 settles the root pass, except RevDep which re-runs as a feed pass"
+   ]
+  }
+ ]
+}

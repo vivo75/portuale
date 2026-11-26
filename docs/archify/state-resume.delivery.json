@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "98d221c1-467d-4bf5-ac33-bb438e267525",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-resume.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-resume.html",
+  "specification": {
+    "sha256": "6cb79a260150c3ea292f89fbe8d4be250d0c971e171607f1efcdc20780b4bf9a",
+    "bytes": 3636
+  },
+  "artifact": {
+    "sha256": "ae89d78072c732a82a3d645db3fbf9ae2f7be46c0eb2fc7e002c5d995e66302d",
+    "bytes": 930595
+  }
+}

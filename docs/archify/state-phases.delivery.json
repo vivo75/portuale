@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "201eb3b1-7d76-4e38-bd24-b64cc73c01e8",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-phases.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-phases.html",
+  "specification": {
+    "sha256": "97558a38822bbe929f31ce9d76f7f1edb26c3220a179f1f7dd5da09ed5fb239d",
+    "bytes": 3700
+  },
+  "artifact": {
+    "sha256": "9f909543dfdfb8085b047a6221f716b8d546cee3fc5bebf6c49183e57d38467d",
+    "bytes": 931087
+  }
+}

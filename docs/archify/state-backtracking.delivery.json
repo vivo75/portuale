@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "3dda5f49-368a-4759-acc6-3d10910b9dc2",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-backtracking.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-backtracking.html",
+  "specification": {
+    "sha256": "1a735ee049cee63035b24a37373ba1fd00795a516fb1d8bc62f938de7f328a65",
+    "bytes": 3832
+  },
+  "artifact": {
+    "sha256": "48260b54ff6289feb7895c5acb01fc27c46eefb3302491a503ce07246c42e6e7",
+    "bytes": 932998
+  }
+}

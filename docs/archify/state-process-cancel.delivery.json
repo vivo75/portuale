@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ab2bda3b-94b7-4d79-8afa-aad6bca9a797",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-process-cancel.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-process-cancel.html",
+  "specification": {
+    "sha256": "49d6023ec7fca9ff366aa276cbee72f784aec62d0e77aadb65c5b6f7ca3f37d9",
+    "bytes": 3731
+  },
+  "artifact": {
+    "sha256": "46cddad529e809c0f70d9a733e659d12c257bfac2dec1e642c7c47ef1c90ec2b",
+    "bytes": 930213
+  }
+}

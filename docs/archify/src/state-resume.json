@@ -1,0 +1,193 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Merge-list entry and resume",
+  "subtitle": "State is derived from the saved list and CONTENTS",
+  "output": "docs/archify/state-resume.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "planned",
+  "saved",
+  "merging",
+  "merged"
+ ],
+ "states": [
+  {
+   "id": "planned",
+   "type": "start",
+   "label": "Planned",
+   "sublabel": "in the merge plan",
+   "tag": "entry",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/merge_run.rs",
+     "line": 93
+    }
+   ]
+  },
+  {
+   "id": "saved",
+   "type": "active",
+   "label": "Saved",
+   "sublabel": "in mtimedb resume list",
+   "tag": "persisted",
+   "sources": [
+    {
+     "path": "crates/portuale/src/mtimedb.rs",
+     "line": 903
+    }
+   ]
+  },
+  {
+   "id": "merging",
+   "type": "active",
+   "label": "Merging",
+   "sublabel": "build and merge",
+   "tag": "running",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 215
+    }
+   ]
+  },
+  {
+   "id": "merged",
+   "type": "success",
+   "label": "Merged",
+   "sublabel": "removed from the list",
+   "tag": "terminal",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 250
+    }
+   ]
+  },
+  {
+   "id": "pf",
+   "type": "neutral",
+   "label": "Postinst failed",
+   "sublabel": "landed, kept in list",
+   "tag": "partial",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 259
+    }
+   ]
+  },
+  {
+   "id": "failed",
+   "type": "failure",
+   "label": "Failed",
+   "sublabel": "stays in the saved list",
+   "tag": "stop",
+   "sources": [
+    {
+     "path": "crates/portuale/src/pretend/resume.rs",
+     "line": 64
+    }
+   ]
+  },
+  {
+   "id": "dropped",
+   "type": "neutral",
+   "label": "Dropped",
+   "sublabel": "dependent of a failure",
+   "tag": "keep-going",
+   "sources": [
+    {
+     "path": "crates/portuale/src/emerge_build/source_merge.rs",
+     "line": 276
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "planned-saved",
+   "from": "planned",
+   "to": "saved",
+   "label": "up-front save"
+  },
+  {
+   "id": "saved-merging",
+   "from": "saved",
+   "to": "merging",
+   "label": "merge starts"
+  },
+  {
+   "id": "merging-merged",
+   "from": "merging",
+   "to": "merged",
+   "label": "ok"
+  },
+  {
+   "id": "merging-pf",
+   "from": "merging",
+   "to": "pf",
+   "label": "postinst fails"
+  },
+  {
+   "id": "merging-failed",
+   "from": "merging",
+   "to": "failed",
+   "label": "error",
+   "variant": "security"
+  },
+  {
+   "id": "failed-dropped",
+   "from": "failed",
+   "to": "dropped",
+   "label": "--keep-going",
+   "variant": "dashed"
+  },
+  {
+   "id": "failed-saved",
+   "from": "failed",
+   "to": "saved",
+   "label": "--resume",
+   "variant": "dashed"
+  },
+  {
+   "id": "pf-saved",
+   "from": "pf",
+   "to": "saved",
+   "label": "--resume",
+   "variant": "dashed"
+  },
+  {
+   "id": "dropped-saved",
+   "from": "dropped",
+   "to": "saved",
+   "label": "--resume",
+   "variant": "dashed"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Persistence",
+   "items": [
+    "mtimedb resume and resume_backup; a success removes its own entry",
+    "--resume always runs with keep_going false"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Traps found",
+   "items": [
+    "read_resume_list can promote the backup, so a read writes",
+    "An empty up-front save writes an empty list that does not parse"
+   ]
+  }
+ ]
+}

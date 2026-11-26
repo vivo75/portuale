@@ -1,0 +1,201 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Merge path of one package",
+  "subtitle": "Source merge: image to ROOT, old unmerged, entry published",
+  "output": "docs/archify/state-merge-path.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "built",
+  "prepared",
+  "written",
+  "replaced",
+  "published",
+  "finalised"
+ ],
+ "states": [
+  {
+   "id": "built",
+   "type": "start",
+   "label": "Built",
+   "sublabel": "install done",
+   "tag": "image",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/mod.rs",
+     "line": 185
+    }
+   ]
+  },
+  {
+   "id": "prepared",
+   "type": "active",
+   "label": "Prepared",
+   "sublabel": "instprep, checks",
+   "tag": "checks",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 14
+    }
+   ]
+  },
+  {
+   "id": "written",
+   "type": "active",
+   "label": "Written",
+   "sublabel": "entry + files",
+   "tag": "vdb + ROOT",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 174
+    },
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 202
+    }
+   ]
+  },
+  {
+   "id": "replaced",
+   "type": "active",
+   "label": "Replaced",
+   "sublabel": "old unmerged",
+   "tag": "same slot",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 264
+    }
+   ]
+  },
+  {
+   "id": "published",
+   "type": "active",
+   "label": "Published",
+   "sublabel": "entry live",
+   "tag": "commit",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 280
+    }
+   ]
+  },
+  {
+   "id": "finalised",
+   "type": "success",
+   "label": "Finalised",
+   "sublabel": "env_update, clean",
+   "tag": "terminal",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 381
+    }
+   ]
+  },
+  {
+   "id": "pf",
+   "type": "neutral",
+   "label": "Postinst failed",
+   "sublabel": "merge stays",
+   "tag": "partial",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/after_install.rs",
+     "line": 373
+    }
+   ]
+  },
+  {
+   "id": "failed",
+   "type": "failure",
+   "label": "Failed",
+   "sublabel": "no rollback",
+   "tag": "stop",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_merge/tree.rs",
+     "line": 90
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "built-prepared",
+   "from": "built",
+   "to": "prepared"
+  },
+  {
+   "id": "prepared-written",
+   "from": "prepared",
+   "to": "written",
+   "label": "ok"
+  },
+  {
+   "id": "written-replaced",
+   "from": "written",
+   "to": "replaced"
+  },
+  {
+   "id": "replaced-published",
+   "from": "replaced",
+   "to": "published"
+  },
+  {
+   "id": "published-finalised",
+   "from": "published",
+   "to": "finalised",
+   "label": "ok"
+  },
+  {
+   "id": "published-pf",
+   "from": "published",
+   "to": "pf",
+   "label": "postinst fails"
+  },
+  {
+   "id": "prepared-failed",
+   "from": "prepared",
+   "to": "failed",
+   "label": "abort",
+   "variant": "security"
+  },
+  {
+   "id": "written-failed",
+   "from": "written",
+   "to": "failed",
+   "label": "error",
+   "variant": "security"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Order",
+   "items": [
+    "New image first, old unmerge second; the new entry is renamed live last on the files backend",
+    "Written = -MERGING- entry, preinst, build-info, files on ROOT, CONTENTS sealed; a preinst or write error leaves a pending entry or partial ROOT",
+    "Files are never opened for write: a temp sibling is renamed over the target"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Doc drift",
+   "items": [
+    "SKILL.md says the VDB lock is held for the whole merge; the code locks one counter tick",
+    "Failed states leave a pending entry or partial ROOT; only a manual vdb sweep cleans up"
+   ]
+  }
+ ]
+}

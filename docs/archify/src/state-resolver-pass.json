@@ -1,0 +1,237 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Resolver pass",
+  "subtitle": "One pass over the queue; phase is implicit in queue contents",
+  "output": "docs/archify/state-resolver-pass.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "seeding",
+  "walking",
+  "disjunction",
+  "finish",
+  "result"
+ ],
+ "states": [
+  {
+   "id": "seeding",
+   "type": "start",
+   "label": "Seeding",
+   "sublabel": "args, greedy, rebuild seeds",
+   "tag": "queue",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/seed_queue.rs",
+     "line": 15
+    }
+   ]
+  },
+  {
+   "id": "walking",
+   "type": "active",
+   "label": "Pop and step",
+   "sublabel": "queue, held_blocks",
+   "tag": "loop",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/pop_queue_item.rs",
+     "line": 10
+    }
+   ]
+  },
+  {
+   "id": "outcome",
+   "type": "decision",
+   "label": "Outcome",
+   "sublabel": "resolve, then fallbacks",
+   "tag": "verdict",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/outcome_fallbacks.rs",
+     "line": 119
+    }
+   ]
+  },
+  {
+   "id": "graphed",
+   "type": "active",
+   "label": "Graphed",
+   "sublabel": "slot entry pushed",
+   "tag": "node",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/graph_entry.rs",
+     "line": 151
+    }
+   ]
+  },
+  {
+   "id": "dropped",
+   "type": "neutral",
+   "label": "Dropped or unresolved",
+   "sublabel": "Break: entry recorded or skipped",
+   "tag": "terminal step",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/unresolved_dep.rs",
+     "line": 777
+    }
+   ]
+  },
+  {
+   "id": "disjunction",
+   "type": "active",
+   "label": "|| groups",
+   "sublabel": "queue and held drained",
+   "tag": "deferred",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/mod.rs",
+     "line": 138
+    }
+   ]
+  },
+  {
+   "id": "finish",
+   "type": "active",
+   "label": "Finish",
+   "sublabel": "required_by, slot conflicts, blockers",
+   "tag": "post-walk",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/mod.rs",
+     "line": 187
+    }
+   ]
+  },
+  {
+   "id": "result",
+   "type": "success",
+   "label": "PassResult",
+   "sublabel": "data for the driver",
+   "tag": "terminal",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/assemble_pass.rs",
+     "line": 15
+    }
+   ]
+  },
+  {
+   "id": "error",
+   "type": "failure",
+   "label": "Err",
+   "sublabel": "top-level unsatisfied, REQUIRED_USE",
+   "tag": "abort",
+   "sources": [
+    {
+     "path": "crates/portage-repo/src/resolve/pass/top_level_unsatisfied.rs",
+     "line": 226
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "seeding-walking",
+   "from": "seeding",
+   "to": "walking",
+   "label": "seeds_left set"
+  },
+  {
+   "id": "walking-outcome",
+   "from": "walking",
+   "to": "outcome",
+   "label": "pop"
+  },
+  {
+   "id": "outcome-graphed",
+   "from": "outcome",
+   "to": "graphed",
+   "label": "version chosen"
+  },
+  {
+   "id": "graphed-walking",
+   "from": "graphed",
+   "to": "walking",
+   "label": "deps enqueued",
+   "variant": "dashed"
+  },
+  {
+   "id": "outcome-dropped",
+   "from": "outcome",
+   "to": "dropped",
+   "label": "no version, or Break"
+  },
+  {
+   "id": "dropped-walking",
+   "from": "dropped",
+   "to": "walking",
+   "label": "next item",
+   "variant": "dashed"
+  },
+  {
+   "id": "walking-disjunction",
+   "from": "walking",
+   "to": "disjunction",
+   "label": "drained"
+  },
+  {
+   "id": "disjunction-walking",
+   "from": "disjunction",
+   "to": "walking",
+   "label": "choice queued",
+   "variant": "dashed"
+  },
+  {
+   "id": "disjunction-finish",
+   "from": "disjunction",
+   "to": "finish",
+   "label": "stack empty"
+  },
+  {
+   "id": "finish-result",
+   "from": "finish",
+   "to": "result"
+  },
+  {
+   "id": "outcome-error",
+   "from": "outcome",
+   "to": "error",
+   "label": "top-level NVC",
+   "variant": "security"
+  },
+  {
+   "id": "finish-error",
+   "from": "finish",
+   "to": "error",
+   "label": "REQUIRED_USE",
+   "variant": "security"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "No state enum",
+   "items": [
+    "Phase is carried by which of queue, held_blocks and disjunctive_stack is non-empty",
+    "States here are inferred groupings, not named types"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Break is overloaded",
+   "items": [
+    "Break means both dropped on purpose and fully handled",
+    "The driver, not the pass, decides what re-runs"
+   ]
+  }
+ ]
+}

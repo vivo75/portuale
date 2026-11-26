@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "e8e7ecbb-f3cc-4e7c-8940-d2ff23e42cda",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "/home/vivo/repo/PORTUALE/portuale/docs/archify/src/state-merge-path.json",
+  "output": "/home/vivo/repo/PORTUALE/portuale/docs/archify/state-merge-path.html",
+  "specification": {
+    "sha256": "0d71bae20595980c5d2e7187e368957b5422b729caf75a9f032626214a275390",
+    "bytes": 4049
+  },
+  "artifact": {
+    "sha256": "606755b6a55ec939937b70c95004da108d629493171f8adb2f031a8db51efd5c",
+    "bytes": 929825
+  }
+}

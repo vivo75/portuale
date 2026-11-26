@@ -1,0 +1,186 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Phase process cancellation",
+  "subtitle": "One spawned phase child and the two kill paths",
+  "output": "docs/archify/state-process-cancel.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "unspawned",
+  "spawned",
+  "registered",
+  "waiting",
+  "reaped"
+ ],
+ "states": [
+  {
+   "id": "unspawned",
+   "type": "start",
+   "label": "Not started",
+   "sublabel": "setsid for NewSession",
+   "tag": "child",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 122
+    }
+   ]
+  },
+  {
+   "id": "spawned",
+   "type": "active",
+   "label": "Spawned",
+   "sublabel": "entered in LIVE map",
+   "tag": "signal path",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 141
+    }
+   ]
+  },
+  {
+   "id": "registered",
+   "type": "active",
+   "label": "Registered",
+   "sublabel": "pgids or pids set",
+   "tag": "registry",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 144
+    }
+   ]
+  },
+  {
+   "id": "waiting",
+   "type": "waiting",
+   "label": "Waiting",
+   "sublabel": "child.wait, no timeout",
+   "tag": "blocking",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 164
+    }
+   ]
+  },
+  {
+   "id": "reaped",
+   "type": "success",
+   "label": "Reaped",
+   "sublabel": "removed from both sets",
+   "tag": "terminal",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 166
+    }
+   ]
+  },
+  {
+   "id": "killed",
+   "type": "failure",
+   "label": "SIGTERM sent",
+   "sublabel": "no SIGKILL on either path",
+   "tag": "kill",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/scheduler_registry.rs",
+     "line": 103
+    }
+   ]
+  },
+  {
+   "id": "exited",
+   "type": "neutral",
+   "label": "portuale exits",
+   "sublabel": "128 + signal after 60 s grace",
+   "tag": "signal",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/signal_exit.rs",
+     "line": 125
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "unspawned-spawned",
+   "from": "unspawned",
+   "to": "spawned",
+   "label": "spawn"
+  },
+  {
+   "id": "spawned-registered",
+   "from": "spawned",
+   "to": "registered",
+   "label": "guard present"
+  },
+  {
+   "id": "registered-waiting",
+   "from": "registered",
+   "to": "waiting"
+  },
+  {
+   "id": "waiting-reaped",
+   "from": "waiting",
+   "to": "reaped",
+   "label": "child exits"
+  },
+  {
+   "id": "registered-killed",
+   "from": "registered",
+   "to": "killed",
+   "label": "already terminated",
+   "variant": "security"
+  },
+  {
+   "id": "waiting-killed",
+   "from": "waiting",
+   "to": "killed",
+   "label": "kill",
+   "variant": "security"
+  },
+  {
+   "id": "killed-reaped",
+   "from": "killed",
+   "to": "reaped",
+   "label": "child exits",
+   "variant": "dashed"
+  },
+  {
+   "id": "killed-exited",
+   "from": "killed",
+   "to": "exited",
+   "label": "grace expired",
+   "variant": "dashed"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Two paths",
+   "items": [
+    "Registry: per scheduler call, thread-local, fires on a non-keep-going failure",
+    "Signal watcher: process-wide, fires on SIGINT or SIGTERM, covers every tracked child"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Open",
+   "items": [
+    "terminated is set only on the failure path, never by ^C",
+    "Pid reuse between snapshot and kill was not evaluated"
+   ]
+  }
+ ]
+}

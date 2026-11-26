@@ -1,0 +1,198 @@
+{
+ "schema_version": 3,
+ "diagram_type": "lifecycle",
+ "meta": {
+  "title": "Ebuild phase lifecycle",
+  "subtitle": "One phase of the chain: skip gates, run, stamp",
+  "output": "docs/archify/state-phases.html",
+  "quality_profile": "showcase",
+  "repository": {
+   "url": "git@github.com:vivo75/portuale.git",
+   "link_mode": "local-only",
+   "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
+  }
+ },
+ "mainPath": [
+  "requested",
+  "gate",
+  "running",
+  "stamped",
+  "qa",
+  "done"
+ ],
+ "states": [
+  {
+   "id": "requested",
+   "type": "start",
+   "label": "Requested",
+   "sublabel": "phase C asked for",
+   "tag": "chain",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/mod.rs",
+     "line": 125
+    }
+   ]
+  },
+  {
+   "id": "gate",
+   "type": "decision",
+   "label": "Skip gates",
+   "sublabel": "pretend, no-op, stamp",
+   "tag": "guard",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/commands.rs",
+     "line": 256
+    }
+   ]
+  },
+  {
+   "id": "skipped",
+   "type": "neutral",
+   "label": "Skipped",
+   "sublabel": "no spawn, no stamp write",
+   "tag": "skip",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/stamp_skip.rs",
+     "line": 42
+    }
+   ]
+  },
+  {
+   "id": "running",
+   "type": "active",
+   "label": "Running",
+   "sublabel": "bash __ebuild_main",
+   "tag": "spawn",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/commands.rs",
+     "line": 275
+    }
+   ]
+  },
+  {
+   "id": "stamped",
+   "type": "active",
+   "label": "Stamped",
+   "sublabel": "bash writes .<phase>ed",
+   "tag": "state",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/stamp_skip.rs",
+     "line": 34
+    }
+   ]
+  },
+  {
+   "id": "qa",
+   "type": "active",
+   "label": "Post-install",
+   "sublabel": "QA, metadata, soname deps",
+   "tag": "install only",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/commands.rs",
+     "line": 297
+    }
+   ]
+  },
+  {
+   "id": "done",
+   "type": "success",
+   "label": "Done",
+   "sublabel": "chain complete",
+   "tag": "terminal"
+  },
+  {
+   "id": "failed",
+   "type": "failure",
+   "label": "Failed",
+   "sublabel": "status != 0, chain stops",
+   "tag": "stop",
+   "sources": [
+    {
+     "path": "crates/portuale/src/ebuild_phases/commands.rs",
+     "line": 286
+    }
+   ]
+  }
+ ],
+ "transitions": [
+  {
+   "id": "requested-gate",
+   "from": "requested",
+   "to": "gate"
+  },
+  {
+   "id": "gate-skipped",
+   "from": "gate",
+   "to": "skipped",
+   "label": "pretend / no-op / stamped"
+  },
+  {
+   "id": "skipped-gate",
+   "from": "skipped",
+   "to": "gate",
+   "label": "next phase",
+   "variant": "dashed"
+  },
+  {
+   "id": "gate-running",
+   "from": "gate",
+   "to": "running",
+   "label": "run"
+  },
+  {
+   "id": "running-stamped",
+   "from": "running",
+   "to": "stamped",
+   "label": "ok"
+  },
+  {
+   "id": "running-failed",
+   "from": "running",
+   "to": "failed",
+   "label": "status != 0",
+   "variant": "security"
+  },
+  {
+   "id": "stamped-gate",
+   "from": "stamped",
+   "to": "gate",
+   "label": "next phase",
+   "variant": "dashed"
+  },
+  {
+   "id": "stamped-qa",
+   "from": "stamped",
+   "to": "qa",
+   "label": "ok"
+  },
+  {
+   "id": "qa-done",
+   "from": "qa",
+   "to": "done"
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "Where the state lives",
+   "items": [
+    "Stamp files in the build dir: .unpacked, .configured, .installed ...",
+    "Bash writes them after the phase body; Rust only reads them"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "noauto",
+   "items": [
+    "install ignores its stamp and always re-runs",
+    "elog's EBUILD_PHASES only orders messages; it is not this chain"
+   ]
+  }
+ ]
+}

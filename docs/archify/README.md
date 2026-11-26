@@ -16,3 +16,17 @@ delivery receipt of its HTML.
 | Tree | [tree.html](tree.html) | Repository layout |
 | Timeline | [timeline.html](timeline.html) | History from git commits |
 | Waterfall | [waterfall.html](waterfall.html) | Stage timing of `emerge -puD @world` (illustrative) |
+
+## State-machine diagrams
+
+Six lifecycle diagrams of machines the code implements without naming them,
+generated at commit `2055f4dc`; findings in [../state-machines.md](../state-machines.md).
+
+| File | Shows |
+|---|---|
+| [state-phases.html](state-phases.html) | One ebuild phase: skip gates, run, stamp |
+| [state-backtracking.html](state-backtracking.html) | Backtracking driver loop |
+| [state-resolver-pass.html](state-resolver-pass.html) | One resolver pass over the queue |
+| [state-resume.html](state-resume.html) | Merge-list entry and `--resume` |
+| [state-process-cancel.html](state-process-cancel.html) | One phase child and the two kill paths |
+| [state-merge-path.html](state-merge-path.html) | Merge of one package to a published VDB entry |
