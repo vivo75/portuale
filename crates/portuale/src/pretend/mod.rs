@@ -185,6 +185,7 @@ pub(crate) fn parser_error(message: &str) -> ExitCode {
 const DEFAULT_BACKTRACK_MAX: u32 = 20;
 
 pub fn run(args: &[String]) -> ExitCode {
+    start_resolution_clock();
     if wants_help(args) {
         print_help();
         return ExitCode::SUCCESS;

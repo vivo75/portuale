@@ -384,28 +384,56 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
     }
 }
 
-/// `Dependency resolution took ... (backtrack: B/M).`: only the wall-clock
-/// seconds are coloured in Portage, and portuale cuts them (determinism),
-/// keeping the empty escape pair when colour is on so the structure matches.
-/// `None` is the resume shape: `resume_depgraph` passes no backtrack counts,
-/// so Portage prints no suffix there.
+/// Start of the resolution, set once by [`start_resolution_clock`].
+static RESOLUTION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Marks the moment dependency resolution begins, for the seconds printed by
+/// [`timing_line`]. Later calls keep the first mark.
+pub(crate) fn start_resolution_clock() {
+    RESOLUTION_START.get_or_init(std::time::Instant::now);
+}
+
+/// `Dependency resolution took ... (backtrack: B/M).`: on a terminal the real
+/// seconds are printed (`took 1.33 s`); anywhere else they are cut so the
+/// contract suite stays deterministic, keeping the empty escape pair when
+/// colour is on so the structure matches Portage's. `None` is the resume
+/// shape: `resume_depgraph` passes no backtrack counts, so Portage prints no
+/// suffix there.
 // Portage: _emerge/depgraph.py, _show_resolution_report
 pub(crate) fn timing_line(color: &Colorizer, backtrack: Option<(u64, u32)>) -> String {
+    use std::io::IsTerminal;
+    let seconds = std::io::stdout()
+        .is_terminal()
+        .then(|| RESOLUTION_START.get().map(|t| t.elapsed().as_secs_f64()))
+        .flatten();
+    timing_line_with(color, backtrack, seconds)
+}
+
+/// [`timing_line`] with the elapsed seconds supplied (`None` = cut form).
+pub(crate) fn timing_line_with(
+    color: &Colorizer,
+    backtrack: Option<(u64, u32)>,
+    seconds: Option<f64>,
+) -> String {
+    let value = seconds.map(|s| format!("{s:.2}"));
     if !color.enabled {
-        // The two cut shapes, kept byte-stable: `took .` on the resume
-        // paths, the bare `backtrack: B/M` signal everywhere else.
-        return match backtrack {
-            Some((restarts, max)) => {
+        return match (backtrack, value) {
+            (Some((restarts, max)), None) => {
                 format!("Dependency resolution took (backtrack: {restarts}/{max}).\n\n")
             }
-            None => "Dependency resolution took .\n\n".to_string(),
+            (Some((restarts, max)), Some(v)) => {
+                format!("Dependency resolution took {v} s (backtrack: {restarts}/{max}).\n\n")
+            }
+            (None, None) => "Dependency resolution took .\n\n".to_string(),
+            (None, Some(v)) => format!("Dependency resolution took {v} s.\n\n"),
         };
     }
     let suffix = backtrack.map_or_else(String::new, |(restarts, max)| {
         format!(" (backtrack: {restarts}/{max})")
     });
     let (open, close) = color.wrap_codes("darkgreen");
-    format!("Dependency resolution took {open}{close} s{suffix}.\n\n")
+    let v = value.unwrap_or_default();
+    format!("Dependency resolution took {open}{v}{close} s{suffix}.\n\n")
 }
 
 /// The merge-list preamble and timing report printed on stdout before an

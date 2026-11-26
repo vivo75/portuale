@@ -318,6 +318,36 @@ fn abort_preamble_opens_with_the_banner_blank_line() {
     );
 }
 
+/// Backlog #803: on a terminal the timing line carries the real seconds
+/// (`took 1.33 s`) instead of the cut `took  s` that read as broken; the cut
+/// forms stay for non-terminal runs (the contract suite).
+#[test]
+fn timing_line_prints_seconds_when_given() {
+    let plain = Colorizer::new(false);
+    let colour = Colorizer::new(true);
+    assert_eq!(
+        timing_line_with(&plain, Some((2, 20)), Some(1.334)),
+        "Dependency resolution took 1.33 s (backtrack: 2/20).\n\n"
+    );
+    assert_eq!(
+        timing_line_with(&plain, None, Some(0.5)),
+        "Dependency resolution took 0.50 s.\n\n"
+    );
+    assert_eq!(
+        timing_line_with(&colour, Some((0, 20)), Some(1.33)),
+        "Dependency resolution took \x1b[32m1.33\x1b[39;49;00m s (backtrack: 0/20).\n\n"
+    );
+    // No seconds (not a terminal): the byte-stable cut forms.
+    assert_eq!(
+        timing_line_with(&plain, Some((2, 20)), None),
+        "Dependency resolution took (backtrack: 2/20).\n\n"
+    );
+    assert_eq!(
+        timing_line_with(&plain, None, None),
+        "Dependency resolution took .\n\n"
+    );
+}
+
 /// Backlog #462: a `--pretend` run whose resolve completed with autounmask
 /// changes prints the resolution header before the rows (Portage's
 /// `_show_merge_list` before the change blocks). `--json` keeps stdout
