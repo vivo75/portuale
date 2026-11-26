@@ -1156,7 +1156,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             portage_tmpdir,
             mut merge_options,
         } = merge_setup(opts, entries, config, root);
-        merge_options.world_recorder = world_recorder(root, opts, system_atoms, repos);
+        merge_options.world_recorder = world_recorder(root, opts, entries, system_atoms, repos);
         merge_options.quiet = opts.quiet;
         merge_options.quiet_fail = opts.quiet_fail;
 

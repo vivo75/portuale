@@ -69,6 +69,10 @@ pub(crate) fn world_file_additions(
     repos: &[portage_repo::RepoConfig],
 ) -> Vec<String> {
     let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let entry_cps: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
     let mut added = Vec::new();
 
     for raw in target_atoms {
@@ -76,7 +80,10 @@ pub(crate) fn world_file_additions(
             // A `@set` target belongs in `world_sets`, not `world`.
             continue;
         }
-        let Some(atom) = parse_atom(raw) else {
+        let Some(atom) = parse_atom(raw).or_else(|| match dep_expand_token(raw, &entry_cps) {
+            DepExpand::Qualified(q) => parse_atom(&q),
+            _ => None,
+        }) else {
             continue;
         };
         let Some(entry) = entries
@@ -136,6 +143,7 @@ pub type WorldRecorder = std::sync::Arc<dyn Fn(&GraphEntry) -> Vec<String> + Sen
 pub(crate) fn world_recorder(
     root: &Path,
     opts: &EmergeOpts<'_>,
+    entries: &[GraphEntry],
     system_atoms: &[String],
     repos: &[portage_repo::RepoConfig],
 ) -> Option<WorldRecorder> {
@@ -143,7 +151,18 @@ pub(crate) fn world_recorder(
         return None;
     }
     let root = root.to_path_buf();
-    let target_atoms: Vec<String> = opts.atom_args.iter().map(|a| a.to_string()).collect();
+    let full_cps: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    let target_atoms: Vec<String> = opts
+        .atom_args
+        .iter()
+        .map(|a| match dep_expand_token(a, &full_cps) {
+            DepExpand::Qualified(q) => q,
+            _ => (*a).to_string(),
+        })
+        .collect();
     let system_atoms = system_atoms.to_vec();
     let repos = repos.to_vec();
     Some(std::sync::Arc::new(move |entry: &GraphEntry| {
