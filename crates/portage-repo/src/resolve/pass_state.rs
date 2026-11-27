@@ -5,6 +5,7 @@ use crate::*;
 /// Every per-pass value the decision chain or the tail assembly reads. Built once
 /// per pass from the walk locals; `Feedback` drops it, `Settle` moves it into
 /// `assemble_result` (plus the overlay trio, folded into the node params beforehand).
+#[derive(Clone)]
 pub(crate) struct PassResult {
     pub(crate) entries: Vec<GraphEntry>,
     pub(crate) slot_conflicts: Vec<SlotConflict>,

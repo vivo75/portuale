@@ -375,6 +375,12 @@ fn backtrack_search_inner(
     // the fallback report matches what the best params settle on their own
     // pass. Any other decision re-runs untouched, exactly as before.
     // Portage: _backtrack_depgraph falls back to the best run's own report.
+    // `collect_feedback` mutates the pass it is given, and the fallback below
+    // needs the untouched one: keep a copy instead of walking the graph again.
+    let untouched = pass.clone();
+    if let Some(x) = explore.as_mut() {
+        x.mark("pass_clone");
+    }
     let mut probe = pass;
     let settled: Option<Box<BacktrackParams>> =
         match collect_feedback(rctx, &best, &mut probe, config) {
@@ -395,10 +401,7 @@ fn backtrack_search_inner(
             // already done, so only the report accumulators merge (never
             // `slot_constraints` or new masks).
             // Portage: _backtrack_depgraph falls back to the best run's own report.
-            let naked = run_pass(rctx, &best, false)?;
-            if let Some(x) = explore.as_mut() {
-                x.mark("naked_pass");
-            }
+            let naked = untouched;
             let mut report = best.clone();
             let live_reachable = live_reachable_consumers(rctx, &naked.entries);
             let (enforced, dropped, _, merge_parents) =
