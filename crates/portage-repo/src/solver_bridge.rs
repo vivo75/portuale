@@ -5399,6 +5399,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     // so the round that found its route-less holder is the one that knows them.
     let mut no_route: Vec<super::HeldBackNoRoute> = Vec::new();
     let mut parents: Vec<super::Followers> = Vec::new();
+    let mut rebuilt: Vec<(String, String)> = Vec::new();
     // The last round that solved: a later round that asks for more and fails (an arm the
     // engine cannot merge) keeps its plan instead of aborting the run (#809).
     let mut last: Option<(GraphResult, Vec<String>)> = None;
@@ -5408,7 +5409,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             Err(_) if last.is_some() => {
                 let (mut result, atoms) = last.take().expect("checked");
                 result.held_back_no_route = no_route;
-                name_holder_parents(&mut result, &parents);
+                name_holder_parents(&mut result, &parents, &rebuilt);
                 drop_unrequired_pins(&mut result, &req.atoms, &atoms);
                 return Ok(result);
             }
@@ -5416,6 +5417,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
         };
         no_route.extend(fix.no_route);
         parents.extend(fix.parents);
+        rebuilt.extend(fix.rebuilt);
         let fresh_rebuild: Vec<String> = fix
             .rebuild
             .into_iter()
@@ -5428,7 +5430,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             .collect();
         if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
             result.held_back_no_route = no_route;
-            name_holder_parents(&mut result, &parents);
+            name_holder_parents(&mut result, &parents, &rebuilt);
             drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
             return Ok(result);
         }
@@ -5439,7 +5441,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     }
     resolve_pubgrub_at(req, &opts).map(|(mut result, _, _)| {
         result.held_back_no_route = no_route;
-        name_holder_parents(&mut result, &parents);
+        name_holder_parents(&mut result, &parents, &rebuilt);
         drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
         result
     })
@@ -5467,8 +5469,15 @@ fn drop_unrequired_pins(result: &mut GraphResult, asked: &[String], pins: &[Stri
 
 /// A holder that joins the plan only because its provider moves names that
 /// provider as its parent, so the plan says why it is there (#718, as #713 does
-/// for the default solver).
-fn name_holder_parents(result: &mut GraphResult, parents: &[super::Followers]) {
+/// for the default solver). A holder the plan rebuilds also files the
+/// `(provider, holder)` display pair, so its row is tagged `r` and the provider's
+/// "causes rebuilds for" block lists it, as for a rebuild the slot-operator pass finds
+/// (#780). A pair is kept only while both rows are in the final plan.
+fn name_holder_parents(
+    result: &mut GraphResult,
+    parents: &[super::Followers],
+    rebuilt: &[(String, String)],
+) {
     for entry in &mut result.entries {
         for (holder, provider) in parents {
             if (&entry.category, &entry.package) == (&holder.0, &holder.1)
@@ -5479,6 +5488,26 @@ fn name_holder_parents(result: &mut GraphResult, parents: &[super::Followers]) {
             }
         }
     }
+    let planned = |cpv: &str, reinstall: bool| {
+        result.entries.iter().any(|e| {
+            let name = format!("{}/{}", e.category, e.package);
+            match &e.outcome {
+                PretendOutcome::Reinstall { version, .. } if reinstall => {
+                    format!("{name}-{version}") == cpv
+                }
+                PretendOutcome::Upgrade { to, .. } if !reinstall => format!("{name}-{to}") == cpv,
+                _ => false,
+            }
+        })
+    };
+    let pairs: Vec<_> = rebuilt
+        .iter()
+        .filter(|(provider, holder)| planned(provider, false) && planned(holder, true))
+        .cloned()
+        .collect();
+    result.abi_rebuilds.extend(pairs);
+    result.abi_rebuilds.sort();
+    result.abi_rebuilds.dedup();
 }
 
 /// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
@@ -5730,6 +5759,9 @@ struct HolderFix {
     no_route: Vec<super::HeldBackNoRoute>,
     /// `(holder, provider)` as `(category, package)`: why a holder joins the plan (#718).
     parents: Vec<super::Followers>,
+    /// `(provider_cpv, holder_cpv)` of each holder the plan rebuilds because its provider
+    /// moves: the display pair the slot-operator pass files for a walked consumer (#780).
+    rebuilt: Vec<(String, String)>,
 }
 
 /// Installed packages whose recorded dependency on a package the plan moves no
@@ -5882,6 +5914,10 @@ fn holder_fix(
                 let target = route.expect("every holder has a route");
                 if target == *v {
                     fix.rebuild.push(format!("{c}/{p}-{v}"));
+                    fix.rebuilt.push((
+                        format!("{}/{}-{new_ver}", e.category, e.package),
+                        format!("{c}/{p}-{v}"),
+                    ));
                 } else {
                     fix.atoms.push(format!("={c}/{p}-{target}"));
                 }
@@ -10746,6 +10782,24 @@ mod tests {
             result.stale_pin_refusals.is_empty() && result.held_back_no_route.is_empty(),
             "{:?}",
             result.stale_pin_refusals
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter property 5 (the plan says what causes a rebuild): the holder
+    /// `p808virt-1` is rebuilt because `p569prov` moves to 5.44, so the plan files
+    /// the `(provider, holder)` pair the default solver files, with no deep walk (#780).
+    #[test]
+    fn pg780_bridge_files_the_display_pair_of_a_holder_rebuild() {
+        let (dir, result) = pg773_solve("portage-bridge-pg780-a", "p808virt-1");
+        assert_eq!(
+            result.abi_rebuilds,
+            vec![(
+                "dev-libs/p569prov-5.44".to_string(),
+                "dev-libs/p808virt-1".to_string()
+            )],
+            "{:?}",
+            pg34_plan(&result)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
