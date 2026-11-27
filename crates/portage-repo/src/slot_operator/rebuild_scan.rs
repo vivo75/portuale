@@ -538,6 +538,7 @@ impl StalePinCtx<'_> {
                     atom: tok.clone(),
                     provider: format!("{}/{}-{final_version}", atom.category, atom.package),
                     no_ebuild: false,
+                    tree_pin: false,
                 });
             }
         }
@@ -592,6 +593,7 @@ impl StalePinCtx<'_> {
                         edge.provider_cp.0, edge.provider_cp.1, edge.final_version
                     ),
                     no_ebuild: false,
+                    tree_pin: true,
                 })
             })
         })
@@ -742,6 +744,7 @@ fn stale_pin_for_consumer(
                 edge.provider_cp.0, edge.provider_cp.1, edge.final_version
             ),
             no_ebuild: true,
+            tree_pin: false,
         });
         return;
     }

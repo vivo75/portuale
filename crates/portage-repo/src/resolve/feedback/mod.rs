@@ -20,7 +20,7 @@ pub(crate) use circular_dead_end::*;
 pub use co_upgrade::provider_atoms_accept;
 pub(crate) use co_upgrade::{
     Followers, WithheldProvider, co_upgrade_request, holder_routes, provider_atoms,
-    request_updates, tree_route_atoms,
+    request_updates, tree_follow_atoms, tree_route_atoms,
 };
 pub(crate) use missing_dep::*;
 pub(crate) use no_leaf_restart::*;

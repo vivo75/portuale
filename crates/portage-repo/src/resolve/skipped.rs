@@ -78,6 +78,9 @@ pub struct StalePinRefusal {
     pub provider: String,
     /// The consumer has no ebuild in any repository, so it cannot be rebuilt.
     pub no_ebuild: bool,
+    /// The refusal is the consumer's own tree ebuild rejecting the provider
+    /// (#773), not its recorded dependency: the provider could stay where it is.
+    pub tree_pin: bool,
 }
 
 /// One slot for the abbreviated skipped-update tail: a masked version higher
