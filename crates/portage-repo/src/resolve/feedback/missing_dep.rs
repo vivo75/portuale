@@ -46,6 +46,10 @@ pub(crate) fn step_missing_dep(
                     config,
                     gate: ctx.gate(),
                 });
+            // The other builds of a masked version that bind the owner's unsatisfied
+            // atom the same way fail the same way: mask them in this restart, not
+            // one per restart (#805).
+            let binary_masks = crate::resolve::peel::with_siblings(ctx, config, pass, binary_masks);
             // Portage stops the pass at the first unsatisfied dep its probe
             // cannot heal (`return 0` after recording the missing dependency),
             // so parents behind a trigger that is no hit are never probed.

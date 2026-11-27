@@ -31,6 +31,7 @@ pub(crate) mod par;
 mod pass;
 mod pass_helpers;
 mod pass_state;
+mod peel;
 mod pool_memo;
 mod pretend;
 mod queue;
