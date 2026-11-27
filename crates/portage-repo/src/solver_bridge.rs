@@ -5399,8 +5399,21 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     // so the round that found its route-less holder is the one that knows them.
     let mut no_route: Vec<super::HeldBackNoRoute> = Vec::new();
     let mut parents: Vec<super::Followers> = Vec::new();
+    // The last round that solved: a later round that asks for more and fails (an arm the
+    // engine cannot merge) keeps its plan instead of aborting the run (#809).
+    let mut last: Option<(GraphResult, Vec<String>)> = None;
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
-        let (mut result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
+        let (mut result, stale, fix) = match resolve_pubgrub_at(req, &opts) {
+            Ok(round) => round,
+            Err(_) if last.is_some() => {
+                let (mut result, atoms) = last.take().expect("checked");
+                result.held_back_no_route = no_route;
+                name_holder_parents(&mut result, &parents);
+                drop_unrequired_pins(&mut result, &req.atoms, &atoms);
+                return Ok(result);
+            }
+            Err(e) => return Err(e),
+        };
         no_route.extend(fix.no_route);
         parents.extend(fix.parents);
         let fresh_rebuild: Vec<String> = fix
@@ -5419,6 +5432,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
             return Ok(result);
         }
+        last = Some((result, opts.extra_atoms.clone()));
         opts.masked_binaries.extend(stale);
         opts.extra_rebuild.extend(fresh_rebuild);
         opts.extra_atoms.extend(fresh_atoms);
@@ -5996,7 +6010,17 @@ fn tree_refusal_fix(
             &consumer.version,
             "USE",
         );
-        if let Some(arm) = super::tree_follow_atoms(&texts, &use_flags, &provider, &new) {
+        // An arm naming a package with no version in the tree cannot be merged (#809): the
+        // consumer is then as pinned as if the group had no other arm.
+        let mergeable = |atom: &String| {
+            portage_solver::Dep::parse(atom).is_ok_and(|d| {
+                lazy.load_versions(&format!("{}", d.cpn))
+                    .is_ok_and(|vs| !vs.is_empty())
+            })
+        };
+        if let Some(arm) = super::tree_follow_atoms(&texts, &use_flags, &provider, &new)
+            .filter(|arm| arm.iter().all(mergeable))
+        {
             asks.extend(arm);
             continue;
         }
@@ -10723,6 +10747,23 @@ mod tests {
             "{:?}",
             result.stale_pin_refusals
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter property 5 (a message that is true, no abort): the `||` arm of
+    /// `p809virt-1` that would accept the new provider names `p809missing`,
+    /// which has no version. The arm cannot be merged, so the consumer is as
+    /// pinned as `p573virt-1`: the provider stays and the consumer is named (#809).
+    #[test]
+    fn pg809_bridge_treats_an_unmergeable_arm_as_a_pin() {
+        let (dir, result) = pg773_solve("portage-bridge-pg809-a", "p809virt-1");
+        assert!(
+            !result.entries.iter().any(|e| e.package == "p569prov"
+                && matches!(e.outcome, super::super::PretendOutcome::Upgrade { .. })),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert_eq!(result.held_back_no_route.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

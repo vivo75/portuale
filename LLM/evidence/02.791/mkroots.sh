@@ -73,3 +73,6 @@ vdb dev-libs/p573virt-1 "$BIND"
 # a808: the accepting || arm names a package the plan does not merge (backlog #808)
 mk a808 "dev-libs/p569prov"
 vdb dev-libs/p808virt-1 "$BIND"
+# a809: the accepting || arm names a package that does not exist (backlog #809)
+mk a809 "dev-libs/p569prov"
+vdb dev-libs/p809virt-1 "$BIND"
