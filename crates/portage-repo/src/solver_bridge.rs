@@ -5732,13 +5732,13 @@ fn holder_fix(
     };
     let mut fix = HolderFix::default();
     // Only holders the plan or the world reaches matter, like the default
-    // solver's reverse scan; with no world the plan's own dependencies seed it (#700).
+    // solver's reverse scan. The plan's own dependencies always seed it: a
+    // world atom that is not installed yet reaches nothing installed (#700, #781).
     let mut seeds = req.config.complete_seed_atoms.clone();
-    if seeds.is_empty() {
-        seeds = super::merge_bound_dep_atoms(entries);
-    } else {
+    if !seeds.is_empty() {
         seeds.extend(req.atoms.iter().cloned());
     }
+    seeds.extend(super::merge_bound_dep_atoms(entries));
     seeds.sort();
     seeds.dedup();
     let reachable = crate::slot_operator::InstalledReachability::for_run(&req.root, req.with_bdeps)
@@ -5842,9 +5842,40 @@ fn holder_fix(
             skipped_version: &new_ver,
             holders: &broken,
         });
-        if note.is_some() || !super::request_updates(asked, req.update, &req.deep, &provider) {
-            // A holder cannot follow, or the request does not ask for the provider
-            // (#727): the provider stays where it is.
+        let required = || {
+            entries.iter().any(|m| {
+                let Some(ver) = bound(m) else { return false };
+                let Some(rec) = lazy
+                    .load_versions(&format!("{}/{}", m.category, m.package))
+                    .ok()
+                    .and_then(|vs| vs.into_iter().find(|v| v.version == ver))
+                else {
+                    return false;
+                };
+                let texts: Vec<&str> = keys.iter().map(|k| rec.raw_deps[*k].as_str()).collect();
+                // The USE of the installed instance, when there is one (a new package has none).
+                let use_flags = installed
+                    .iter()
+                    .find(|i| i.category == m.category && i.package == m.package)
+                    .map(|i| {
+                        super::read_vdb_flag_set(
+                            &req.root,
+                            &i.category,
+                            &i.package,
+                            &i.version,
+                            "USE",
+                        )
+                    })
+                    .unwrap_or_default();
+                let atoms = super::tree_route_atoms(&texts, &use_flags, &provider);
+                !atoms.is_empty() && !provider_atoms_accept(&atoms, &old_str)
+            })
+        };
+        if note.is_some()
+            || !(super::request_updates(asked, req.update, &req.deep, &provider) || required())
+        {
+            // A holder cannot follow, or nothing asks for or requires the provider's
+            // move (#727, #781): the provider stays where it is.
             fix.no_route.extend(note);
             fix.atoms
                 .push(format!("={}/{}-{}", e.category, e.package, old.version));

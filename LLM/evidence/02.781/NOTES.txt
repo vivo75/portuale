@@ -1,0 +1,4 @@
+#781 evidence. Branch backlog/781-holder-fix-tree-pin (portuale and pmtest, from main cdb40c8e).
+Scratch: /var/tmp/781/{fx,roots,bin,raw}. probe.sh = LLM/evidence/02.770/probe.sh with the paths renamed.
+Before = LLM/evidence/02.770/after/probes.txt (same product code but #781). After = /var/tmp/781/raw/after3.
+Only probe pull-u/pg changed (rows + NOTE); hashes differ elsewhere only by the root path in the output.

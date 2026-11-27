@@ -1,0 +1,273 @@
+argv: pull-json/df: emerge  --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=4a3dc4fd203412e0a341005deb9e221bd60a264fc1946f2eb84658a6a863efc3 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+
+argv: pull-json/pg: emerge --solver=pubgrub --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=8effb756103b2392f84755f60a0e1d9b3567688aa5e4e1ef7726129d8502d1c8 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+
+argv: pull-uDN/df: emerge  --pretend --verbose --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=a61ebed1f857e4c0f1634c188d65900950b7332c5cde6f49cf0ad54c387b6777 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-uDN/pg: emerge --solver=pubgrub --pretend --verbose --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=8e4ba6f0a9e449aca9f94e7bd4a424806878bbbcd52a35a1f1ff712c03a91015 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-DN/df: emerge  --pretend --verbose --deep --newuse --getbinpkg=n @world
+rc=0 stdout=824ca069e8108cc214109fc53fd7614a0cdbfbf5bc54efd84f0684b2cda3010d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-DN/pg: emerge --solver=pubgrub --pretend --verbose --deep --newuse --getbinpkg=n @world
+rc=0 stdout=e6ad36d19c906e6e921dbf1e9136314ce231b0516e2f4bd1aecd6991a56036b3 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4990
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-D/df: emerge  --pretend --verbose --deep --getbinpkg=n @world
+rc=0 stdout=a9068ccf45c8d36b945e411054b2ee7ad78c9bec35114c85ab128ee9d9d680c5 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/systempkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/nestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/dualslotpkg-2.0:2::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-D/pg: emerge --solver=pubgrub --pretend --verbose --deep --getbinpkg=n @world
+rc=0 stdout=fc151a1162dda62db3d710a890d9e3eef0bb6e91a6403fb67b5e7ea42985ed37 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4978
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/systempkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/nestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/dualslotpkg-2.0:2::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-uD/df: emerge  --pretend --verbose --update --deep --getbinpkg=n @world
+rc=0 stdout=a61ebed1f857e4c0f1634c188d65900950b7332c5cde6f49cf0ad54c387b6777 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-uD/pg: emerge --solver=pubgrub --pretend --verbose --update --deep --getbinpkg=n @world
+rc=0 stdout=8e4ba6f0a9e449aca9f94e7bd4a424806878bbbcd52a35a1f1ff712c03a91015 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4942
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-u/df: emerge  --pretend --verbose --update --getbinpkg=n @world
+rc=0 stdout=824ca069e8108cc214109fc53fd7614a0cdbfbf5bc54efd84f0684b2cda3010d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: pull-u/pg: emerge --solver=pubgrub --pretend --verbose --update --getbinpkg=n @world
+rc=0 stdout=8bed3af195588ed8c6422df38e68444d0aed288f7da418825ff3253d826b646a stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4872
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild   R    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+
+argv: pull-bt0/df: emerge  --pretend --verbose --update --deep --newuse --backtrack=0 --getbinpkg=n @world
+rc=1 stdout=b69c1c659b2574029b6f19100a9a4dff5e581398eeb44c672a456eb8dd4c1d4a stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+    (and 1 more with the same problem)
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+
+argv: pull-bt0/pg: emerge --solver=pubgrub --pretend --verbose --update --deep --newuse --backtrack=0 --getbinpkg=n @world
+rc=0 stdout=d758c20436597c61a882607eff3c43c2bc6510bf5e398f05ab825e0244736bb6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4958
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/pull 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/pull 0 KiB
+NOTE: One or more installed packages keep a stale slot-operator binding that was not rebuilt:
+  dev-libs/p573virt-1: its dependency =dev-libs/p569prov-5.42* is not satisfied by dev-libs/p569prov-5.44
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/pull')
+
+argv: tree-uD-pull/df: emerge  --pretend --verbose --update --deep --getbinpkg=n dev-libs/p569pull
+rc=0 stdout=0b06a58ad772446dac562e4415a5514bd0768954e98d5374721f040196ce3ec6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-uD-pull/pg: emerge --solver=pubgrub --pretend --verbose --update --deep --getbinpkg=n dev-libs/p569pull
+rc=0 stdout=8a6d8ea940e3b6a43dee1abedd8b36ba32f6cd860b911d6104b64d3b9fa2a4d9 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4808
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-D-pull/df: emerge  --pretend --verbose --deep --getbinpkg=n dev-libs/p569pull
+rc=0 stdout=0b06a58ad772446dac562e4415a5514bd0768954e98d5374721f040196ce3ec6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-D-pull/pg: emerge --solver=pubgrub --pretend --verbose --deep --getbinpkg=n dev-libs/p569pull
+rc=0 stdout=8a6d8ea940e3b6a43dee1abedd8b36ba32f6cd860b911d6104b64d3b9fa2a4d9 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4848
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-uD-bpull/df: emerge  --pretend --verbose --update --deep --getbinpkg=n dev-libs/p589bpull
+rc=0 stdout=ca4adb1cecfd0ac33d38cd716fb8a496da8f4d6a84cf8b94af44fa53b6830db4 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  r  U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bpull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-uD-bpull/pg: emerge --solver=pubgrub --pretend --verbose --update --deep --getbinpkg=n dev-libs/p589bpull
+rc=0 stdout=5138c1a4288687cf540bb039adf86c75d3da28860540cfc73ba048605e5a2457 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4808
+[ebuild     U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bpull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-D-bpull/df: emerge  --pretend --verbose --deep --getbinpkg=n dev-libs/p589bpull
+rc=0 stdout=ca4adb1cecfd0ac33d38cd716fb8a496da8f4d6a84cf8b94af44fa53b6830db4 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+[ebuild  r  U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bpull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: tree-D-bpull/pg: emerge --solver=pubgrub --pretend --verbose --deep --getbinpkg=n dev-libs/p589bpull
+rc=0 stdout=5138c1a4288687cf540bb039adf86c75d3da28860540cfc73ba048605e5a2457 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=4848
+[ebuild     U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to /var/tmp/781/roots/ctl 0 KiB
+[ebuild  N     ] dev-libs/p589bpull-2::testrepo to /var/tmp/781/roots/ctl 0 KiB
+  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl') causes rebuilds for:
+    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/781/roots/ctl')
+
+argv: ctl-json/df: emerge  --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=a48bddb5815b1bb07b311b2cae59fd35d9cc9a733031274b59c5307304edc05c stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+
+argv: ctl-json/pg: emerge --solver=pubgrub --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=a29a4a61f0fcada3355e13470334e7fa1a9c593e5037f973e0adecb1259d767d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=2668
+
+argv: prov-json/df: emerge  --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=5f5d336a7ef091ad18d45c5ae579873c31768eadc4db778f13ed020bd6c845e6 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+
+argv: prov-json/pg: emerge --solver=pubgrub --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=8584d31b61a7eff336ee83d2c8b14d1277e3a380ed0793b25d900c360d583f2b stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=2676
+
+argv: r703-json/df: emerge  --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=ee5f131730ca03a180ea0fca2e32207df881b3f8a4522ab555af836549ac055d stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=0
+
+argv: r703-json/pg: emerge --solver=pubgrub --pretend --json --update --deep --newuse --getbinpkg=n @world
+rc=0 stdout=d1909c09292ac0f4508aaedfa597969965d5c2cc2afbdd51eabd40a9c16edef0 stderr=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 pg_lines=2766
+

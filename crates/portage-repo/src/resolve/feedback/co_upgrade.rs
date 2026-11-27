@@ -5,6 +5,7 @@
 //! share it. Charter property 1 (every kept package has its dependencies)
 //! holds either way; withholding is only needed when a holder cannot follow.
 
+use crate::resolve::cycle_report::DepTree;
 use crate::resolve::feedback::*;
 use std::collections::HashSet;
 
@@ -74,7 +75,7 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
                 .iter()
                 .filter_map(|k| meta.get(*k).map(String::as_str))
                 .collect();
-            let atoms = provider_atoms(&texts, &use_flags, provider);
+            let atoms = tree_route_atoms(&texts, &use_flags, provider);
             new_provider
                 .iter()
                 .all(|new| provider_atoms_accept(&atoms, new))
@@ -300,6 +301,62 @@ pub(crate) fn provider_atoms(
     out
 }
 
+/// The atoms on `provider` that a candidate's tree dependencies *require*: every
+/// atom outside a `||` group, and for a `||` group the atoms of its arms only
+/// when every arm names `provider`. A group with an arm on another package can
+/// be met without the provider, so it constrains nothing (backlog #781).
+pub(crate) fn tree_route_atoms(
+    texts: &[&str],
+    use_flags: &HashSet<String>,
+    provider: &(String, String),
+) -> Vec<String> {
+    fn walk(nodes: &[DepTree], provider: &(String, String), out: &mut Vec<String>) -> bool {
+        // Returns whether the nodes name the provider at all.
+        let mut named = false;
+        for node in nodes {
+            match node {
+                DepTree::Atom(text) => {
+                    let hit = parse_dep_atom(text, "co_upgrade").is_some_and(|a| {
+                        a.blocker == portage_dep::Blocker::None
+                            && a.category == provider.0
+                            && a.package == provider.1
+                    });
+                    if hit {
+                        out.push(text.clone());
+                        named = true;
+                    }
+                }
+                DepTree::AllOf(children) => named |= walk(children, provider, out),
+                DepTree::AnyOf(arms) => {
+                    let mut group = Vec::new();
+                    let all_name = arms
+                        .iter()
+                        .all(|arm| walk(std::slice::from_ref(arm), provider, &mut group));
+                    if all_name {
+                        out.extend(group);
+                        named = true;
+                    }
+                }
+            }
+        }
+        named
+    }
+    let mut out = Vec::new();
+    for text in texts {
+        let tokens: Vec<String> = text.split_whitespace().map(String::from).collect();
+        // A string that does not reduce keeps the flat reading (the conservative direction).
+        match crate::resolve::cycle_report::reduced_dep_tree(&tokens, use_flags) {
+            Some(tree) => {
+                walk(&tree, provider, &mut out);
+            }
+            None => out.extend(provider_atoms(&[text], use_flags, provider)),
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Whether `atoms` (as returned by [`provider_atoms`]) accept the provider
 /// rendered `new` (`cat/pkg-ver:slot/sub::repo`). Versioned atoms are a menu
 /// (one must match); unversioned ones (`:=`, `:0`) must all match.
@@ -310,4 +367,39 @@ pub fn provider_atoms_accept(atoms: &[String], new: &str) -> bool {
         .iter()
         .partition(|a| parse_dep_atom(a, "co_upgrade").is_some_and(|p| p.version.is_some()));
     plain.iter().all(accepts) && (versioned.is_empty() || versioned.iter().any(accepts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn atoms(text: &str) -> Vec<String> {
+        let prov = ("dev-libs".to_string(), "prov".to_string());
+        tree_route_atoms(&[text], &HashSet::new(), &prov)
+    }
+
+    #[test]
+    fn or_group_with_an_arm_off_the_provider_constrains_nothing() {
+        // #781: the `p569virt` shape, a version menu plus another package.
+        assert_eq!(
+            atoms("|| ( =dev-libs/prov-5.42* dev-libs/core ) dev-libs/prov:="),
+            ["dev-libs/prov:="]
+        );
+    }
+
+    #[test]
+    fn or_group_naming_only_the_provider_stays_a_menu() {
+        assert_eq!(
+            atoms("|| ( =dev-libs/prov-5.42* =dev-libs/prov-5.40* )"),
+            ["=dev-libs/prov-5.40*", "=dev-libs/prov-5.42*"]
+        );
+    }
+
+    #[test]
+    fn plain_atoms_still_pin() {
+        assert_eq!(
+            atoms("=dev-libs/prov-5.42* dev-libs/other"),
+            ["=dev-libs/prov-5.42*"]
+        );
+    }
 }
