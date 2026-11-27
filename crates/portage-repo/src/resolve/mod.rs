@@ -17,6 +17,7 @@ mod disjunction_stack;
 mod driver;
 mod enqueue;
 mod entry;
+mod explore_score;
 mod feedback;
 mod graph_lookup;
 mod greedy_slots;

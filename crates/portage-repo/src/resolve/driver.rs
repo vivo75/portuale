@@ -1,5 +1,6 @@
 //! The backtracking loop: one pass per node, settle or feed back.
 
+use crate::resolve::explore_score::Explore;
 use crate::*;
 use portage_profile::Config;
 
@@ -46,6 +47,26 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
 }
 
 fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphResult, Error> {
+    let mut explore = Explore::from_env().filter(|_| ctx.backtrack_max > 0);
+    let result = backtrack_search_inner(ctx, req, &mut explore);
+    // Exploring only measures: the first settle is what the caller gets.
+    match explore {
+        Some(x) => {
+            x.report();
+            match x.first {
+                Some(first) => Ok(first),
+                None => result,
+            }
+        }
+        None => result,
+    }
+}
+
+fn backtrack_search_inner(
+    ctx: &ResolveCtx<'_>,
+    req: &ResolveRequest,
+    explore: &mut Option<Explore>,
+) -> Result<GraphResult, Error> {
     // Portage `_backtrack_depgraph`: pop a node, run one pass, settle or
     // feed back; `--backtrack=0` explores no feedback (the root pass settles).
     let initial = BacktrackParams::initial(req);
@@ -76,7 +97,12 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
         }
         // A retry whose walk fails is a failed iteration, not a result; only
         // the root pass's own failure propagates. A feed pass is just dropped.
-        let mut pass = match run_pass(ctx, &params, first_pass) {
+        let pass_started = std::time::Instant::now();
+        let ran = run_pass(ctx, &params, first_pass);
+        if let (Some(x), false) = (explore.as_mut(), from_feed) {
+            x.pass_done(&bt, pass_started.elapsed());
+        }
+        let mut pass = match ran {
             Ok(pass) => pass,
             Err(_) if from_feed => continue,
             Err(_) if !first_pass => {
@@ -241,6 +267,12 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
                 }
                 let mut result = result;
                 fail_fast_truncate_final(ctx, &mut result, walk_flips(&params, &needed_init));
+                if let Some(x) = explore.as_mut() {
+                    if x.settle(&bt, result) {
+                        return Ok(x.first.clone().expect("settle stores the first"));
+                    }
+                    continue;
+                }
                 return Ok(result);
             }
             PassDecision::DeadEnd { params } => {
@@ -310,6 +342,9 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             }
         }
     }
+    if let Some(x) = explore.as_mut() {
+        x.loop_done();
+    }
     // Exhausted without settling: report the deepest terminal node, never a
     // masked-by-backtracking graph unless nothing better exists.
     let best = bt.get_best_run();
@@ -322,11 +357,17 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             ..req.clone()
         };
         ctx0 = ResolveCtx::new(&req0)?;
+        if let Some(x) = explore.as_mut() {
+            x.mark("new_ctx");
+        }
         &ctx0
     } else {
         ctx
     };
     let pass = run_pass(rctx, &best, false)?;
+    if let Some(x) = explore.as_mut() {
+        x.mark("best_run_pass");
+    }
     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
     // The terminal node's accumulators predate the search: re-derive the
@@ -340,6 +381,9 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             PassDecision::Settle { params } => Some(params),
             _ => None,
         };
+    if let Some(x) = explore.as_mut() {
+        x.mark("collect_feedback");
+    }
     // The settled params are owned; the untouched path re-runs and clones.
     let (pass, report): (PassResult, BacktrackParams) = match settled {
         Some(params) => (probe, *params),
@@ -352,6 +396,9 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             // `slot_constraints` or new masks).
             // Portage: _backtrack_depgraph falls back to the best run's own report.
             let naked = run_pass(rctx, &best, false)?;
+            if let Some(x) = explore.as_mut() {
+                x.mark("naked_pass");
+            }
             let mut report = best.clone();
             let live_reachable = live_reachable_consumers(rctx, &naked.entries);
             let (enforced, dropped, _, merge_parents) =
@@ -393,6 +440,9 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
                     report.merge_parents.push(row);
                 }
             }
+            if let Some(x) = explore.as_mut() {
+                x.mark("report_scan");
+            }
             (naked, report)
         }
     };
@@ -416,11 +466,23 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
     {
         return run_breakage_clean_pass(ctx, &initial, restarts);
     }
+    if let Some(x) = explore.as_mut() {
+        x.mark("replay_check");
+    }
     let prune_unresolved = prune_unresolved_after_backtrack(restarts, ctx, &report, &pass, config);
+    if let Some(x) = explore.as_mut() {
+        x.mark("prune_unresolved");
+    }
     let mut result = assemble_result(rctx, &report, pass, config, restarts);
+    if let Some(x) = explore.as_mut() {
+        x.mark("assemble");
+    }
     result.prune_unresolved = prune_unresolved;
     result.backtrack_max = ctx.backtrack_max;
     fail_fast_truncate_final(ctx, &mut result, walk_flips(&best, &best_needed));
+    if let Some(x) = explore.as_mut() {
+        x.mark("fail_fast_truncate");
+    }
     Ok(result)
 }
 

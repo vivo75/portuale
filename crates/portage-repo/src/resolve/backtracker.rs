@@ -10,6 +10,8 @@ use crate::*;
 pub(crate) struct BacktrackNode {
     pub(crate) params: BacktrackParams,
     pub(crate) terminal: bool,
+    /// The node whose pass produced this one (`None` for the root).
+    pub(crate) parent: Option<usize>,
 }
 
 /// The depth-first search over mask/config choices. `nodes` holds every node
@@ -122,7 +124,11 @@ impl Backtracker {
         if self.nodes.iter().any(|n| params_equal(&n.params, &params)) {
             return false;
         }
-        self.nodes.push(BacktrackNode { params, terminal });
+        self.nodes.push(BacktrackNode {
+            params,
+            terminal,
+            parent: self.current,
+        });
         if explore {
             self.unexplored.push(self.nodes.len() - 1);
         }
