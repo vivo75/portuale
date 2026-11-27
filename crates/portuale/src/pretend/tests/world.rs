@@ -378,3 +378,48 @@ fn record_world_atoms_returns_the_recording_lines_one_entry_at_a_time() {
         "dev-libs/first\ndev-libs/second\n"
     );
 }
+
+#[test]
+fn world_file_additions_qualifies_a_bare_name_target() {
+    // `emerge wanted` (no category): the resolver expands it to `dev-libs/wanted`,
+    // so the world record must see the same package, with or without a version.
+    let entries = vec![
+        world_entry("dev-libs", "wanted", "0"),
+        world_entry("dev-libs", "dep", "0"),
+    ];
+    assert_eq!(
+        world_file_additions(&[], &["wanted"], &entries, &[], &[]),
+        vec!["dev-libs/wanted".to_string()],
+    );
+    assert_eq!(
+        world_file_additions(&[], &["wanted-1.0"], &entries, &[], &[]),
+        vec!["dev-libs/wanted".to_string()],
+    );
+    // A bare name matching nothing in the merge list is still skipped.
+    assert!(world_file_additions(&[], &["ghost"], &entries, &[], &[]).is_empty());
+}
+
+#[test]
+fn record_world_atoms_qualifies_a_bare_name_per_entry() {
+    // The per-entry recorder sees one entry at a time: the target's own entry
+    // records it, a dependency's entry records nothing.
+    let tmp = TempDir::new("portuale-world-bare");
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+    let wanted = world_entry("dev-libs", "wanted", "0");
+    let dep = world_entry("dev-libs", "dep", "0");
+    let record = |entry: &GraphEntry| {
+        record_world_atoms(UpdateWorldFileArgs {
+            root: &root,
+            target_atoms: &["wanted"],
+            entries: std::slice::from_ref(entry),
+            system_atoms: &[],
+            repos: &[],
+            oneshot: false,
+            onlydeps: false,
+        })
+        .unwrap()
+    };
+    assert!(record(&dep).is_empty());
+    assert_eq!(record(&wanted), vec!["dev-libs/wanted".to_string()]);
+}

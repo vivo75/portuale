@@ -143,7 +143,6 @@ pub type WorldRecorder = std::sync::Arc<dyn Fn(&GraphEntry) -> Vec<String> + Sen
 pub(crate) fn world_recorder(
     root: &Path,
     opts: &EmergeOpts<'_>,
-    entries: &[GraphEntry],
     system_atoms: &[String],
     repos: &[portage_repo::RepoConfig],
 ) -> Option<WorldRecorder> {
@@ -151,18 +150,7 @@ pub(crate) fn world_recorder(
         return None;
     }
     let root = root.to_path_buf();
-    let full_cps: Vec<String> = entries
-        .iter()
-        .map(|e| format!("{}/{}", e.category, e.package))
-        .collect();
-    let target_atoms: Vec<String> = opts
-        .atom_args
-        .iter()
-        .map(|a| match dep_expand_token(a, &full_cps) {
-            DepExpand::Qualified(q) => q,
-            _ => (*a).to_string(),
-        })
-        .collect();
+    let target_atoms: Vec<String> = opts.atom_args.iter().map(|a| a.to_string()).collect();
     let system_atoms = system_atoms.to_vec();
     let repos = repos.to_vec();
     Some(std::sync::Arc::new(move |entry: &GraphEntry| {
