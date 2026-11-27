@@ -6,7 +6,7 @@
   "output": "docs/archify/lifecycle.html",
   "quality_profile": "showcase",
   "repository": {
-   "url": "git@github.com:vivo75/portuale.git",
+   "url": "git@github.com:portuale/portuale.git",
    "link_mode": "local-only",
    "revision": "36b417dbf87891c6434f9eb262a3f705d38d0b6b"
   }

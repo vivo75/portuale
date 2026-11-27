@@ -7,9 +7,11 @@ this file reproduces that set-up so the two stay identical.
 ## What this account is
 
 `Im-IA` (<https://github.com/Im-IA>) is a separate GitHub account that the owner
-(`vivo75`) created for Claude. It is a collaborator on `vivo75/portuale` and
-`vivo75/pmtest` with `pull`, `push` and `triage`, but **not** `admin` or
-`maintain`. It is a machine account: the owner is responsible for what it does.
+(`vivo75`) created for Claude. It is a collaborator of the `portuale` GitHub organization
+(the repos are `portuale/portuale` and `portuale/pmtest`; they moved from
+`vivo75/*` on 2026-11-27). It had `pull`, `push` and `triage`, but **not**
+`admin` or `maintain`, on the old repos; the verify step below shows what the
+organization grants now. It is a machine account: the owner is responsible for what it does.
 
 Everything below exists so that Claude acts as `Im-IA` and **never** as
 `vivo75`. The owner's own credentials are on the same machines; do not use them.
@@ -39,7 +41,7 @@ Everything below exists so that Claude acts as `Im-IA` and **never** as
 |---|---|
 | SSH key | `~/.ssh/id_fs-test` (the same key on the host and in the container) |
 | SSH host alias | `Im-IA-github` → `github.com`, `IdentityFile ~/.ssh/id_fs-test` |
-| Remote (both repos) | `Im-IA-github` = `git@Im-IA-github:vivo75/<repo>.git` |
+| Remote (both repos) | `Im-IA-github` = `git@Im-IA-github:portuale/<repo>.git` |
 | Git identity (both repos, local) | `Im-IA <vivo75+AvianIntelligence@gmail.com>` |
 | `gh` config dir | `~/.config/gh-im-ia` (token stored in a file there, not in the keyring) |
 
@@ -122,7 +124,7 @@ not copy it.
 export GH_CONFIG_DIR=$HOME/.config/gh-im-ia
 gh auth status                 # Logged in to github.com account Im-IA
 gh api user --jq .login        # Im-IA
-for r in portuale pmtest; do gh api repos/vivo75/$r --jq .permissions; done
+for r in portuale pmtest; do gh api repos/portuale/$r --jq .permissions; done
 ```
 
 Expected permissions: `push` and `pull` and `triage` true, `admin` and

@@ -16,7 +16,7 @@ def T(a,b,label=None,v=None):
 def W(name,title,sub,main,states,trans,cards):
     j={"schema_version":3,"diagram_type":"lifecycle",
      "meta":{"title":title,"subtitle":sub,"output":f"docs/archify/state-{name}.html","quality_profile":"showcase",
-       "repository":{"url":"git@github.com:vivo75/portuale.git","link_mode":"local-only","revision":REV}},
+       "repository":{"url":"git@github.com:portuale/portuale.git","link_mode":"local-only","revision":REV}},
      "mainPath":main,"states":states,"transitions":trans,"cards":cards}
     json.dump(j,open(OUT+f"state-{name}.json","w"),indent=1)
 P="crates/portuale/src/"

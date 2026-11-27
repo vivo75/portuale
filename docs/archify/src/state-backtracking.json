@@ -7,7 +7,7 @@
   "output": "docs/archify/state-backtracking.html",
   "quality_profile": "showcase",
   "repository": {
-   "url": "git@github.com:vivo75/portuale.git",
+   "url": "git@github.com:portuale/portuale.git",
    "link_mode": "local-only",
    "revision": "2055f4dc3e08fc79060527b2fc9db663c24baa2d"
   }
