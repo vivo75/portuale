@@ -467,3 +467,56 @@ fn p703_route_less_holder_is_recorded_pubgrub() {
     let result = resolve_with(SolverKind::PubGrub, &root, &world);
     assert_eq!(result.held_back_no_route, expected_no_route());
 }
+
+/// `p698_root` plus an installed holder of the given version, with the pin the
+/// old provider left in it.
+fn p698_root_with(world: &[&str], extra: &[&str]) -> TempDir {
+    let base = p698_root(world);
+    for cpv in extra {
+        let dir = base.join("var/db/pkg").join(cpv);
+        fs::create_dir_all(&dir).unwrap();
+        let (category, _) = cpv.split_once('/').unwrap();
+        fs::write(dir.join("CATEGORY"), format!("{category}\n")).unwrap();
+        fs::write(dir.join("EAPI"), "8\n").unwrap();
+        fs::write(
+            dir.join("RDEPEND"),
+            "=dev-libs/p569prov-5.42* dev-libs/p569prov:0/5.42=\n",
+        )
+        .unwrap();
+        fs::write(dir.join("SLOT"), "0\n").unwrap();
+        fs::write(dir.join("repository"), "testrepo\n").unwrap();
+    }
+    base
+}
+
+/// #774, charter properties 1 and 5: the only version of a holder that accepts
+/// the new provider (`p774mask-2`) is keyword-masked, so the holder has no
+/// route the user can install. The provider stays where it is and the holder is
+/// named, in every solver. Source: charter, not Portage.
+#[test]
+fn p774_a_masked_only_version_is_not_a_route() {
+    let world = ["dev-libs/p774mask"];
+    let root = p698_root_with(&world, &["dev-libs/p774mask-1"]);
+    for kind in SOLVERS {
+        let result = resolve_with(kind, &root, &world);
+        let plan = merged(&result);
+        assert!(
+            !plan.contains(&"dev-libs/p569prov-5.44".to_string()),
+            "{kind}: the provider must not move past a holder with no visible route: {plan:?}"
+        );
+        assert!(
+            !plan.contains(&"dev-libs/p774mask-2".to_string()),
+            "{kind}: a masked version is never planned: {plan:?}"
+        );
+    }
+    // The pubgrub bridge prints no skipped-update block: its record names the holder.
+    let result = resolve_with(SolverKind::PubGrub, &root, &world);
+    assert_eq!(
+        result.held_back_no_route.first().map(|n| n.holders.clone()),
+        Some(vec![(
+            "dev-libs/p774mask".to_string(),
+            "1".to_string(),
+            "=dev-libs/p569prov-5.42*".to_string()
+        )])
+    );
+}

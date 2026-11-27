@@ -5832,6 +5832,7 @@ fn holder_fix(
         }
         let (routes, note) = super::holder_routes(super::WithheldProvider {
             gate: lazy.gate(),
+            config: &req.config,
             root: &req.root,
             with_bdeps: req.with_bdeps,
             provider: &provider,

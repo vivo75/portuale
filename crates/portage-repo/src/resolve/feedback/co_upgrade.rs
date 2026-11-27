@@ -11,6 +11,7 @@ use std::collections::HashSet;
 /// Arguments of [`holder_has_route`].
 pub(crate) struct HolderRouteArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
+    pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) holder: &'a (String, String, String),
     pub(crate) provider: &'a (String, String),
@@ -23,8 +24,8 @@ pub(crate) type Followers = ((String, String), (String, String));
 
 /// The version the installed holder `(category, package, version)` should move to so it can follow an
 /// upgrade of `provider` to the versions rendered in `new_provider`
-/// (`cat/pkg-ver:slot/sub::repo`): some candidate of the holder (masked ones included), in
-/// its installed slot and not older than it, whose `*DEPEND` names `provider`
+/// (`cat/pkg-ver:slot/sub::repo`): some visible candidate of the holder (a masked
+/// version is not a route the user can install, #774), in its installed slot and not older than it, whose `*DEPEND` names `provider`
 /// only in ways the new versions satisfy. A rebuild of the same version
 /// counts (its tree dependencies, not the vdb ones, are what binds).
 ///
@@ -34,6 +35,7 @@ pub(crate) type Followers = ((String, String), (String, String));
 pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
     let HolderRouteArgs {
         gate,
+        config,
         root,
         holder,
         provider,
@@ -54,6 +56,7 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
         .find(|c| {
             if (!installed_slot.is_empty() && installed_slot != c.slot)
                 || vercmp(&c.version, ver).is_none_or(|o| o < 0)
+                || !crate::visibility::is_visible(c, cat, pkg, config)
             {
                 return false;
             }
@@ -82,6 +85,7 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
 /// Arguments of [`holder_routes`].
 pub(crate) struct WithheldProvider<'a> {
     pub(crate) gate: CategoryGate<'a>,
+    pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) with_bdeps: bool,
     pub(crate) provider: &'a (String, String),
@@ -105,6 +109,7 @@ pub(crate) fn holder_routes(
         .map(|(holder, _)| {
             holder_has_route(HolderRouteArgs {
                 gate: args.gate,
+                config: args.config,
                 root: args.root,
                 holder,
                 provider: args.provider,
@@ -233,6 +238,7 @@ pub(crate) fn co_upgrade_request(
         }
         let (routes, note) = holder_routes(WithheldProvider {
             gate: ctx.gate(),
+            config: ctx.config,
             root: ctx.root,
             with_bdeps: ctx.with_bdeps,
             provider: &cp,
