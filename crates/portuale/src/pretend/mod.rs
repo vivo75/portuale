@@ -494,7 +494,6 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(AbiRebuildForceReinstallArgs {
         abi_rebuilds: &result.abi_rebuilds,
         entries: &result.entries,
-        slot_operator_replaced: &result.slot_operator_replaced,
         root: &root,
     });
     // The `--rebuild-if-*` restart parents: tagged `force_reinstall` by the
@@ -503,9 +502,29 @@ pub fn run(args: &[String]) -> ExitCode {
     // "causing rebuilds" block).
     // Portage: _gen_reinstall_sets; output.py, PkgAttrDisplay.force_reinstall
     force_reinstall_cps.extend(result.rebuild_if_reinstalls.iter().cloned());
-    // The slot-operator replace set tags its members the same way.
+    // The slot-operator replace set tags its members the same way, except
+    // the packages that move to another version: `r` marks a reinstall, and
+    // an upgrade is no reinstall whichever way the search reached it
+    // (backlog #819, #810: Portage prints `r  U` only when its backtrack
+    // filed the provider for a slot conflict).
     // Portage: depgraph.py, _iter_atoms_for_pkg (`__auto_slot_operator_replace_installed__`)
-    force_reinstall_cps.extend(result.slot_operator_replaced.iter().cloned());
+    force_reinstall_cps.extend(
+        result
+            .slot_operator_replaced
+            .iter()
+            .filter(|(c, p)| {
+                !result.entries.iter().any(|e| {
+                    e.category == *c
+                        && e.package == *p
+                        && matches!(
+                            e.outcome,
+                            portage_repo::PretendOutcome::Upgrade { .. }
+                                | portage_repo::PretendOutcome::Downgrade { .. }
+                        )
+                })
+            })
+            .cloned(),
+    );
     show_resolution_report(ShowResolutionReportArgs {
         gated_abort_partial,
         result: &result,
@@ -884,15 +903,13 @@ pub(crate) struct AbiRebuildForceReinstallArgs<'a> {
     /// The settled `(provider_cpv, consumer_cpv)` display pairs.
     pub(crate) abi_rebuilds: &'a [(String, String)],
     pub(crate) entries: &'a [GraphEntry],
-    /// The settled replace set (`GraphResult::slot_operator_replaced`).
-    pub(crate) slot_operator_replaced: &'a [(String, String)],
     pub(crate) root: &'a Path,
 }
 
 /// Which `(category, package)` an ABI-rebuild edge force-reinstalls for
 /// the red `r` column. Consumer side: a merge-bound consumer is tagged
 /// only when the edge caused its rebuild (an already-merging upgrade
-/// consumer is untagged unless the replace set names it). Provider side:
+/// consumer is never tagged, #819). Provider side:
 /// a provider that reinstalls the *same* version (a slot/sub-slot move,
 /// e.g. libarchive 3.1.1 `0` -> `0/13` under `--changed-slot`) keeps its
 /// `r` -- Portage schedules that reinstall as a forced rebuild and tags
@@ -913,7 +930,6 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
     let AbiRebuildForceReinstallArgs {
         abi_rebuilds,
         entries,
-        slot_operator_replaced,
         root,
     } = args;
     let force_reinstall_cps: HashSet<(String, String)> = abi_rebuilds
@@ -970,13 +986,7 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
                                 | portage_repo::PretendOutcome::Downgrade { .. }
                         )
                 });
-                // A merge-bound parent can still be named by the replace set
-                // (`new_dep.parent.slot_atom`, `:2452-2456`); when it is, the
-                // `force_reinstall` atom exists and the `r` stays.
-                let replaced = slot_operator_replaced
-                    .iter()
-                    .any(|(rc, rp)| *rc == c && *rp == p);
-                if merging && !replaced {
+                if merging {
                     return None;
                 }
             }
