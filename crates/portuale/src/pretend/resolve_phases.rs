@@ -601,6 +601,11 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
                 None => run_resolve(false, &[], true, &empty_reuse, &no_masks),
             };
             match handle(rerun.map_err(crate::error::Error::from)) {
+                // The seeded walk is dropped when every update it withholds
+                // beyond the first walk's is held by an installed consumer's
+                // build-time dependency alone (#816): the first walk never
+                // meets such a pin, and a rebuild does not need it.
+                Ok(again) if withholds_only_for_build_time_pins(root, &result, &again) => result,
                 Ok(mut result) => {
                     if phase1_rebuild_if {
                         result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
@@ -651,4 +656,28 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         }
     }
     Ok(result)
+}
+
+/// Whether `again` withholds updates `first` did not, and every one of them
+/// is held by an installed consumer that names the binding only in
+/// `DEPEND`/`BDEPEND`.
+fn withholds_only_for_build_time_pins(
+    root: &Path,
+    first: &portage_repo::GraphResult,
+    again: &portage_repo::GraphResult,
+) -> bool {
+    let key =
+        |r: &portage_repo::SkippedUpdate| (r.category.clone(), r.package.clone(), r.slot.clone());
+    let known: std::collections::HashSet<_> = first.skipped_updates.iter().map(key).collect();
+    let fresh: Vec<_> = again
+        .skipped_updates
+        .iter()
+        .filter(|r| !known.contains(&key(r)))
+        .collect();
+    !fresh.is_empty()
+        && fresh.iter().all(|row| {
+            let cpv = row.consumer_cpv.split(':').next().unwrap_or_default();
+            row.consumer_installed
+                && portage_repo::installed_binding_is_build_time_only(root, cpv, &row.atom)
+        })
 }
