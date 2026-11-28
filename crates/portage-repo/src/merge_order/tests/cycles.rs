@@ -97,7 +97,7 @@ fn reduced_merge_order_drains_a_set_in_leaf_order() {
         ],
     );
     let drain: HashSet<usize> = [0, 1, 2, 3, 4].into_iter().collect();
-    let order = reduced_merge_order(&g, &drain, &[]);
+    let order = reduced_merge_order(&g, &drain);
     assert_eq!(order.len(), 5);
     assert_eq!(
         order.iter().copied().collect::<HashSet<_>>(),
@@ -106,13 +106,13 @@ fn reduced_merge_order_drains_a_set_in_leaf_order() {
     );
     // Members-only drain: exactly the members.
     let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
-    let order = reduced_merge_order(&g, &members, &[]);
+    let order = reduced_merge_order(&g, &members);
     assert_eq!(order.len(), 4);
     assert_eq!(order.iter().copied().collect::<HashSet<_>>(), members);
     // Chain: tail-first.
     let chain = test_graph(4, &[(0, 1, prio(1)), (1, 2, prio(1)), (0, 3, prio(1))]);
     let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
-    assert_eq!(reduced_merge_order(&chain, &members, &[]), vec![2, 3, 1, 0]);
+    assert_eq!(reduced_merge_order(&chain, &members), vec![2, 3, 1, 0]);
 }
 
 #[test]
