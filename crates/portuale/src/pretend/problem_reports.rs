@@ -274,7 +274,7 @@ pub(crate) fn show_stale_pin_refusals(quiet: bool, debug: bool, result: &GraphRe
     for r in &result.stale_pin_refusals {
         if r.no_ebuild {
             println!(
-                "  {}: its dependency {} was built against a sub-slot {} does not have, and no ebuild of it is left to rebuild it from",
+                "  {}: its dependency {} was built against a sub-slot {} does not have, and no visible ebuild of it is left to rebuild it from",
                 r.consumer, r.atom, r.provider
             );
         } else {

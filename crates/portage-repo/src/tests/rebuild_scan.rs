@@ -1937,6 +1937,37 @@ fn a_stale_consumer_with_no_ebuild_is_refused_by_name() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// Charter property 5: a consumer whose only ebuild is masked cannot be
+/// rebuilt either, so its stale binding is named like a missing ebuild.
+#[test]
+fn a_stale_consumer_with_only_a_masked_ebuild_is_refused_by_name() {
+    let (base, repos) = stale_pin_base("5.44", "0/5.44", "dev-libs/prov:0/5.42=");
+    let cache = base.join("repo/metadata/md5-cache/dev-libs/user-1.0");
+    let text = fs::read_to_string(&cache).unwrap();
+    fs::write(&cache, text.replace("KEYWORDS=amd64", "KEYWORDS=~riscv")).unwrap();
+    let req = GraphEntry {
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "req", "1.0")
+    };
+    let scan = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        update: true,
+        ..scan_args(
+            &base,
+            std::slice::from_ref(&req),
+            &HashSet::from([("dev-libs".to_string(), "req".to_string())]),
+            crate::test_gate(&repos),
+        )
+    });
+    assert!(scan.scheduled.is_empty(), "{:?}", scan.scheduled);
+    assert_eq!(scan.refused.len(), 1, "{:?}", scan.refused);
+    assert!(scan.refused[0].no_ebuild, "{:?}", scan.refused[0]);
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// The p573virt shape (§2.3): the plan moves the provider past a recorded
 /// versioned pin, so the stale consumer is refused, not scheduled.
 #[test]

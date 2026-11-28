@@ -727,13 +727,16 @@ fn stale_pin_for_consumer(
     if edges.is_empty() {
         return;
     }
-    // A consumer with no ebuild at all (any slot, masked ones included)
-    // cannot be rebuilt: it is named.
+    // A consumer with no visible ebuild in its slot cannot be rebuilt: it is named.
     if ctx
         .gate
         .repo_candidates(&pkg.category, &pkg.package)
         .ok()
-        .is_none_or(|cands| cands.is_empty())
+        .is_none_or(|cands| {
+            !cands.iter().any(|c| {
+                c.slot == pkg.slot && is_visible(c, &pkg.category, &pkg.package, ctx.config)
+            })
+        })
     {
         let edge = &edges[0];
         out.refused.push(StalePinRefusal {
