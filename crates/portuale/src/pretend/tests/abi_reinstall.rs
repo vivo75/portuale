@@ -82,13 +82,11 @@ fn pair(consumer_version: &str) -> Vec<(String, String)> {
 fn cps(
     pairs: &[(String, String)],
     entries: &[GraphEntry],
-    replaced: &[(String, String)],
     root: &Path,
 ) -> HashSet<(String, String)> {
     abi_rebuild_force_reinstall_cps(AbiRebuildForceReinstallArgs {
         abi_rebuilds: pairs,
         entries,
-        slot_operator_replaced: replaced,
         root,
     })
 }
@@ -102,10 +100,8 @@ fn cps(
 /// `dev-libs/boost-1.53.0` (upgraded over installed 1.52.0),
 /// `virtual/libmysqlclient-21`, `dev-libs/slotbindtarget-2.0` and
 /// `dev-libs/casctarget-2.0` all print a plain `U` with no rebuild of
-/// their consumer, while the filed `mbabilib-2.0` (`--usepkg` binary
-/// parent) keeps its `r` via the replace set. The consumer half is
-/// unchanged: a merge-bound upgrade consumer with no replace-set entry
-/// stays untagged.
+/// their consumer. Since #819 the replace set no longer tags an upgrade
+/// either (`pretend::run`), so no upgrade carries an `r`.
 #[test]
 fn a_merge_bound_upgrade_provider_is_not_force_reinstalled() {
     let base = root_with_provider("upgrade");
@@ -131,7 +127,7 @@ fn a_merge_bound_upgrade_provider_is_not_force_reinstalled() {
             "0",
         ),
     ];
-    let got = cps(&pair("2"), &entries, &[], &base);
+    let got = cps(&pair("2"), &entries, &base);
     assert!(
         !got.contains(&("dev-libs".to_string(), "abiprov".to_string())),
         "an unfiled upgrade provider stays untagged: {got:?}"
@@ -139,41 +135,6 @@ fn a_merge_bound_upgrade_provider_is_not_force_reinstalled() {
     assert!(
         !got.contains(&("dev-libs".to_string(), "abicons".to_string())),
         "a merge-bound upgrade consumer is not force-reinstalled: {got:?}"
-    );
-}
-
-/// The same consumer named by the replace set (`new_dep.parent.slot_atom`,
-/// `depgraph.py:2452-2456`) does get the `r`.
-#[test]
-fn a_merge_bound_upgrade_consumer_in_the_replace_set_is_force_reinstalled() {
-    let base = root_with_provider("upgrade-replaced");
-    let entries = vec![
-        entry(
-            "dev-libs",
-            "abiprov",
-            PretendOutcome::Upgrade {
-                from: "1".to_string(),
-                to: "2".to_string(),
-            },
-            "0",
-            "2",
-        ),
-        entry(
-            "dev-libs",
-            "abicons",
-            PretendOutcome::Upgrade {
-                from: "1".to_string(),
-                to: "2".to_string(),
-            },
-            "0",
-            "0",
-        ),
-    ];
-    let replaced = vec![("dev-libs".to_string(), "abicons".to_string())];
-    let got = cps(&pair("2"), &entries, &replaced, &base);
-    assert!(
-        got.contains(&("dev-libs".to_string(), "abicons".to_string())),
-        "a replace-set consumer keeps its `r`: {got:?}"
     );
 }
 
@@ -209,7 +170,7 @@ fn an_installed_consumer_of_an_abi_edge_is_force_reinstalled() {
             "0",
         ),
     ];
-    let got = cps(&pair("1"), &entries, &[], &base);
+    let got = cps(&pair("1"), &entries, &base);
     assert!(
         got.contains(&("dev-libs".to_string(), "abicons".to_string())),
         "an installed rebuild consumer keeps its `r`: {got:?}"
