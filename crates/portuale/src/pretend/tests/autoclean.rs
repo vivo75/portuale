@@ -1,6 +1,6 @@
 use super::*;
 
-/// Backlog #404 (02.346 S11): auto-clean runs the `--clean` selection
+/// (02.346 S11): auto-clean runs the `--clean` selection
 /// system-wide after a successful merge with a user-set `AUTOCLEAN=yes`.
 /// Scratch vdb with two same-slot instances of one cp: `old-1` (to be
 /// selected) and `old-2` (protected). Field files only; no `CONTENTS`

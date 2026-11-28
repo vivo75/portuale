@@ -53,7 +53,7 @@ fn outcome_of<'a>(result: &'a GraphResult, package: &str) -> &'a PretendOutcome 
 
 #[test]
 fn unwalked_consumer_atom_matching_nothing_installed_does_not_pin() {
-    // #603. Installed `w603lib-3` and world-only `w603cons-1` (`<dev-libs/w603lib-2`).
+    // Installed `w603lib-3` and world-only `w603cons-1` (`<dev-libs/w603lib-2`).
     // Portage 3.0.83 `emerge -p dev-libs/w603lib` (`603/plain.portage.txt`): complete
     // mode walks the consumer, its atom matches no installed package, so it is filed
     // as initially unsatisfied and never a parent atom (D:8797-8806):
@@ -83,7 +83,7 @@ fn unwalked_consumer_atom_matching_nothing_installed_does_not_pin() {
 
 #[test]
 fn unwalked_consumer_atom_matching_an_installed_package_still_pins() {
-    // #603 counterpart. Installed `w603lib-1` matches `<dev-libs/w603lib-2`, so
+    // Counterpart. Installed `w603lib-1` matches `<dev-libs/w603lib-2`, so
     // `_complete_graph` adds it and the conflict forms (D:8807-8834). Portage 3.0.83
     // (`603/matching.portage.txt`): `R w603lib-1`, 1/20, skip row from `w603cons-1`.
     let root = hermetic_root(&["app-misc/w603cons"]);
@@ -103,7 +103,7 @@ fn unwalked_consumer_atom_matching_an_installed_package_still_pins() {
     assert_eq!(skipped, vec!["<dev-libs/w603lib-2"]);
 }
 
-/// The #602 shape: installed `w602prov-1` (`0/1`) and `w602cons-1`
+/// The shape: installed `w602prov-1` (`0/1`) and `w602cons-1`
 /// (`dev-libs/w602prov:0/1=`), in world.
 fn w602_root() -> TempDir {
     let root = hermetic_root(&["app-misc/w602cons"]);
@@ -118,7 +118,7 @@ fn w602_root() -> TempDir {
 
 #[test]
 fn slot_conflict_while_backtracking_is_reported_for_complete_mode() {
-    // #602. `w602s` picks 2, `w602a` needs `<w602s-2`: a slot conflict. Portage
+    // `w602s` picks 2, `w602a` needs `<w602s-2`: a slot conflict. Portage
     // turns complete mode on when one appears while backtracking is allowed
     // (D:9473-9480); the CLI's second walk reads this flag (`602/` captures:
     // `r U w602prov-2`, `rR w602cons-1` with the complete-graph switches off).
@@ -139,7 +139,7 @@ fn slot_conflict_while_backtracking_is_reported_for_complete_mode() {
     assert!(!req.resolve().expect("resolves").slot_conflict_backtracking);
 }
 
-/// The #605 shapes: installed `w605x-1` built with `w605flag` and one world
+/// The shapes: installed `w605x-1` built with `w605flag` and one world
 /// consumer per variant (`a`: `|| ( x[w605flag] y )` with `w605y-1` installed,
 /// `c`: plain `x[w605flag]`). `w605x-2` merges with the flag off (profile default).
 fn w605_root(variant: char) -> TempDir {
@@ -167,7 +167,7 @@ fn w605_root(variant: char) -> TempDir {
 
 #[test]
 fn post_merge_use_reads_the_merge_node_use() {
-    // #605: in `_graph_trees` the `[use]` of an `||` arm is matched against the
+    // In `_graph_trees` the `[use]` of an `||` arm is matched against the
     // merge node's own USE (DC:492-495), not the tree or the vdb.
     let root = w605_root('c');
     let node = |on: bool| GraphEntry {
@@ -194,10 +194,10 @@ fn post_merge_use_reads_the_merge_node_use() {
 
 #[test]
 fn upgrade_breaking_an_unwalked_consumer_use_dep_conflicts() {
-    // #671. Portage 3.0.83 `emerge -p =dev-libs/w605x-2` (`605/C-p`): complete mode
+    // Portage 3.0.83 `emerge -p =dev-libs/w605x-2` (`605/C-p`): complete mode
     // walks `w605conc`, `w605x[w605flag]` still matches the installed `w605x-1`, so
     // it is pulled back in: a slot conflict, rc 1, "Change USE: +w605flag".
-    // Variant A (`605/A-p`): the post-merge `||` takes `w605y` (#605), no conflict.
+    // Variant A (`605/A-p`): the post-merge `||` takes `w605y`, no conflict.
     let c = w605_root('c');
     let result = resolve_complete_in(&c, &["=dev-libs/w605x-2"]);
     let rows: Vec<&str> = result
@@ -237,7 +237,7 @@ fn resolve_update_deep_world(root: &Path) -> GraphResult {
 
 #[test]
 fn update_held_back_by_an_installed_consumers_use_dep_is_reported() {
-    // #699. Installed `w605x-1` (built `w605flag`), world consumer `w605conc-1`
+    // Installed `w605x-1` (built `w605flag`), world consumer `w605conc-1`
     // (`dev-libs/w605x[w605flag]`), visible `w605x-2` with the flag off. `-uD`
     // keeps `w605x-1`; the plan is healthy but the user must be told that
     // `w605x-2` exists and `+w605flag` lets it in (charter property 5).
@@ -261,7 +261,7 @@ fn update_held_back_by_an_installed_consumers_use_dep_is_reported() {
 
 #[test]
 fn an_or_arm_the_installed_consumer_does_not_need_holds_nothing_back() {
-    // #699 negative: `|| ( w605x[w605flag] w605y )` with `w605y` installed is
+    // Negative: `|| (w605x[w605flag] w605y)` with `w605y` installed is
     // met without `w605x`, so `w605x-2` is simply not required by the consumer.
     let root = w605_root('a');
     let result = resolve_update_deep_world(&root);
@@ -274,7 +274,7 @@ fn an_or_arm_the_installed_consumer_does_not_need_holds_nothing_back() {
 
 #[test]
 fn p700_empty_world_consumer_reached_through_a_merge_bound_package() {
-    // #700, charter property 1. The #676 shape with an empty world: `p590vpull-2` names the
+    // Charter property 1. The shape with an empty world: `p590vpull-2` names the
     // installed `virtual/p590vvb-1` (`=p590vprov-5.42*` or `=5.38*`), which keeps
     // `p590vprov-5.44` out of the plan even though no world atom reaches it.
     let root = hermetic_root(&[]);

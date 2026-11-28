@@ -13,23 +13,22 @@
 //!
 //! Deliberate v1 cuts (each would be its own slice):
 //! - Keyword/license/mask suggestions come from a relaxed re-solve after a
-//!   failed strict one (#431 S2); USE flips go through the post-solve
-//!   validator (#429).
+//!   failed strict one; USE flips go through the post-solve
+//!   validator.
 //! - `slot_conflicts` and `skipped_updates` stay empty (no missed-update
-//!   warning for a solvable plan; the route-less-holder note, #703, is filled
+//!   warning for a solvable plan; the route-less-holder note,, is filled
 //!   from repo facts and is not this cut) and a bridge failure is one `Error::Detail`
 //!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
 //!   path replays the walk's abort predicates read-only over the solved plan,
 //!   so `autounmask_use_changes` and the miss disclosures can fill.
 //! - When the solver fails and the default walk fails too, `PubGrubResolver`
 //!   returns the walk's own report (partial merge list, notices, exit), since
-//!   a solver stops at one failing branch where Portage prints all it walked
-//!   (backlog #434).
+//!   a solver stops at one failing branch where Portage prints all it walked.
 //! - Merge order is the walk's own `topological_merge_order`; engine install
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
 //!   top-level blocker atoms are skipped.
-//! - Binaries join the pool under `--usepkg` (#430: a built package's
+//! - Binaries join the pool under `--usepkg` (a built package's
 //!   DEPEND/BDEPEND are dropped unless bdeps is on, a binary whose built
 //!   `:S/SS=` dep went stale is masked and re-solved, and `--usepkgonly` drops
 //!   the ebuild pool); `--deep=N` bounds kept
@@ -186,7 +185,7 @@ struct Relax {
 struct PoolOpts {
     relax: Relax,
     masked_binaries: HashSet<String>,
-    /// Installed cpvs a holder pass (#698) schedules as rebuilds so they follow
+    /// Installed cpvs a holder pass schedules as rebuilds so they follow
     /// an upgrade.
     extra_rebuild: HashSet<String>,
     /// Extra root atoms of the same pass: `=cat/pkg-ver` to move a holder to the
@@ -909,7 +908,7 @@ fn graph_result_from_order(
     entries.extend(slot_op_rebuilds);
     // The rebuild rows the slot-operator pass adds have no solver record: read
     // the same dependency data for them, so `--json` is whole for every
-    // merge-bound row (#716, #732).
+    // merge-bound row.
     for entry in entries.iter_mut().filter(|e| e.dep_input.is_none()) {
         let Some(version) = super::merge_bound_version(&entry.outcome) else {
             continue;
@@ -1021,7 +1020,7 @@ fn apply_use_flips(use_set: &mut HashSet<String>, flips: &[(String, bool)]) {
 /// Adds every real dependent to `required_by`: the solver names one requirer per
 /// package, while `--tree` nests a row under any entry whose dependencies resolve
 /// to it. Both read the same edges (`resolved_dep_targets`), so the list and the
-/// tree cannot disagree (#732).
+/// tree cannot disagree.
 fn complete_required_by(entries: &mut [GraphEntry], root: &Path) {
     let targets = super::resolved_dep_targets(entries, root, &HashMap::new());
     let mut owners: Vec<(usize, (String, String))> = Vec::new();
@@ -1046,7 +1045,7 @@ fn complete_required_by(entries: &mut [GraphEntry], root: &Path) {
 
 /// An installed instance as the `[oldver]` bracket shows it: the sub-slot and
 /// repo come from the vdb, not from the candidate that replaces it, so the
-/// bracket renders `[1.0:1::testrepo]` (backlog #446, #714).
+/// bracket renders `[1.0:1::testrepo]`.
 // Portage: output.py, convert_myoldbest
 fn vdb_installed_ref(
     root: &Path,
@@ -1397,7 +1396,7 @@ fn bridge_entry_for(
 
 /// What `--json` reports of one pick so a plan can be checked on its own: the
 /// raw dependency strings, `IUSE` and `REQUIRED_USE` the solver read, and the
-/// USE they were evaluated against (#716).
+/// USE they were evaluated against.
 fn bridge_dep_input(
     record: &LoadedVersion,
     use_set: &HashSet<String>,
@@ -1938,7 +1937,7 @@ fn strip_self_from_entry(
 /// Drops the `||` arms no package can satisfy: an arm naming a cp with no
 /// ebuild in any repo (outside the closure) and no installed instance. The
 /// pubgrub crate drops a dependency on an unknown package, so such an arm
-/// would count as satisfied with empty dependencies (#730). A group with no
+/// would count as satisfied with empty dependencies. A group with no
 /// satisfiable arm is kept whole, so the miss is still reported.
 fn without_absent_alternatives(
     lazy: &LazyRepo,
@@ -2335,7 +2334,7 @@ struct KeptInstalled {
     use_drift: HashMap<String, Vec<String>>,
     /// `--autounmask-use` flips a rebuilt cpv is planned with (`(flag, enabled)`):
     /// Portage shows the package with the flipped USE and expands its deps
-    /// with it, while the change itself stays a suggestion (#429).
+    /// with it, while the change itself stays a suggestion.
     autounmask_use: HashMap<String, Vec<(String, bool)>>,
     /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
     deep: bool,
@@ -2479,7 +2478,7 @@ impl KeptInstalled {
                 }
             }
         }
-        // #432: bounded `--deep=N` expansion depths: the kept-expansion
+        // Bounded `--deep=N` expansion depths: the kept-expansion
         // allowlist (min depth `< N`) and the update-walk reach (min depth
         // `<= N`, Portage `want_update`). Empty without a bound.
         let bounded = deep_bounded_depths(req, lazy, installed);
@@ -2932,7 +2931,7 @@ fn parent_use_reinstalls(
                 };
                 let mut effective = lazy.use_of(record);
                 let repo_iuse: HashSet<String> = parse_iuse(&record.iuse).into_iter().collect();
-                // `--autounmask-use` (#429): when the config USE misses the
+                // `--autounmask-use`: when the config USE misses the
                 // atom, the same flip Portage suggests (`need_config_change`)
                 // plans the rebuild with the flipped flags; the validator
                 // still checks the unflipped config USE, so the change is
@@ -4168,7 +4167,7 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         for record in &versions {
             // #34 S2: without deep, an installed package that is not being rebuilt
             // is a leaf: Portage sends its deps to `_ignored_deps` instead of
-            // expanding them. #432: under `--deep=N` only installed cpvs
+            // expanding them. under `--deep=N` only installed cpvs
             // inside the bounded pre-solve BFS set expand. The trace then
             // shows no edges for it, like the engine.
             // Portage: depgraph.py:3815-3824, :7359-7375
@@ -4219,7 +4218,7 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             let deps = if leaf {
                 empty
             } else {
-                // #390: a kept installed version expanded under deep with bdeps
+                // A kept installed version expanded under deep with bdeps
                 // on folds its build-time classes into the runtime view the
                 // engine reads for it.
                 let folded;
@@ -4278,8 +4277,8 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                         }
                     }
                 }
-                // #390: same kept-buildtime fold as the repo path above.
-                // #432: past the `--deep=N` bound the offer is a leaf (empty
+                // Same kept-buildtime fold as the repo path above.
+                // Past the `--deep=N` bound the offer is a leaf (empty
                 // deps), like the repo path above.
                 let leaf = !self.kept.expands(&record.cpv());
                 let kept_folded;
@@ -4333,7 +4332,7 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         // conditional deps on or off. Portage: depgraph.py, _pkg_use_enabled.
         // #34 S4: except a rebuild member, which Portage rebuilds with the
         // current config USE (its `x?` deps switch on for the rebuild, e.g.
-        // `R pg34-ulib` pulling `N pg34-uextra`). #432: past the `--deep=N`
+        // `R pg34-ulib` pulling `N pg34-uextra`). past the `--deep=N`
         // bound the kept leaf's deps never reach the engine, so the config
         // USE answers there too.
         if self.kept.deep_expands(&cpv_str)
@@ -4558,7 +4557,7 @@ const PUBGRUB_FIXPOINT_MAX_ROUNDS: usize = 32;
 
 // --- S9 post-solve abort validator -------------------------------------------
 
-/// S9 (#363/#364/#365): what the read-only post-solve validator fills in:
+/// S9: what the read-only post-solve validator fills in:
 /// the abort channels `graph_result_from_order` leaves empty when the
 /// engine solved a plan Portage would have refused.
 struct BridgeAbortValidation {
@@ -4568,7 +4567,7 @@ struct BridgeAbortValidation {
     plain_miss_deps: Vec<PlainMissDepReport>,
     nvc_entries: Vec<GraphEntry>,
     nvc_dep_atoms: HashMap<(String, String), String>,
-    /// Parent USE flips Portage records instead of a miss (#429): the parent's
+    /// Parent USE flips Portage records instead of a miss: the parent's
     /// flipped USE columns, applied to its entry post-validation.
     parent_flips: Vec<BridgeParentFlip>,
     /// The `package.use` flips of the recorded changes, per `cat/pkg`: Portage
@@ -4584,7 +4583,7 @@ struct BridgeParentFlip {
     new_use: HashSet<String>,
 }
 
-/// S9 (#363/#364/#365): replay the default path's three abort predicates
+/// S9: replay the default path's three abort predicates
 /// over a solved pubgrub plan -- REQUIRED_USE (`entry_use_display`), miss
 /// disclosure (`record_miss_disclosure`) and the USE-change gate
 /// (`entry_use_flags`) -- reusing their helpers. Read-only: `order` and
@@ -5209,7 +5208,7 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
     })
 }
 
-/// S9 (#363/#364/#365): file a [`BridgeAbortValidation`] into a
+/// S9: file a [`BridgeAbortValidation`] into a
 /// `graph_result_from_order` result: NVC entries join the graph, report
 /// and change chains walk out of the final entries, and the outcome
 /// re-derives through `abort_outcome` exactly like the settled walk.
@@ -5401,7 +5400,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     let mut parents: Vec<super::Followers> = Vec::new();
     let mut rebuilt: Vec<(String, String)> = Vec::new();
     // The last round that solved: a later round that asks for more and fails (an arm the
-    // engine cannot merge) keeps its plan instead of aborting the run (#809).
+    // engine cannot merge) keeps its plan instead of aborting the run.
     let mut last: Option<(GraphResult, Vec<String>)> = None;
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
         let (mut result, stale, fix) = match resolve_pubgrub_at(req, &opts) {
@@ -5450,7 +5449,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
 /// The holder pass withholds a provider by also asking for its installed version.
 /// When nothing in the plan depends on that provider and the user did not name
 /// it, the pin has done its work and its entry would be an unparented
-/// `already_installed` row (#736); the default solver has none.
+/// `already_installed` row; the default solver has none.
 fn drop_unrequired_pins(result: &mut GraphResult, asked: &[String], pins: &[String]) {
     let cpn = |atom: &String| {
         portage_solver::Dep::parse(atom)
@@ -5468,11 +5467,11 @@ fn drop_unrequired_pins(result: &mut GraphResult, asked: &[String], pins: &[Stri
 }
 
 /// A holder that joins the plan only because its provider moves names that
-/// provider as its parent, so the plan says why it is there (#718, as #713 does
+/// provider as its parent, so the plan says why it is there (, as does
 /// for the default solver). A holder the plan rebuilds also files the
 /// `(provider, holder)` display pair, so its row is tagged `r` and the provider's
 /// "causes rebuilds for" block lists it, as for a rebuild the slot-operator pass finds
-/// (#780). A pair is kept only while both rows are in the final plan.
+/// A pair is kept only while both rows are in the final plan.
 fn name_holder_parents(
     result: &mut GraphResult,
     parents: &[super::Followers],
@@ -5608,7 +5607,7 @@ fn resolve_pubgrub_at(
     let installed = all_installed_packages(&req.root);
     let mut kept = KeptInstalled::of(req, &lazy, &installed);
     // An atom the holder pass added only pins a version; it is not a request to
-    // reinstall it, so it prints no `R` row (#729).
+    // reinstall it, so it prints no `R` row.
     for atom in opts.extra_atoms.iter().filter(|a| !asked.contains(a)) {
         if let Some(cpv) = atom.strip_prefix('=') {
             kept.rebuild.remove(cpv);
@@ -5728,7 +5727,7 @@ fn resolve_pubgrub_at(
     };
     let mut result =
         graph_result_from_order(req, &lazy.repos, &lazy, &order, &parents, Some(&kept));
-    // S9 (#363/#364/#365): the engine never sees REQUIRED_USE, masked
+    // S9: the engine never sees REQUIRED_USE, masked
     // disclosure or the autounmask gate, so replay them read-only over the
     // solved plan; passing probes validate clean and keep their output.
     if let Some(validation) = bridge_validate_aborts(req, &lazy, &parents, &result.entries)? {
@@ -5758,12 +5757,12 @@ fn resolve_pubgrub_at(
 struct HolderFix {
     rebuild: Vec<String>,
     atoms: Vec<String>,
-    /// Withheld moves with a route-less holder, for the #703 note.
+    /// Withheld moves with a route-less holder, for the note.
     no_route: Vec<super::HeldBackNoRoute>,
-    /// `(holder, provider)` as `(category, package)`: why a holder joins the plan (#718).
+    /// `(holder, provider)` as `(category, package)`: why a holder joins the plan.
     parents: Vec<super::Followers>,
     /// `(provider_cpv, holder_cpv)` of each holder the plan rebuilds because its provider
-    /// moves: the display pair the slot-operator pass files for a walked consumer (#780).
+    /// moves: the display pair the slot-operator pass files for a walked consumer.
     rebuilt: Vec<(String, String)>,
 }
 
@@ -5786,7 +5785,7 @@ fn holder_fix(
     let mut fix = HolderFix::default();
     // Only holders the plan or the world reaches matter, like the default
     // solver's reverse scan. The plan's own dependencies always seed it: a
-    // world atom that is not installed yet reaches nothing installed (#700, #781).
+    // world atom that is not installed yet reaches nothing installed.
     let mut seeds = req.config.complete_seed_atoms.clone();
     if !seeds.is_empty() {
         seeds.extend(req.atoms.iter().cloned());
@@ -5825,7 +5824,7 @@ fn holder_fix(
             // (its tree dependencies), a kept one by what the vdb recorded.
             // A rebuild the bridge synthesised for the new sub-slot is at the installed
             // version only because nothing chose another: it counts as kept, so its
-            // recorded pin is judged and the holder may move to a newer version (#728).
+            // recorded pin is judged and the holder may move to a newer version.
             let planned = entries.iter().find_map(|h| {
                 (h.category == holder.category
                     && h.package == holder.package
@@ -5907,7 +5906,7 @@ fn holder_fix(
             || !(super::request_updates(asked, req.update, &req.deep, &provider) || required())
         {
             // A holder cannot follow, or nothing asks for or requires the provider's
-            // move (#727, #781): the provider stays where it is.
+            // move: the provider stays where it is.
             fix.no_route.extend(note);
             fix.atoms
                 .push(format!("={}/{}-{}", e.category, e.package, old.version));
@@ -5933,7 +5932,7 @@ fn holder_fix(
 /// A rebuild the slot-operator scan added after the solve has no dependencies in the
 /// plan: past a `--deep=N` bound its package was a kept leaf, so what the rebuilt
 /// package needs (a `||` arm that only the new provider selects) was never solved.
-/// Ask for it as a rebuild member, so the next round expands its dependencies (#811),
+/// Ask for it as a rebuild member, so the next round expands its dependencies,
 /// and carry its `(provider, consumer)` display pair, which only the scan files.
 fn solve_scanned_rebuilds(
     entries: &[GraphEntry],
@@ -5975,7 +5974,7 @@ struct PlanView<'a> {
 }
 
 /// Whether a package the plan merges has a tree dependency on `provider` that
-/// rejects its installed version `old_str`: the move is then not optional (#781).
+/// rejects its installed version `old_str`: the move is then not optional.
 fn plan_requires_move(plan: &PlanView<'_>, provider: &(String, String), old_str: &str) -> bool {
     let PlanView {
         req,
@@ -6009,8 +6008,8 @@ fn plan_requires_move(plan: &PlanView<'_>, provider: &(String, String), old_str:
     })
 }
 
-/// What the tree-pin refusals of the solved plan ask of the next solve (#791,
-/// #808). A consumer outside the walk whose own tree ebuild rejects the new
+/// What the tree-pin refusals of the solved plan ask of the next solve.
+/// A consumer outside the walk whose own tree ebuild rejects the new
 /// provider either has a `||` arm that accepts it (the arm's packages are asked
 /// for, so the plan merges them and the consumer is rebuilt), or is pinned: the
 /// move is then withheld, as for a holder with no route, unless the plan itself
@@ -6074,7 +6073,7 @@ fn tree_refusal_fix(
             &consumer.version,
             "USE",
         );
-        // An arm naming a package with no version in the tree cannot be merged (#809): the
+        // An arm naming a package with no version in the tree cannot be merged: the
         // consumer is then as pinned as if the group had no other arm.
         let mergeable = |atom: &String| {
             portage_solver::Dep::parse(atom).is_ok_and(|d| {
@@ -6455,7 +6454,7 @@ mod tests {
         assert_eq!(newpkg[0].version, "1.0");
     }
 
-    /// #430 S1: with `--usepkg` a visible binary joins the pool and replaces the
+    /// With `--usepkg` a visible binary joins the pool and replaces the
     /// ebuild of its version, keeping the USE it was built with; without the flag
     /// the pool is ebuilds only.
     #[test]
@@ -6491,7 +6490,7 @@ mod tests {
         assert_eq!(built.build_id.as_deref(), Some("1"));
     }
 
-    /// #430 S3: `--usepkgonly` drops the ebuild pool, so a cp with an ebuild but
+    /// `--usepkgonly` drops the ebuild pool, so a cp with an ebuild but
     /// no binary offers nothing, and one with a binary offers only the binary.
     #[test]
     fn usepkgonly_offers_binaries_and_no_ebuilds() {
@@ -6520,7 +6519,7 @@ mod tests {
         assert!(pool[0].binary.is_some());
     }
 
-    /// #430 S2: a binary's recorded DEPEND/BDEPEND are dropped (parsed and raw)
+    /// A binary's recorded DEPEND/BDEPEND are dropped (parsed and raw)
     /// unless bdeps is on; its RDEPEND stays either way.
     #[test]
     fn a_binary_record_drops_build_time_deps_unless_bdeps_is_on() {
@@ -6773,7 +6772,7 @@ mod tests {
         );
     }
 
-    /// #714: an upgrade row is diffed against the installed package it replaces, like the
+    /// An upgrade row is diffed against the installed package it replaces, like the
     /// default solver's: `-change*`, `added%*`, `(-drop%)`, a plain `keep`.
     #[test]
     fn p714_upgrade_row_is_compared_with_the_installed_package() {
@@ -6792,7 +6791,7 @@ mod tests {
         assert_eq!(body, "added%* keep -change* (-drop%)");
     }
 
-    /// #716: a merge-bound pubgrub entry carries what `--json` needs to check the plan on
+    /// A merge-bound pubgrub entry carries what `--json` needs to check the plan on
     /// its own: the dependency strings, `IUSE` and the USE they were evaluated against.
     #[test]
     fn p716_merge_bound_entry_carries_its_dep_input() {
@@ -7353,7 +7352,7 @@ mod tests {
         assert_eq!(pg34_plan(&result), Vec::<String>::new());
     }
 
-    /// #432 S-11(c): `-pvu --deep=1` on dev-libs/deeppkg plans nothing.
+    /// `-pvu --deep=1` on dev-libs/deeppkg plans nothing.
     /// deeppkg (installed, depth 0) recurses since 0 < 1, discovering
     /// installed deeppkg2 at depth 1 -- but deeppkg2 itself does NOT
     /// recurse (1 < 1 is false), so newpkg is never reached, exactly like
@@ -7369,7 +7368,7 @@ mod tests {
         assert_eq!(pg34_plan(&result), Vec::<String>::new());
     }
 
-    /// #432 S-11(c): `-pvu --deep=2` on dev-libs/deeppkg plans newpkg.
+    /// `-pvu --deep=2` on dev-libs/deeppkg plans newpkg.
     /// deeppkg2 at depth 1 recurses since 1 < 2, reaching newpkg (New) --
     /// the same plan the default solver prints, and the same as unlimited
     /// `--deep`.
@@ -7446,7 +7445,7 @@ mod tests {
         assert_eq!(pg34_plan(&result), ["dev-libs/pg34-dlib-2:0"]);
     }
 
-    /// #367: `-pvuD` on the new parent takes the newest slot. Expected from
+    /// `-pvuD` on the new parent takes the newest slot. Expected from
     /// Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvuD-portage.txt`
     /// plans `NS s-2 + N top`), never from portuale output.
     #[test]
@@ -7473,7 +7472,7 @@ mod tests {
         );
     }
 
-    /// #367: `-pvD` (deep without update) keeps the installed slot. Expected
+    /// `-pvD` (deep without update) keeps the installed slot. Expected
     /// from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvD-portage.txt`
     /// plans `N top` only), never from portuale output.
     #[test]
@@ -7489,7 +7488,7 @@ mod tests {
         assert_eq!(pg34_plan(&result), ["dev-libs/pg367-top-1:0"]);
     }
 
-    /// #367: `-pvu` without deep keeps the installed slot. Expected from
+    /// `-pvu` without deep keeps the installed slot. Expected from
     /// Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvu-portage.txt`
     /// plans `N top` only), never from portuale output.
     #[test]
@@ -7503,7 +7502,7 @@ mod tests {
         assert_eq!(pg34_plan(&result), ["dev-libs/pg367-top-1:0"]);
     }
 
-    /// #367: `-pve` takes the newest slot. Expected from Portage 3.0.82.2
+    /// `-pve` takes the newest slot. Expected from Portage 3.0.82.2
     /// (`LLM/evidence/2026-10-15-367-s0/cap-top-pve-portage.txt` plans
     /// `NS s-2 + N top`), never from portuale output.
     #[test]
@@ -8420,7 +8419,7 @@ mod tests {
         );
     }
 
-    /// #735: `RESTRICT=fetch` marks the pick, a USE-conditional token follows the pick's
+    /// `RESTRICT=fetch` marks the pick, a USE-conditional token follows the pick's
     /// USE, and a binary is never restricted.
     #[test]
     fn s735_fetch_restriction_follows_restrict_and_use() {
@@ -8607,7 +8606,7 @@ mod tests {
         assert!(new_slot, "another slot is already installed");
     }
 
-    /// Backlog #446: a new-slot `oldbest` carries the installed instance's
+    /// A new-slot `oldbest` carries the installed instance's
     /// sub-slot and repo from the vdb, like the default solver's
     /// `installed_refs` -- not empty strings that render `[1.0:1/::]`.
     /// Oracle: `emerge --solver=pubgrub -pvu dev-libs/pg359-gsblk` on the
@@ -10547,7 +10546,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The bridge returns the stale-pin refusal its slot-operator scan makes (backlog #765): the
+    /// The bridge returns the stale-pin refusal its slot-operator scan makes: the
     /// plan upgrades `p569prov` past the recorded `=dev-libs/p569prov-5.42*` of the unreached
     /// `p569virt-1`, so the result names it; a request that moves no provider reports none.
     #[test]
@@ -10693,7 +10692,7 @@ mod tests {
     /// Charter property 1 (a rebuilt package's dependencies hold): under
     /// `--deep=1` the installed `p569virt-1` is a kept leaf, so only the scan
     /// finds its rebuild. Its tree `||` leaves `~p569core-1.0` once `p569prov`
-    /// is 5.44, so the plan must merge `p569core` and keep the display pair (#811).
+    /// is 5.44, so the plan must merge `p569core` and keep the display pair.
     #[test]
     fn pg811_bridge_solves_the_dependencies_of_a_scanned_rebuild() {
         // The vdb carries the tree's own text, as the fixture root's installed copy does.
@@ -10787,7 +10786,7 @@ mod tests {
     /// `p573virt-1` recorded `:0/5.42=` and its tree ebuild needs
     /// `=dev-libs/p569prov-5.42*`, so a rebuild cannot follow an upgrade of
     /// `p569prov` to 5.44 and nothing else requires it. The bridge keeps the
-    /// provider at 5.42 and names the consumer (#773, #791).
+    /// provider at 5.42 and names the consumer.
     #[test]
     fn pg791_bridge_holds_the_provider_a_pinned_consumer_cannot_follow() {
         let (dir, result) = pg773_solve("portage-bridge-pg791-a", "p573virt-1");
@@ -10823,7 +10822,7 @@ mod tests {
     /// Charter property 1: the tree of `p808virt-1` accepts the new provider
     /// through the `||` arm naming `p808other`, which the plan does not merge
     /// on its own. The bridge asks for that arm, so the plan merges it and
-    /// rebuilds the consumer instead of refusing (#808).
+    /// rebuilds the consumer instead of refusing.
     #[test]
     fn pg808_bridge_asks_for_the_arm_that_accepts_the_new_provider() {
         let (dir, result) = pg773_solve("portage-bridge-pg808-a", "p808virt-1");
@@ -10848,7 +10847,7 @@ mod tests {
 
     /// Charter property 5 (the plan says what causes a rebuild): the holder
     /// `p808virt-1` is rebuilt because `p569prov` moves to 5.44, so the plan files
-    /// the `(provider, holder)` pair the default solver files, with no deep walk (#780).
+    /// the `(provider, holder)` pair the default solver files, with no deep walk.
     #[test]
     fn pg780_bridge_files_the_display_pair_of_a_holder_rebuild() {
         let (dir, result) = pg773_solve("portage-bridge-pg780-a", "p808virt-1");
@@ -10867,7 +10866,7 @@ mod tests {
     /// Charter property 5 (a message that is true, no abort): the `||` arm of
     /// `p809virt-1` that would accept the new provider names `p809missing`,
     /// which has no version. The arm cannot be merged, so the consumer is as
-    /// pinned as `p573virt-1`: the provider stays and the consumer is named (#809).
+    /// pinned as `p573virt-1`: the provider stays and the consumer is named.
     #[test]
     fn pg809_bridge_treats_an_unmergeable_arm_as_a_pin() {
         let (dir, result) = pg773_solve("portage-bridge-pg809-a", "p809virt-1");
@@ -11033,7 +11032,7 @@ mod tests {
             "y",
             "y? ( || ( dev-libs/pg34-ga dev-libs/pg34-gb ) )",
         );
-        // #366 walk-order shapes (synthetic, no pmtest fixture): `a`
+        // Walk-order shapes (synthetic, no pmtest fixture): `a`
         // first-lists `x`, but `x` pulls `b` which pulls `y` — Portage
         // resolves the group with only `{r, a}` in the graph and takes
         // `x`, while a plan-order-blind test takes the later `y`.
@@ -11049,7 +11048,7 @@ mod tests {
         s6_repo_pkg(&repo, "pg366o-x", "1", "0", "", "dev-libs/pg366o-b");
         s6_repo_pkg(&repo, "pg366o-b", "1", "0", "", "dev-libs/pg366o-y");
         s6_repo_pkg(&repo, "pg366o-y", "1", "0", "", "");
-        // #366 shape (a): the root pulls `b` (hence `y`) alongside `a`,
+        // Shape (a): the root pulls `b` (hence `y`) alongside `a`,
         // so `y` is in the graph when `a`'s disjunction resolves.
         s6_repo_pkg(
             &repo,
@@ -11059,7 +11058,7 @@ mod tests {
             "",
             "dev-libs/pg366o-a dev-libs/pg366o-b",
         );
-        // #366 shape (b): `b` listed first; the disjunction still
+        // Shape (b): `b` listed first; the disjunction still
         // resolves after `b` is walked, so `y` wins here too.
         s6_repo_pkg(
             &repo,
@@ -11181,7 +11180,7 @@ mod tests {
 
     /// `compute_or_overrides` moves the branch Portage's walk already holds
     /// first: the root pulls `b` (hence `y`) alongside `a`, so `y` is in
-    /// the graph when `a`'s disjunction resolves (#366 shape (a)). The
+    /// the graph when `a`'s disjunction resolves (shape (a)). The
     /// engine's final fallback is the first-listed alternative, and
     /// nothing here is installed.
     #[test]
@@ -11266,7 +11265,7 @@ mod tests {
     /// `compute_or_overrides` keeps the written order when the other
     /// parent joins the graph only later: `x` pulls `b` which pulls `y`,
     /// so Portage resolves `a`'s group with only `{r, a}` present and
-    /// takes first-listed `x` (#366 pager shape). A plan-order-blind
+    /// takes first-listed `x`. A plan-order-blind
     /// "selected anywhere" test moves `y` first instead.
     #[test]
     fn s6_compute_or_overrides_ignores_an_alternative_pulled_later() {
@@ -11350,7 +11349,7 @@ mod tests {
 
     /// `compute_or_overrides` resolves shape (b) like shape (a): with `b`
     /// listed first, `a`'s disjunction still waits for the plain stack to
-    /// drain, so `y` is in the graph at resolution (#366).
+    /// drain, so `y` is in the graph at resolution.
     #[test]
     fn s6_compute_or_overrides_moves_the_desired_branch_first_reversed() {
         use portage_solver::DepEntry;

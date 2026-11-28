@@ -40,7 +40,7 @@ pub(crate) fn live_reachable_consumers(
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     // With no complete seeds the closure starts from the merge-bound entries'
-    // own dependencies only (#700).
+    // own dependencies only.
     let mut seeds = if ctx.slot_op_reachable.is_empty() {
         Vec::new()
     } else {
@@ -82,7 +82,7 @@ pub(crate) struct ReverseScan {
     pub(crate) report: Vec<RevDepPin>,
     /// The enforced subset filed through the leg-(a) holder-open branch
     /// (bare demoter + tree-present requirers): applies before the seed
-    /// feed, which would otherwise discard it (backlog #656).
+    /// feed, which would otherwise discard it.
     pub(crate) holder_open: Vec<RevDepPin>,
     /// Selected `||` arms the merge satisfies: parents of the merge-bound instance.
     pub(crate) merge_parents: Vec<RevDepPin>,
@@ -500,7 +500,7 @@ fn slot_scoped_pin_atom(pass: &PassResult, pin: &RevDepPin) -> String {
 
 /// Apply one enforced pin to the search state (positive constraint plus the
 /// mask on the merge-bound version it breaks). Shared by the ordinary pin
-/// step and the holder-open early apply (backlog #656 leg (a)): both latch
+/// step and the holder-open early apply (leg (a)): both latch
 /// through `reverse_dep_masked`, so a pin applied early is a no-op later.
 // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
 pub(crate) fn apply_enforced_pin(

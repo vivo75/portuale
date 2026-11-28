@@ -1323,7 +1323,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     let _ = fs::remove_dir_all(&base);
 }
 
-// ---- `--rebuild-if-*` restart scan (backlog #394): over the reached set
+// ---- `--rebuild-if-*` restart scan: over the reached set
 // (merges and kept-installed nodes) name the installed parents whose
 // walked buildtime edge lands on a dep this run merges. Portage records
 // those edges in `_rebuild_config.add` and restarts the walk with the
@@ -1334,7 +1334,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
 // backtrack 1/20). ----
 
 /// vdb with installed `rebuildtrigger-1.0` + `rebuildconsumer-1.0` (the
-/// `#394` oracle shape; the consumer's walked edge lives on its entry's
+/// oracle shape; the consumer's walked edge lives on its entry's
 /// `deps`, like the walk records it).
 fn rebuild_if_394_vdb(tag: &str) -> TempDir {
     let dir = TempDir::new(&format!("portage-repo-rebuild-if-{tag}"));
@@ -1422,7 +1422,7 @@ fn rebuild_if_394_scan(
 
 #[test]
 fn rebuild_if_restart_names_a_reached_parent_behind_a_merged_build_dep() {
-    // The #394 oracle shape: the trigger upgrades, the consumer is kept but
+    // The oracle shape: the trigger upgrades, the consumer is kept but
     // walked with a buildtime edge to it. Portage restarts and prints the
     // consumer `rR`.
     let dir = rebuild_if_394_vdb("reached");
@@ -1615,7 +1615,7 @@ fn deep_scan_scope_is_the_walked_set_narrowed_by_the_closure() {
 }
 
 /// An installed consumer the `--deep` walk recursed into is scheduled by the
-/// same-slot arm even when it is outside the reachable scope (#598); the same
+/// same-slot arm even when it is outside the reachable scope; the same
 /// consumer unwalked is not.
 /// Portage: depgraph.py, _add_pkg (recurse under --deep)
 #[test]
@@ -1684,7 +1684,7 @@ fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reac
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// #601: an installed consumer that is **upgrading in the same run** still
+/// An installed consumer that is **upgrading in the same run** still
 /// contributes the `(provider, consumer)` display pair Portage lists under
 /// "causing rebuilds". Portage's `_compute_abi_rebuild_info` walks
 /// `_slot_operator_deps` and accepts a merge-bound replacement of the installed

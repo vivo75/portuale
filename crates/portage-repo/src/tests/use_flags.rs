@@ -1094,7 +1094,7 @@ fn use_context_fingerprint_debug_asserts_on_post_freeze_mutation() {
 
 #[test]
 fn effective_use_flags_applies_the_user_profile_level_last() {
-    // #346 S1: the user profile is Portage's last profile node, so its
+    // The user profile is Portage's last profile node, so its
     // `package.use` and force/mask entries win over the chain levels in
     // the per-level walks. Replays S0 u04 (`package.use` enables `x`)
     // and u06/u07 (force/mask decide `(x)`/`(-x)`) at the unit level;

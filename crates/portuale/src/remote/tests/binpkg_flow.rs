@@ -7,7 +7,7 @@ fn shadow_parsers_read_contents_and_filemeta_shapes() {
         contents_owned_paths("obj /a/b 0123 456\ndir /a\nsym /c -> /d 789\njunk\n"),
         vec!["/a/b".to_string(), "/c".to_string()]
     );
-    // Space paths survive whole (#357): the decoy prefix owns nothing.
+    // Space paths survive whole: the decoy prefix owns nothing.
     assert_eq!(
         contents_owned_paths(
             "obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792105216\n\
@@ -115,7 +115,7 @@ fn binary_plan_check_accepts_binaries_and_names_sources() {
     assert!(err.contains("dev-libs/c-1.0"), "{err}");
 }
 
-/// Backlog #183: the vdb shadow skips in-progress `-MERGING-<pf>`
+/// The vdb shadow skips in-progress `-MERGING-<pf>`
 /// entries, so a stale half-written `CONTENTS` never blocks a bundle
 /// -- real `vardbapi._excluded_dirs` (`vartree.py`).
 #[test]

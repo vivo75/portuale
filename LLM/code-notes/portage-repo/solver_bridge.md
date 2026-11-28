@@ -9,6 +9,7 @@ Alternate `--solver=` backend: PubGrub over the same repo facts.
 - Deliberate v1 cuts (each its own slice): no autounmask relaxation levels (the pool is visibility-filtered with the walk's own `is_visible`, so an invisible version is never offered -- but unlike the walk, a candidate that would need a `--autounmask*` flip (a `~arch` keyword, a license, a `package.mask`) simply fails to resolve rather than producing the flip suggestion); notices wired where the bridge result admits them (blockers via the walk's `resolve_blockers` (H.15c), ABI rebuilds via `slot_operator_rebuild_entries` (H.15), circular deps via `find_hard_cycles` (J), USE display with Portage's forced/masked `( )` markers (J)); merge order is the walk's `topological_merge_order` over Portage's `deps` edges rebuilt from raw dep strings plus resolved USE (H.15b).
 - USE-dep / `::repo` / slot-operator target forms resolve the way the bridges resolve them, which may differ from the walk.
 - `oldbest` carries the resolved candidate's own sub-slot/repo (an approximation of the installed one's); new-slot `New` entries listed installed versions with empty sub-slot/repo until #446, which reads both from the vdb (`read_vdb_slot`, `installed_pkg_repo`) -- the same sources the default solver's `installed_refs` uses, so `[1.0:1::testrepo]` renders instead of `[1.0:1/::]`.
+- Backlog numbers removed from the comment (original text): Alternate `--solver=` backend: PubGrub over the same repo facts.  Portuale-only (Portage's `emerge` has no `--solver`): [`super::SolverKind`]'s `PubGrub` variant lands here. The backend drives lu-zero's `portage-atom-pubgrub` bridge instead of the backtracking walk -- the same md5-cache facts in, a [`super::GraphResult`] out, so `pretend.rs` never knows which algorithm resolved the graph.  Portuale computes all policy (resolved USE, target atoms, installed set) and hands it in; the engines only pick versions. Facts load on demand per `cat/pkg` over a reachability-closure BFS, so cost scales with the request, not the tree.  Deliberate v1 cuts (each would be its own slice): - Keyword/license/mask suggestions come from a relaxed re-solve after a failed strict one (#431 S2); USE flips go through the post-solve validator (#429). - `slot_conflicts` and `skipped_updates` stay empty (no missed-update warning for a solvable plan; the route-less-holder note, #703, is filled from repo facts and is not this cut) and a bridge failure is one `Error::Detail` line of engine-native text, not a Portage notice. Since S9 the pubgrub path replays the walk's abort predicates read-only over the solved plan, so `autounmask_use_changes` and the miss disclosures can fill. - When the solver fails and the default walk fails too, `PubGrubResolver` returns the walk's own report (partial merge list, notices, exit), since a solver stops at one failing branch where Portage prints all it walked (backlog #434). - Merge order is the walk's own `topological_merge_order`; engine install order only seeds positions. - Unparsable dep-string classes feed empty deps; unparsable versions and top-level blocker atoms are skipped. - Binaries join the pool under `--usepkg` (#430: a built package's DEPEND/BDEPEND are dropped unless bdeps is on, a binary whose built `:S/SS=` dep went stale is masked and re-solved, and `--usepkgonly` drops the ebuild pool); `--deep=N` bounds kept expansion through a pre-solve BFS allowlist (the engine cannot carry depth).
 
 ## struct LoadedVersion
 - Parsed dep trees per class (DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND in that order) plus identity back into `GraphEntry` fields.
@@ -77,6 +78,7 @@ Alternate `--solver=` backend: PubGrub over the same repo facts.
 - `slot_conflicts` stays empty on purpose; the `autounmask_use_changes` list fills only from the post-solve validator (a USE flip), the keyword/licence/mask lists only from the relaxed re-solve (#431 S2). A bridge failure is one `Error::Detail` line (engine-native text), not a Portage `depgraph.py` notice.
 - The abort path is a property of the BFS walk + backtrack loop in `lib.rs`, not the bridge; see `ResolveOutcome`'s doc comment.
 - Backlog #221 is a walk-path rule (cycle map). Backlog #217: no changes, so `autounmask_backtrack_disabled()` is False regardless. Backlog #193: a virtual cycle is one more abort shape the bridges do not do, like slot conflicts.
+- Backlog numbers removed from the comment (original text): The rebuild rows the slot-operator pass adds have no solver record: read the same dependency data for them, so `--json` is whole for every merge-bound row (#716, #732).
 
 ## struct WalkOrder
 - #366: Portage's graph-fill order simulated over one solved plan (evidence `LLM/evidence/2026-10-15-366/walk-order.md`). `added` maps `cp` to its `_add_pkg` step; `resolved` maps `(member cpv, dep class, group index)` to its disjunction-pop step. No entry = the walk never reaches it (complete-mode latecomers like systemd behind the pager root): counts as added last. Read by `or_branch_standing` only.
@@ -177,6 +179,7 @@ Alternate `--solver=` backend: PubGrub over the same repo facts.
 - #34 S5 G2 round 2: post-solve pass over the solved plan (`SolvedPlan`: selected `(cp, version)` members plus the `(parent cp, child cp)` taken edges inverted out of the round's `parents` map by `solution_taken_edges`). Only members whose deps expand contribute atoms: fresh members the solved version's repo strings with the config USE (`lazy.use_of`); installed members only when Portage would expand them -- rebuilt members with the config USE (repo strings), kept ones only under deep with the vdb strings/USE (`installed_parsed_deps`, `installed_pkg_iuse_and_use`), skipped as kept leaves without deep (`_ignored_deps`, `depgraph.py:3815-3824`) -- with the same USE source `desired_use` answers them with. A re-selected (G1-downgraded) member scans through the fresh branch at its solved version. The child must match the atom's version/slot (`matches_cpv`: a non-matching installed version is an upgrade question, not a parent-USE reinstall) and already be in neither `rebuild` (emptytree covers all) nor `downgrade`. The repo side requires the same-version ebuild to satisfy the atom under the current config -- a default-off flag with no `package.use` line fails here, which is exactly the G4a autounmask gate (capture-only `pg34-napp` variant), so the pass deliberately stops there. `resolve_pubgrub` loops solve → pass until `rebuild` stops growing (monotone, so terminating); each new rebuild member's expanded deps can pull further parents in. Portage: `_select_atoms`/`dep_check` re-evaluation (`depgraph.py:6030-6110` region).
 - Helpers: `use_deps_satisfied` (per-kind table over `portage_atom::UseDep`, mirroring the engine's `convert.rs`/`validate.rs` `resolve_flag_state` + per-kind match, including the PMS 8.2.6.4 `[!flag?]` reading and the `(+/-)` fallback for flags absent from IUSE) and `changed_use_dep_flags` (required flags flipping installed→repo, for the `R` row's `*` paint through the S4 `use_drift` channel; repo IUSE names reuse the existing `parse_iuse`). `portage-atom =0.12.0` joined `Cargo.toml` as a direct dependency (same locked version the solver crates use; no version moves) for `UseDep`/`UseDepKind`/`UseDefault`.
 - Recorded cuts: `||`/`^^`/`??` choice groups resolve to the taken branch only (alternatives the solve edged from the parent): a USE atom on an untaken branch never forces a reinstall (triage G5; pinned by `pg34-xapp`, whose untaken `pg34-xq` requires `xlib[f]`), while a taken one does (the corpus `zlib[minizip]` row via `virtual/minizip`'s `|| ( zlib[minizip] minizip-ng )`, pinned by `pg34-ztop`; round 1 skipped every choice group and never restored that row). Only `AllOf` and satisfied `flag?` gates are otherwise transparent. Residual risk: where the engine and Portage take *different* `||` branches (the documented G5 engine limitation), an edge-confirmed branch Portage would not take can still exert pressure; the known rows stay on the G5 allowlist. The parent-side flag state is the pre-solve config, not the solver's `UseDecision` outcome. Sensitivity: the `-pvO` and `pg34-napp` arms of `pg34_capp_kept_parent_use_atom_reinstalls_child` fail if the nodeps gate / repo-satisfiability gate is removed; the out-of-plan arm fails if the member gate is removed (it passes the empty plan).
+- Backlog numbers removed from the comment (original text): `--autounmask-use` (#429): when the config USE misses the atom, the same flip Portage suggests (`need_config_change`) plans the rebuild with the flipped flags; the validator still checks the unflipped config USE, so the change is reported too.
 
 ## struct BridgeRepo
 - #34 S3 `desired_use`: a kept installed cpv under deep answers the vdb USE (`installed_pkg_iuse_and_use`), whether or not its version is still in the repo; otherwise the config USE as before. Portage expands an installed node under `--deep` with `_pkg_use_enabled(pkg)` = the flags it was built with (`depgraph.py`): with the config USE, `package.use` (`dev-libs/pg34-ulib x`) wrongly switched the installed `x?` dep on.
@@ -238,6 +241,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn without_absent_alternatives
 
 #730: the `portage-atom-pubgrub` crate drops a dependency on a package it does not know (`provider/mod.rs`, "remove dependencies on packages not present"); a `||` arm of such a package then has empty dependencies and counts as satisfied (`virtual/perl-Storable-3.410.0` has `|| ( =dev-lang/perl-5.44* ~perl-core/Storable-3.410.0 )` and there is no `perl-core/Storable`). The bridge removes those arms in `versions_for`, after `without_self_alternatives`. "Absent" means the cp is outside the closure (no repo directory) and not installed; an arm that exists but is masked stays, so autounmask still sees it. Pin: pmtest `test_727_a_kept_provider_picks_the_virtual_that_accepts_it`.
+- Backlog numbers removed from the comment (original text): Drops the `||` arms no package can satisfy: an arm naming a cp with no ebuild in any repo (outside the closure) and no installed instance. The pubgrub crate drops a dependency on an unknown package, so such an arm would count as satisfied with empty dependencies (#730). A group with no satisfiable arm is kept whole, so the miss is still reported.
 
 ## fn bridge_use_columns
 
@@ -246,6 +250,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn vdb_installed_ref
 
 #714: one constructor for the `[oldver]` bracket entries (sub-slot and repo from the vdb, #446); the Upgrade/Downgrade arm used the candidate's sub-slot before.
+- Backlog numbers removed from the comment (original text): An installed instance as the `[oldver]` bracket shows it: the sub-slot and repo come from the vdb, not from the candidate that replaces it, so the bracket renders `[1.0:1::testrepo]` (backlog #446, #714).
 
 ## fn bridge_download_files
 
@@ -262,14 +267,17 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn bridge_dep_input
 
 #716: `GraphEntry::dep_input` feeds only the `--json` fields `sub_slot`, `dependencies`, `required_use`, `iuse`, `use` (`pretend/json.rs`, `dep_input_fields`). The bridge left it `None`; the health checker needs it to evaluate a planned package alone.
+- Backlog numbers removed from the comment (original text): What `--json` reports of one pick so a plan can be checked on its own: the raw dependency strings, `IUSE` and `REQUIRED_USE` the solver read, and the USE they were evaluated against (#716).
 
 ## fn complete_required_by
 
 #732: the pubgrub crate reports one requirer per package, `--tree` nests a row under any entry whose `deps` resolve to it (`resolved_dep_targets`). Both now read the same edges. The holders' provider parent (#718, `name_holder_parents`) is added afterwards and stays.
+- Backlog numbers removed from the comment (original text): Adds every real dependent to `required_by`: the solver names one requirer per package, while `--tree` nests a row under any entry whose dependencies resolve to it. Both read the same edges (`resolved_dep_targets`), so the list and the tree cannot disagree (#732).
 
 ## fn drop_unrequired_pins
 
 #736: the holder pass withholds a provider with a `=cat/pkg-ver` request. Its entry is kept when something in the plan depends on it (it then has a parent) and when the user named the package; otherwise it would be an `already_installed` row nobody asked for, which the output invariants flag.
+- Backlog numbers removed from the comment (original text): The holder pass withholds a provider by also asking for its installed version. When nothing in the plan depends on that provider and the user did not name it, the pin has done its work and its entry would be an unparented `already_installed` row (#736); the default solver has none.
 
 ## fn LazyRepo::build_relaxed (#761)
 - `LazyRepo::build` (the test-only wrapper that fixed the default pool options; #755 removed its last production caller, the resolvo backend) is gone: `Self::build_relaxed` is the one constructor, and the tests build through their own `lazy_closure` helper. The old `Self::build` doc said the closure is rebuilt per relax level, which now sits on `build_relaxed`.
@@ -282,3 +290,127 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 - Differences left open: the provider row carries no `r` tag (`slot_operator_replaced` is hard-coded empty in `graph_result_from_order`, #780); the false NOTE and held-back plan from `holder_fix` on `-u @world` without `--deep` (#781); `--backtrack=0`, where the default aborts with a slot conflict and pubgrub now rebuilds (no gate by owner decision, #782 only if wanted).
 - Observed after the change (not predicted by the plan): on the shared-tree shapes `-uD dev-libs/p569pull` and `-uD dev-libs/p589bpull` the false NOTE and the held-back single-row plan of #781 are gone; pubgrub now prints the default's rows (provider row without `r`). The scan now schedules the walked consumer before `holder_fix` judges the provider, so it no longer holds the move back there. `-u @world` is unchanged.
 - The `--json` entries list `p569virt` twice (`reinstall` and `already_installed`) on the bridge, also before this change under `-DN`: the rebuild entry is added next to the kept one.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): Installed cpvs a holder pass (#698) schedules as rebuilds so they follow an upgrade.
+- Backlog numbers removed from the comment (original text): `--autounmask-use` flips a rebuilt cpv is planned with (`(flag, enabled)`): Portage shows the package with the flipped USE and expands its deps with it, while the change itself stays a suggestion (#429).
+- Backlog numbers removed from the comment (original text): Parent USE flips Portage records instead of a miss (#429): the parent's flipped USE columns, applied to its entry post-validation.
+- Backlog numbers removed from the comment (original text): Withheld moves with a route-less holder, for the #703 note.
+- Backlog numbers removed from the comment (original text): `(holder, provider)` as `(category, package)`: why a holder joins the plan (#718).
+- Backlog numbers removed from the comment (original text): `(provider_cpv, holder_cpv)` of each holder the plan rebuilds because its provider moves: the display pair the slot-operator pass files for a walked consumer (#780).
+
+## fn of
+- Backlog numbers removed from the comment (original text): #432: bounded `--deep=N` expansion depths: the kept-expansion allowlist (min depth `< N`) and the update-walk reach (min depth `<= N`, Portage `want_update`). Empty without a bound.
+
+## fn versions_for
+- Backlog numbers removed from the comment (original text): #34 S2: without deep, an installed package that is not being rebuilt is a leaf: Portage sends its deps to `_ignored_deps` instead of expanding them. #432: under `--deep=N` only installed cpvs inside the bounded pre-solve BFS set expand. The trace then shows no edges for it, like the engine. Portage: depgraph.py:3815-3824, :7359-7375
+- Backlog numbers removed from the comment (original text): #390: a kept installed version expanded under deep with bdeps on folds its build-time classes into the runtime view the engine reads for it.
+- Backlog numbers removed from the comment (original text): #390: same kept-buildtime fold as the repo path above. #432: past the `--deep=N` bound the offer is a leaf (empty deps), like the repo path above.
+
+## fn desired_use
+- Backlog numbers removed from the comment (original text): #34 S3: under deep, an installed cpv keeps the USE it was built with (the vdb), whether or not its version is still in the repo: Portage expands the installed node with `_pkg_use_enabled`, while the config USE (`package.use` included) would wrongly switch its conditional deps on or off. Portage: depgraph.py, _pkg_use_enabled. #34 S4: except a rebuild member, which Portage rebuilds with the current config USE (its `x?` deps switch on for the rebuild, e.g. `R pg34-ulib` pulling `N pg34-uextra`). #432: past the `--deep=N` bound the kept leaf's deps never reach the engine, so the config USE answers there too.
+
+## struct BridgeAbortValidation
+- Backlog numbers removed from the comment (original text): S9 (#363/#364/#365): what the read-only post-solve validator fills in: the abort channels `graph_result_from_order` leaves empty when the engine solved a plan Portage would have refused.
+
+## fn bridge_validate_aborts
+- Backlog numbers removed from the comment (original text): S9 (#363/#364/#365): replay the default path's three abort predicates over a solved pubgrub plan -- REQUIRED_USE (`entry_use_display`), miss disclosure (`record_miss_disclosure`) and the USE-change gate (`entry_use_flags`) -- reusing their helpers. Read-only: `order` and `parents` are untouched, and `None` (no notices) leaves the result exactly as `graph_result_from_order` built it. `Err` is a REQUIRED_USE refusal, the same `Error::Detail` text the walk returns.
+
+## fn bridge_apply_validation
+- Backlog numbers removed from the comment (original text): S9 (#363/#364/#365): file a [`BridgeAbortValidation`] into a `graph_result_from_order` result: NVC entries join the graph, report and change chains walk out of the final entries, and the outcome re-derives through `abort_outcome` exactly like the settled walk.
+
+## fn resolve_pubgrub_unstale
+- Backlog numbers removed from the comment (original text): The last round that solved: a later round that asks for more and fails (an arm the engine cannot merge) keeps its plan instead of aborting the run (#809).
+
+## fn name_holder_parents
+- Backlog numbers removed from the comment (original text): A holder that joins the plan only because its provider moves names that provider as its parent, so the plan says why it is there (#718, as #713 does for the default solver). A holder the plan rebuilds also files the `(provider, holder)` display pair, so its row is tagged `r` and the provider's "causes rebuilds for" block lists it, as for a rebuild the slot-operator pass finds (#780). A pair is kept only while both rows are in the final plan.
+
+## fn resolve_pubgrub_at
+- Backlog numbers removed from the comment (original text): An atom the holder pass added only pins a version; it is not a request to reinstall it, so it prints no `R` row (#729).
+- Backlog numbers removed from the comment (original text): S9 (#363/#364/#365): the engine never sees REQUIRED_USE, masked disclosure or the autounmask gate, so replay them read-only over the solved plan; passing probes validate clean and keep their output.
+
+## fn holder_fix
+- Backlog numbers removed from the comment (original text): Only holders the plan or the world reaches matter, like the default solver's reverse scan. The plan's own dependencies always seed it: a world atom that is not installed yet reaches nothing installed (#700, #781).
+- Backlog numbers removed from the comment (original text): A holder the plan moves is judged by the version it moves to (its tree dependencies), a kept one by what the vdb recorded. A rebuild the bridge synthesised for the new sub-slot is at the installed version only because nothing chose another: it counts as kept, so its recorded pin is judged and the holder may move to a newer version (#728).
+- Backlog numbers removed from the comment (original text): A holder cannot follow, or nothing asks for or requires the provider's move (#727, #781): the provider stays where it is.
+
+## fn solve_scanned_rebuilds
+- Backlog numbers removed from the comment (original text): A rebuild the slot-operator scan added after the solve has no dependencies in the plan: past a `--deep=N` bound its package was a kept leaf, so what the rebuilt package needs (a `||` arm that only the new provider selects) was never solved. Ask for it as a rebuild member, so the next round expands its dependencies (#811), and carry its `(provider, consumer)` display pair, which only the scan files.
+
+## fn plan_requires_move
+- Backlog numbers removed from the comment (original text): Whether a package the plan merges has a tree dependency on `provider` that rejects its installed version `old_str`: the move is then not optional (#781).
+
+## fn tree_refusal_fix
+- Backlog numbers removed from the comment (original text): What the tree-pin refusals of the solved plan ask of the next solve (#791, #808). A consumer outside the walk whose own tree ebuild rejects the new provider either has a `||` arm that accepts it (the arm's packages are asked for, so the plan merges them and the consumer is rebuilt), or is pinned: the move is then withheld, as for a holder with no route, unless the plan itself requires it or the user asked for a version of the provider.
+- Backlog numbers removed from the comment (original text): An arm naming a package with no version in the tree cannot be merged (#809): the consumer is then as pinned as if the group had no other arm.
+
+## fn load_versions_offers_a_binary_that_replaces_its_ebuild_under_usepkg
+- Backlog numbers removed from the comment (original text): #430 S1: with `--usepkg` a visible binary joins the pool and replaces the ebuild of its version, keeping the USE it was built with; without the flag the pool is ebuilds only.
+
+## fn usepkgonly_offers_binaries_and_no_ebuilds
+- Backlog numbers removed from the comment (original text): #430 S3: `--usepkgonly` drops the ebuild pool, so a cp with an ebuild but no binary offers nothing, and one with a binary offers only the binary.
+
+## fn a_binary_record_drops_build_time_deps_unless_bdeps_is_on
+- Backlog numbers removed from the comment (original text): #430 S2: a binary's recorded DEPEND/BDEPEND are dropped (parsed and raw) unless bdeps is on; its RDEPEND stays either way.
+
+## fn p714_upgrade_row_is_compared_with_the_installed_package
+- Backlog numbers removed from the comment (original text): #714: an upgrade row is diffed against the installed package it replaces, like the default solver's: `-change*`, `added%*`, `(-drop%)`, a plain `keep`.
+
+## fn p716_merge_bound_entry_carries_its_dep_input
+- Backlog numbers removed from the comment (original text): #716: a merge-bound pubgrub entry carries what `--json` needs to check the plan on its own: the dependency strings, `IUSE` and the USE they were evaluated against.
+
+## fn pg432_deep_bounded_one_plans_nothing
+- Backlog numbers removed from the comment (original text): #432 S-11(c): `-pvu --deep=1` on dev-libs/deeppkg plans nothing. deeppkg (installed, depth 0) recurses since 0 < 1, discovering installed deeppkg2 at depth 1 -- but deeppkg2 itself does NOT recurse (1 < 1 is false), so newpkg is never reached, exactly like the default solver (Portage `_too_deep`, `depgraph.py:7359-7375`; pmtest `test_deep_bounded_depth_stops_short_of_the_full_chain`).
+
+## fn pg432_deep_bounded_two_plans_newpkg
+- Backlog numbers removed from the comment (original text): #432 S-11(c): `-pvu --deep=2` on dev-libs/deeppkg plans newpkg. deeppkg2 at depth 1 recurses since 1 < 2, reaching newpkg (New) -- the same plan the default solver prints, and the same as unlimited `--deep`.
+
+## fn pg367_top_pubgrub_pvud_takes_the_newest_slot
+- Backlog numbers removed from the comment (original text): #367: `-pvuD` on the new parent takes the newest slot. Expected from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvuD-portage.txt` plans `NS s-2 + N top`), never from portuale output.
+
+## fn pg367_top_pubgrub_pvd_keeps_the_installed_slot
+- Backlog numbers removed from the comment (original text): #367: `-pvD` (deep without update) keeps the installed slot. Expected from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvD-portage.txt` plans `N top` only), never from portuale output.
+
+## fn pg367_top_pubgrub_pvu_keeps_the_installed_slot
+- Backlog numbers removed from the comment (original text): #367: `-pvu` without deep keeps the installed slot. Expected from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvu-portage.txt` plans `N top` only), never from portuale output.
+
+## fn pg367_top_pubgrub_pve_takes_the_newest_slot
+- Backlog numbers removed from the comment (original text): #367: `-pve` takes the newest slot. Expected from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pve-portage.txt` plans `NS s-2 + N top`), never from portuale output.
+
+## fn s735_fetch_restriction_follows_restrict_and_use
+- Backlog numbers removed from the comment (original text): #735: `RESTRICT=fetch` marks the pick, a USE-conditional token follows the pick's USE, and a binary is never restricted.
+
+## fn s6_bridge_outcome_for_new_slot_reads_sub_slot_and_repo_from_vdb
+- Backlog numbers removed from the comment (original text): Backlog #446: a new-slot `oldbest` carries the installed instance's sub-slot and repo from the vdb, like the default solver's `installed_refs` -- not empty strings that render `[1.0:1/::]`. Oracle: `emerge --solver=pubgrub -pvu dev-libs/pg359-gsblk` on the fixture tree (installed `pg359-gsblk-1.0`, `SLOT=1`, `repository=testrepo`) prints `[1.0:1::testrepo]` under the default solver; the bridge printed `[1.0:1/::]`.
+
+## fn pg765_bridge_result_carries_the_stale_pin_refusal
+- Backlog numbers removed from the comment (original text): The bridge returns the stale-pin refusal its slot-operator scan makes (backlog #765): the plan upgrades `p569prov` past the recorded `=dev-libs/p569prov-5.42*` of the unreached `p569virt-1`, so the result names it; a request that moves no provider reports none.
+
+## fn pg811_bridge_solves_the_dependencies_of_a_scanned_rebuild
+- Backlog numbers removed from the comment (original text): Charter property 1 (a rebuilt package's dependencies hold): under `--deep=1` the installed `p569virt-1` is a kept leaf, so only the scan finds its rebuild. Its tree `||` leaves `~p569core-1.0` once `p569prov` is 5.44, so the plan must merge `p569core` and keep the display pair (#811).
+
+## fn pg791_bridge_holds_the_provider_a_pinned_consumer_cannot_follow
+- Backlog numbers removed from the comment (original text): Charter property 1 (a kept package's dependencies hold): the installed `p573virt-1` recorded `:0/5.42=` and its tree ebuild needs `=dev-libs/p569prov-5.42*`, so a rebuild cannot follow an upgrade of `p569prov` to 5.44 and nothing else requires it. The bridge keeps the provider at 5.42 and names the consumer (#773, #791).
+
+## fn pg808_bridge_asks_for_the_arm_that_accepts_the_new_provider
+- Backlog numbers removed from the comment (original text): Charter property 1: the tree of `p808virt-1` accepts the new provider through the `||` arm naming `p808other`, which the plan does not merge on its own. The bridge asks for that arm, so the plan merges it and rebuilds the consumer instead of refusing (#808).
+
+## fn pg780_bridge_files_the_display_pair_of_a_holder_rebuild
+- Backlog numbers removed from the comment (original text): Charter property 5 (the plan says what causes a rebuild): the holder `p808virt-1` is rebuilt because `p569prov` moves to 5.44, so the plan files the `(provider, holder)` pair the default solver files, with no deep walk (#780).
+
+## fn pg809_bridge_treats_an_unmergeable_arm_as_a_pin
+- Backlog numbers removed from the comment (original text): Charter property 5 (a message that is true, no abort): the `||` arm of `p809virt-1` that would accept the new provider names `p809missing`, which has no version. The arm cannot be merged, so the consumer is as pinned as `p573virt-1`: the provider stays and the consumer is named (#809).
+
+## fn s6_temp_repo
+- Backlog numbers removed from the comment (original text): #366 walk-order shapes (synthetic, no pmtest fixture): `a` first-lists `x`, but `x` pulls `b` which pulls `y` — Portage resolves the group with only `{r, a}` in the graph and takes `x`, while a plan-order-blind test takes the later `y`.
+- Backlog numbers removed from the comment (original text): #366 shape (a): the root pulls `b` (hence `y`) alongside `a`, so `y` is in the graph when `a`'s disjunction resolves.
+- Backlog numbers removed from the comment (original text): #366 shape (b): `b` listed first; the disjunction still resolves after `b` is walked, so `y` wins here too.
+
+## fn s6_compute_or_overrides_moves_the_desired_branch_first
+- Backlog numbers removed from the comment (original text): `compute_or_overrides` moves the branch Portage's walk already holds first: the root pulls `b` (hence `y`) alongside `a`, so `y` is in the graph when `a`'s disjunction resolves (#366 shape (a)). The engine's final fallback is the first-listed alternative, and nothing here is installed.
+
+## fn s6_compute_or_overrides_ignores_an_alternative_pulled_later
+- Backlog numbers removed from the comment (original text): `compute_or_overrides` keeps the written order when the other parent joins the graph only later: `x` pulls `b` which pulls `y`, so Portage resolves `a`'s group with only `{r, a}` present and takes first-listed `x` (#366 pager shape). A plan-order-blind "selected anywhere" test moves `y` first instead.
+
+## fn s6_compute_or_overrides_moves_the_desired_branch_first_reversed
+- Backlog numbers removed from the comment (original text): `compute_or_overrides` resolves shape (b) like shape (a): with `b` listed first, `a`'s disjunction still waits for the plain stack to drain, so `y` is in the graph at resolution (#366).

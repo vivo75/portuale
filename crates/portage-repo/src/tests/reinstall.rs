@@ -532,7 +532,7 @@ fn config_420_with_binhost() -> portage_profile::Config {
     config
 }
 
-/// Backlog #420 cell B: `--getbinpkgonly --binpkg-changed-deps=y
+/// Cell B: `--getbinpkgonly --binpkg-changed-deps=y
 /// dev-libs/bcdeppkg` aborts with Portage's masked block (`masked by:
 /// changed deps`), not the plain `no binary packages` miss. The tree
 /// `RDEPEND`s `dev-libs/bcdepnew`; the binhost binary was built
@@ -576,7 +576,7 @@ fn changed_deps_top_level_reports_the_masked_block() {
     );
 }
 
-/// Backlog #420 cell C: the dependency disclosure merges the stale binary
+/// Cell C: the dependency disclosure merges the stale binary
 /// rows into the masked block with the parent/argument chain (chain
 /// rendering comes free from `finalize_dep_reports`). The parent resolves
 /// from its own binhost row; the dep is the same stale `bcdeppkg` binary.
@@ -638,12 +638,12 @@ fn changed_deps_dependency_reports_the_masked_block() {
     );
 }
 
-/// Backlog #420 cell A: the dependency respect-use disclosure — a parent
+/// Cell A: the dependency respect-use disclosure — a parent
 /// binary whose dep's only builds are USE-mismatched reports Portage's
 /// masked block, cpv-deduped to one row, instead of the plain miss. The
 /// two-instance `Packages` is staged through `scanned_binpkgs` (the
 /// `_t341_bid_cell_configroot` pytest helper builds the same index on
-/// disk); the user line mismatches both builds like the #402 top-level
+/// disk); the user line mismatches both builds like the top-level
 /// cell (`=dev-libs/t341-dep-1-2 x` with build 1 baked `x`, build 2 baked
 /// empty).
 ///

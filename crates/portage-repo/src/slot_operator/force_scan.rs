@@ -423,7 +423,7 @@ pub(crate) struct ReplacementAcceptsArgs<'a> {
 /// than one the installed instance already matches, must match the candidate.
 /// Each `||` group contributes only its chosen arm's atoms (in-graph first,
 /// then installed; an unselected arm binds nothing, a selected arm that
-/// rejects the candidate vetoes it, backlog #618). A consumer without a
+/// rejects the candidate vetoes it). A consumer without a
 /// visible tree ebuild at its installed version or without such atoms accepts.
 // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
 pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
@@ -448,7 +448,7 @@ pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
     let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
     // Each `||` group contributes only its chosen arm (in-graph first, then
     // installed); an atom matching the installed instance pulls the same
-    // child and constrains nothing (backlog #618).
+    // child and constrains nothing.
     dep_keys
         .iter()
         .flat_map(|key| {

@@ -1,4 +1,4 @@
-//! Future options (#706): behaviour that is not a plain option yet, switched
+//! Future options: behaviour that is not a plain option yet, switched
 //! on by name with `--future-options=name,other=value`. Each one is in
 //! [`GATES`] with its stage, so promoting it to a plain option or removing it
 //! is one line there. `alpha` is off unless asked for, `beta` is on unless

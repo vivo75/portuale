@@ -90,3 +90,9 @@ Direct predicate-result legs for rebuild/circular/instance-use residue.
 
 ## fn arg_input_166
 - Eight-arg input builder (same shape as #161's `ds_input_161`).
+
+## fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason
+- Backlog numbers removed from the comment (original text): A binary dropped by the filters is a reason-less masked row (backlog #416); the surviving version is not listed, and nothing dropped means no report.
+
+## fn synthesize_166_filed_entry_carries_the_instance_repo
+- Backlog numbers removed from the comment (original text): Backlog #610: the filed entry carries the instance's repo, so its row renders `dev-libs/r592ds-1::testrepo` like Portage's instead of the repo-less `dev-libs/r592ds-1::`. Oracle: Portage 3.0.83 `emerge -pv dev-libs/r592dtop` (D default, `LLM/evidence/2026-10-26-575-residues/r1/captures/D-portage.txt`).

@@ -51,3 +51,6 @@ The merge driver: `merge`/`qmerge` entry points, shared helpers, submodules.
 
 ## S6 (351-MARK): foreground merge install chain tees
 - `run_merge_with_hook` hoists `compute_environment` (same failure point `run_commands_async` reads first anyway) and passes `PhaseLog::Foreground` for the `install` chain: foreground merges stream markers to stdout and `${T}/build.log` like Portage's `_spawn_phase` pipe (S0 `m08-emerge-jobs1`). The post-merge `clean` still inherits (Portage never logs `clean`).
+
+## fn run_merge_with_hook
+- Backlog numbers removed from the comment (original text): Portage's merge-path `EbuildExecuter`: a sourceless package defining no `src_*` phase runs `setup` then straight to `src_install` (backlog #456). Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases

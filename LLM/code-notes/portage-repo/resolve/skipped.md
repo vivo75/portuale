@@ -36,3 +36,9 @@ Skipped-update records (withheld upgrades, backtrack-mask rows) and their groupi
 
 ## gate threading (#571)
 - `MissingDepFullRowArgs` and `backtrack_masked_match` carry the gate into the masked-candidate disclosure.
+
+## struct StalePinRefusal
+- `tree_pin` (#773): `stale_pin_for_consumer` checks the recorded pin (`held_back`) before the tree pin (`tree_held_back`), and a no-ebuild refusal returns earlier still. A refusal is therefore `tree_pin: false` whenever the recorded pin refuses, even if the consumer's own tree ebuild would refuse too. `solver_bridge.rs` `tree_refusal_fix` judges only `tree_pin: true` (and not `no_ebuild`) refusals: for those the provider could stay where it is.
+
+## struct HeldBackNoRoute
+- Backlog numbers removed from the comment (original text): An update left alone because installed packages cannot follow it: their recorded dependency pins the old version and no visible version of them accepts the new one (#703). A note, never a failure. Not [`HeldBackUse`]: one group lists several holders and the closing sentence differs.

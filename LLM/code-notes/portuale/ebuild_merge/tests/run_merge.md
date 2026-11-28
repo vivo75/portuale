@@ -74,3 +74,12 @@ Full `run_merge`/`run_qmerge` merge tests: preinst/postinst ordering, vdb conten
 
 ## fn mergeblockerpkg_excludes_the_collision_via_a_real_blocker_atom
 - Resolution is rooted at `config_root` (the `fixtures` tree, which has its own `repos.conf`).
+
+## fn reinstalling_the_same_version_removes_files_the_new_image_dropped
+- Backlog numbers removed from the comment (original text): Reinstalling the same version removes the files the new image no longer has and keeps the ones it still has (Portage: `dblink.treewalk` takes the new package's ownership from its temporary `CONTENTS`, #354).
+
+## fn a_contents_path_with_spaces_is_removed_and_the_prefix_decoy_is_kept
+- Backlog numbers removed from the comment (original text): Backlog #357 S3: `CONTENTS` paths with spaces are removed on unmerge (S1 shape) and on a same-version reinstall that drops one (S2 shape), while an unowned prefix decoy is kept in both.  Expected values from Portage 3.0.82.2, S0 cells S1/S2 (not from portuale output): variant 1 records `a b.txt`, `c d -> a b.txt` and `sp dir/f`; `emerge -C` removes all three and keeps the admin-created decoy `/usr/share/t355/a`. Variant 2 drops `a b.txt`; reinstalling removes it through the replace loop and keeps the decoy. Pre-fix portuale removed the decoy and leaked the space paths in both shapes.
+
+## fn unmerge_without_preserve_libs_removes_a_still_needed_library
+- Backlog numbers removed from the comment (original text): `-preserve-libs` turns the unmerge side off: the same still-needed library is removed with the package and nothing is registered. Source-derived: `vartree.py:3667` (`_find_libs_to_preserve` returns early without `_preserve_libs`), `:2053` (set from `FEATURES`). Backlog #383.

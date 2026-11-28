@@ -25,3 +25,9 @@ Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
 - Backlog #264, expected value from Portage: Portage's `slot_collision.py` header/parent lines go through the same `pkg_use_display` (`_emerge/UseFlagDisplay.py:55`) as the skipped-update block.
 - Grounded in Portage `/usr/sbin/emerge` 3.0.82.2 `--pretend --ignore-default-opts --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c` on the staged fixture: headers `USE="foo" ELIBC="glibc"` (aub0d-0) / `USE="-bar" ELIBC="glibc"` (aub0d-1, `bar` incrementally removed by `profiles/default/make.defaults`), parents `USE="" ELIBC="glibc"`.
 - The slot-conflict `USE="…"` display carries Portage's USE_EXPAND groups: the slot-conflict producers must render the same groups as the skipped-update block.
+
+## fn world_bound_stops_on_the_use_change_with_the_slot_conflict
+- Backlog numbers removed from the comment (original text): #613: with `--autounmask-backtrack` off the first pass's `x` change stops the search, and the `A-3` / installed `A-1` slot conflict is reported (Portage 3.0.83: `0/20`, `LLM/evidence/2026-11-07-613/def.portage.txt`).
+
+## fn world_bound_without_backtracking_keeps_the_newest_and_reports
+- Backlog numbers removed from the comment (original text): #613: without a search the installed `A-1`, which misses `abk0d`'s `>=A-2`, is not enforced in-pass: the conflict is reported (Portage 3.0.83 `--backtrack=0`: `0/0`, `bt0.portage.txt`).

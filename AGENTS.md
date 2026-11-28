@@ -90,7 +90,9 @@ the next slice") and expects the same rhythm every time:
    stale.
 8. **Run the full verification pass** before a slice is done. Here:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
-   warnings), `cargo test --release` (whole workspace). Then in
+   warnings), `cargo build --release` then `cargo test --release` (whole
+   workspace; the portuale tests run the built binary and panic at
+   `crates/portuale/src/self_exe.rs:56` if it is missing or stale). Then in
    `../pmtest`: `scripts/pytest-parallel.sh` (whole suite on 8 workers,
    about 90 s; it rebuilds this tree's binary itself through its registry;
    `JOBS=n` changes the workers, extra arguments go to pytest, and a plain
@@ -196,8 +198,10 @@ content, never duplicated:
   message says so explicitly, so the next agent doesn't go hunting for
   the missing half.
 - **Pushes go together.** Rule 9's ask covers both repos at once unless
-  stated otherwise; push portuale first, then pmtest, and report both
-  shas. Never push one half of a pair and leave the other local.
+  stated otherwise; push pmtest first, then portuale, and report both
+  shas, so the commit a portuale message quotes is on the remote before
+  the message that quotes it (history stays linear). Never push one half
+  of a pair and leave the other local.
 
 ### Numbering new backlog items
 
@@ -260,3 +264,7 @@ re-read whole files.
 After big code changes, refresh the graph with `graft build` (deterministic,
 no API key, $0).
 <!-- graft:end -->
+
+**Graft is not supported in git worktrees**: a worktree has no graft index, so
+graft queries fail there. Use `grep -n` and read the file, or run graft from
+the main checkout. (Kept outside the generated block above.)

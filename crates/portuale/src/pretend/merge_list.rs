@@ -262,7 +262,7 @@ pub(crate) struct RenderMergeRowsArgs<'a> {
     pub(crate) columnwidth: i64,
     pub(crate) pretend: bool,
     /// `--debug`: forwarded to [`ShowAbortDisclosuresArgs`] for the abort
-    /// preamble's banner-only shape (backlog #614).
+    /// preamble's banner-only shape.
     pub(crate) debug: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
     pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
@@ -444,9 +444,9 @@ pub(crate) fn timing_line_with(
 /// nothing prints at all: Portage's `_start_resolution_display` skips the
 /// banner (`depgraph.py:12219`) and forces the spinner QUIET
 /// (`:12259-12260`), so `end_notice()` reports no notice to complete and
-/// the report never prints (backlog #621). `--debug` keeps only the
+/// the report never prints. `--debug` keeps only the
 /// banner: Portage's `PORTAGE_DEBUG` puts the spinner in QUIET mode, so
-/// neither the notice nor the report prints (backlog #614).
+/// neither the notice nor the report prints.
 // Portage: _emerge/depgraph.py, _start_resolution_display + _show_resolution_report
 pub(crate) fn abort_preamble(
     quiet: bool,
@@ -492,7 +492,7 @@ pub(crate) struct ShowAbortDisclosuresArgs<'a> {
     pub(crate) columnwidth: i64,
     pub(crate) pretend: bool,
     /// `--debug`: the spinner's QUIET mode, so the preamble keeps only the
-    /// banner (backlog #614).
+    /// banner.
     pub(crate) debug: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
     pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
@@ -911,7 +911,7 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
 
 /// The header printed before the merge list of a non-pretend run, and of a
 /// `--pretend` run whose resolve completed with autounmask changes (backlog
-/// #462: Portage's `_show_merge_list` runs `display()` before the change
+/// Portage's `_show_merge_list` runs `display` before the change
 /// blocks, even though the run then fails).
 pub(crate) fn show_resolution_header(
     opts: &EmergeOpts<'_>,
@@ -944,10 +944,10 @@ pub(crate) struct ShowResolutionHeaderWithCountsArgs<'a> {
 /// arm) prints it with zero restarts -- the argument dies on first
 /// dequeue, before any backtrack -- over the run's backtrack max.
 /// `pretend_abort` prints the header of a `--pretend` run that aborts
-/// there (Portage prints it with `-p` too, backlog #406); `pretend_changes`
+/// there (Portage prints it with `-p` too); `pretend_changes`
 /// prints the header of a `--pretend` run whose resolve completed with
 /// autounmask changes (Portage's `_show_merge_list` before the change
-/// blocks, backlog #462).
+/// blocks).
 pub(crate) fn show_resolution_header_with_counts(args: ShowResolutionHeaderWithCountsArgs<'_>) {
     let ShowResolutionHeaderWithCountsArgs {
         opts,

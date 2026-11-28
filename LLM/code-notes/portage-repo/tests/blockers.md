@@ -38,6 +38,7 @@ Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification
 - Cell d is Portage's `b`. The complete-mode re-mark comes from the L0 `sys-apps/systemd-utils` shape: Portage's digraph holds the installed closure, so the vdb reverse scan (documented fallback) marks it unresolved again; the consumer must be an installed vdb package to be found.
 - Cell g matches two instances (#72 B1); the satisfied nomerge arm is #77 A1 (removes the owner, ordered after the blocked instance via `anchor`).
 - #73 cell g: the `@world`/`@selected`/`@system` closure is a SetArg parent. #73 S0 cell f / T11: `merge_bound_match` gates the whole nomerge arm.
+- Backlog numbers removed from the comment (original text): #483: the consumer this run replaces leaves the graph with its dependency, so the installed edge no longer makes a parent.
 
 ## fn resolve_blockers_tags_a_scanned_nomerge_owner_with_its_own_removal
 - #77 A1 / A0 n1: the owner is the vardb `Package` the all-installed scan registered (`owner_installed: true`). Never walked, so no entry even when the target cp's merge entry exists; Portage removes the owner, ordered after the merge-bound blocked instance (`inst_task`).

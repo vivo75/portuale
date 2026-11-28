@@ -1,6 +1,6 @@
-//! #647: a multi-version installed new-style virtual must expand per version.
+//! A multi-version installed new-style virtual must expand per version.
 //!
-//! S0 #645 (`LLM/evidence/2026-11-03-645/REPORT.md` §6) proved the trigger:
+//! S0 (`LLM/evidence/2026-11-03-645/REPORT.md` §6) proved the trigger:
 //! `virtual/perl-Scalar-List-Utils` shipped 4 tree ebuilds and
 //! `virtual/perl-Encode` 2, so the single-tree-version cut fired first in
 //! both `virtual_expansion_seeds` (`rev_dep_or.rs:706`) and
@@ -102,7 +102,7 @@ fn multi_version_installed_virtual_falls_through_the_wrapped_arm() {
     );
 }
 
-/// Leg A0 (#657): the same consumer with no perl upgrade in the graph keeps
+/// Leg A0: the same consumer with no perl upgrade in the graph keeps
 /// the installed virtual. Portage expands one conjunction for the selected
 /// (installed) virtual, resolves its nested `||` first and ranks the result
 /// `preferred_installed` over `dev-libs/p647sub`; it never builds a
@@ -112,7 +112,7 @@ fn multi_version_installed_virtual_falls_through_the_wrapped_arm() {
 /// 3.0.83, M4 dicts of `probe647_oracle.py`): `MERGELIST
 /// ['dev-perl/Try-Tiny-0.320.0']`, no Sub-Name, no perl, no virtual row.
 ///
-/// RED before #657: the per-version conjunctions each carried a dead
+/// RED before the per-version conjunctions each carried a dead
 /// `~perl-core` member, ranked `OtherInstalledSome`, and `p647sub` won.
 #[test]
 fn bare_consumer_keeps_the_installed_multi_version_virtual() {
@@ -138,7 +138,7 @@ fn bare_consumer_keeps_the_installed_multi_version_virtual() {
     );
 }
 
-/// Leg A1 (#657, skip block): the bed shape of `dev-perl/Try-Tiny`. Two
+/// Leg A1: the bed shape of `dev-perl/Try-Tiny`. Two
 /// installed new-style virtuals are plain deps of the consumer: `p657exp`
 /// (`virtual/perl-Exporter`: `|| ( =prov-5.44* =prov-5.42* ... )`) and
 /// `p657mm` (`virtual/perl-ExtUtils-MakeMaker`: only `=prov-5.42*`).

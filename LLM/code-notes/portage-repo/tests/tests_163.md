@@ -266,3 +266,6 @@ Result/display-assembly unit tests: abort outcomes, USE rows, pretend decisions,
 
 ## fn ctx_163
 - Literal `ResolveCtx` in the #161 `ctx_161` shape (same field list, so it tracks production), with the knobs each leg needs as parameters.
+
+## fn plain_miss_reports_read_binary_only_under_usepkgonly
+- Backlog numbers removed from the comment (original text): `--usepkgonly` turns a plain miss into Portage's "binary packages" wording; without it the report keeps "ebuilds" (#353).

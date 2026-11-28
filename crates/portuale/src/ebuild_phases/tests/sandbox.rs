@@ -825,7 +825,7 @@ fn degrade_message_names_the_demoted_phase() {
 }
 
 /// A demoted phase keeps `pid` alongside the other namespaces: the demoted
-/// `pre_exec` fork dance (#635) re-expresses Portage's PID-1 re-exec
+/// `pre_exec` fork dance re-expresses Portage's PID-1 re-exec
 /// (`pid-ns-init`, process.py:1111-1145) without re-execing, so pid-sandbox
 /// applies instead of dropping. Replicates the rule through the real
 /// `phase_isolation` with a minimal Environment (outside any repo checkout,
@@ -972,7 +972,7 @@ fn demoted_phase_with_network_sandbox_has_no_egress() {
 }
 
 /// A demoted+pid-sandboxed phase runs as PID 1 with a local `/proc` and the
-/// portage uid: the demoted `pre_exec` fork dance (#635) re-expresses
+/// portage uid: the demoted `pre_exec` fork dance re-expresses
 /// Portage's `pid-ns-init` re-exec shape (process.py:1111-1145) without the
 /// re-exec — the grandchild IS pid 1 by fork order, so it execs directly
 /// while the middle supervises (forwards, reaps, re-raises). The multi-fork
@@ -1309,7 +1309,7 @@ fn demoted_pid_ns_forwards_fatal_signals() {
 
 /// NON-ISOLATING control: a demoted spawn with `usersandbox` in FEATURES
 /// stays demoted (`id -u` is still the portage uid), so the `usersandbox`
-/// path + the #627 `free` rule (demoted without `usersandbox` drops the
+/// path + the `free` rule (demoted without `usersandbox` drops the
 /// wrapper) compose with demotion with and without namespaces. Deliberately
 /// requests no namespaces: pre-fix the demoted shim demoted-then-unshared,
 /// so any namespace request failed the whole spawn (exit 1 — the bug Task 1
@@ -1445,7 +1445,7 @@ fn lo_netlink_messages_mirror_portage_bytes() {
 /// 10.0.0.1 connect (ECONNREFUSED, reproduced standalone), so only 0.0.0.0
 /// lets the 10.0.0.1 leg prove the address is configured — with no default
 /// route a non-local 10.0.0.1 fails ENETUNREACH instead. `assert_pid1` adds
-/// the PID-1 check for the pid-ns variant. The tail re-asserts the #630
+/// the PID-1 check for the pid-ns variant. The tail re-asserts the
 /// no-egress property (no default route, external connect fails), which must
 /// survive lo-up.
 fn loopback_probe_script(assert_pid1: bool) -> String {
@@ -1497,7 +1497,7 @@ fn loopback_probe_script(assert_pid1: bool) -> String {
 }
 
 /// A demoted phase in a fresh netns reaches localhost over TCP: listener +
-/// connect in the same spawn against 127.0.0.1 and 10.0.0.1, with the #630
+/// connect in the same spawn against 127.0.0.1 and 10.0.0.1, with the
 /// no-egress property surviving lo-up. Per the S0 ruling, flags (0x9 in BOTH
 /// states) and bind (succeeds either way) are NOT discriminators — only the
 /// connect is, so this test asserts connects and nothing else would pass it.
@@ -1832,7 +1832,7 @@ fn loopback_warn_lookup_falls_back_out_of_range() {
 /// `PORTUALE_TEST_LOOPBACK_FAIL=linkup` and `Capture` on a `build.log.gz`
 /// path, the child-side `write(2)` flows through the gzip pump as part of
 /// the member (never a raw tail append), so the member decodes to end and
-/// carries the warning. This pins the #639 regression shape: a post-wait
+/// carries the warning. This pins the regression shape: a post-wait
 /// parent append would land past the member as trailing garbage.
 /// Root-gated and portage-user-gated like the plain-log test above.
 /// Portage: process.py, _configure_loopback_interface (:838-871).

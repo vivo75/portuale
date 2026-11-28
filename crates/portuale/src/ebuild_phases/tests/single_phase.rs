@@ -139,7 +139,7 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
 
 /// Standalone `preinst`/`postinst` actually run the `pkg_preinst`/
 /// `pkg_postinst` phase functions with no dep chain, like Portage's
-/// direct `_spawn_phase` for them (plan #348 S3 P2).
+/// direct `_spawn_phase` for them.
 #[test]
 fn run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst() {
     let tmp = TempDir::new(&format!(

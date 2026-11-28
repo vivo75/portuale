@@ -1,4 +1,4 @@
-//! The embedded `make.globals` (backlog #384).
+//! The embedded `make.globals`.
 
 use super::*;
 

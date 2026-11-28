@@ -897,7 +897,7 @@ impl OrScan<'_> {
 /// (the outer choice demotes the conjunction as a unit instead).
 /// A demotion whose higher-in-slot node the pass's open slot conflict may yet
 /// skip commits no seed: the installed arm holds instead, and the feed
-/// re-commits once the verdict lands with the demoter surviving (#650).
+/// re-commits once the verdict lands with the demoter surviving.
 /// Portage: dep_check.py, dep_zapdeps.
 fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> ExpansionArms {
     let SelectExpansionArmsArgs {
@@ -1067,7 +1067,7 @@ struct SelectExpansionArmsArgs<'a> {
     update: bool,
     gate: CategoryGate<'a>,
     /// The pass's surviving slot conflicts: a demotion whose higher-in-slot
-    /// node sits in one is withheld (the demoter may yet be skipped, #650).
+    /// node sits in one is withheld (the demoter may yet be skipped).
     /// The inner-choice caller passes an empty slice alongside
     /// `keep_demoted` (the guard is dead there either way).
     conflicts: &'a [SlotConflict],
@@ -1140,7 +1140,7 @@ pub(crate) struct ExpansionFeed {
 /// virtual's own dep comes only from dep_check on the kept instance's own
 /// string. Already-seeded and already-merge-bound arms are skipped, so the
 /// feed terminates.
-/// Backlog #656 leg (b): the verdict carries the re-evaluating parents'
+/// Leg (b): the verdict carries the re-evaluating parents'
 /// posture. A request-pinned demoter forces every judgment post-demoter, so
 /// no keeper binds; with only replacing parents the installed arm holds (the
 /// hold is recorded in `BacktrackParams::posture_holds` and re-fires while the
@@ -1302,7 +1302,7 @@ pub(crate) fn virtual_expansion_seeds(
             // already bound without the demoter, so its fall-through holds.
             // Only a predating (requested) keeper binds -- a walk-selected
             // keeper's own judgment is post-demoter by construction, so it
-            // never keeps and the fresh leg falls through (backlog #656 leg
+            // never keeps and the fresh leg falls through (leg
             // (b2): the Encode shape). A request-pinned demoter is forced
             // from walk start instead, so every judgment is post-demoter and
             // the seed fires (M6b/M5).
@@ -1336,7 +1336,7 @@ pub(crate) fn virtual_expansion_seeds(
             // walk start; a walk-selected one with no independent puller has
             // none either), the replacing parent's posture decides: with only
             // replacing re-evaluating parents the installed arm holds
-            // (backlog #656 leg (b1), #657: the TH shape on the bed's
+            // (leg (b1), the TH shape on the bed's
             // libreoffice/gimp cells), while a fresh-leg parent pulls the
             // fall-through (the Encode shape).
             // Portage: dep_check.py:480/:531 (`if not replacing` bypass),
@@ -1421,7 +1421,7 @@ pub(crate) struct ExpandNewStyleVirtualArmArgs<'a> {
 /// the existing ranker demotes versions with dead members exactly like
 /// Portage's `all_available` pass, and the version pin demotes the rest
 /// through the existing downgrade guard. A nested `||` stays a documented
-/// cut (#644): it never resolves, so its arm is unselectable, never chosen.
+/// cut: it never resolves, so its arm is unselectable, never chosen.
 /// Single-version virtuals keep the resolved shape (the nested choice plus
 /// the exact-version pin); the conjunction extras ride either shape.
 /// `None` when the arm names no expandable virtual, so the caller keeps the
@@ -1453,8 +1453,8 @@ pub(crate) fn expand_new_style_virtual_arm(
         })
         .unwrap_or_default();
     // The installed version must still have a tree ebuild to evaluate.
-    // Corner (a) of #648: installed version with no tree ebuild but other
-    // tree versions present stays off (bare arm), same as the pre-#647 cut.
+    // Corner (a) of installed version with no tree ebuild but other
+    // tree versions present stays off (bare arm), same as the earlier cut.
     if !ebuilds.iter().any(|c| c.version == version) {
         return None;
     }
@@ -1468,7 +1468,7 @@ pub(crate) fn expand_new_style_virtual_arm(
     }
     // Portage's composite `match_pkgs` returns one package per distinct
     // (slot, sub_slot): when every tree version shares one, the installed
-    // version is the only expansion (no per-version arms, #657).
+    // version is the only expansion (no per-version arms).
     // Portage: depgraph.py, _dep_check_composite_db.match_pkgs.
     let installed_cand = ebuilds.iter().find(|c| c.version == version);
     if let Some(cand) = installed_cand
@@ -1515,7 +1515,7 @@ pub(crate) fn expand_new_style_virtual_arm(
         let Some(split) = split_or_groups(rdepend, &use_flags) else {
             continue;
         };
-        // Corner (c) of #648: flat-RDEPEND versions (e.g. `1.680.0`, no
+        // Corner (c) of flat-RDEPEND versions (e.g. `1.680.0`, no
         // `||`) contribute no conjunction on the multi path either — the
         // flat veto is shared with singles — while Portage evaluates their
         // flat members plus the `=<cpv>` pin as a conjunction.
@@ -1641,7 +1641,7 @@ pub(crate) struct MergeVersionForcedArgs<'a> {
 /// Whether the forcing question is decidable for this requirement text: it
 /// parses as a match atom. USE-conditional (`flag? ( ... )`) and other
 /// multi-token spellings never parse as one atom, so their verdict is
-/// unknown — and an unknown verdict must enforce (fail closed = pre-#652
+/// unknown — and an unknown verdict must enforce (fail closed = earlier
 /// unconditional enforcement), never skip.
 /// Portage: depgraph.py, _slot_operator_check_reverse_dependencies (parent
 /// atoms constrain without re-proving their spelling).
@@ -1676,7 +1676,7 @@ pub(crate) fn merge_version_forced(args: MergeVersionForcedArgs<'_>) -> bool {
     }
     // Fail closed: a requirement text the matcher cannot decide
     // (USE-conditional or other multi-token spelling) could pin the version;
-    // the pre-#652 behavior enforced unconditionally, so uncertainty enforces
+    // the earlier behavior enforced unconditionally, so uncertainty enforces
     // too. Decidable non-singletons keep the new verdicts (bare atoms,
     // multi-version pins, wrong-version pins).
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies (parent
@@ -1725,9 +1725,9 @@ fn independent_keeper(
 /// Whether the keeper's judgment predates the demoter: only a requested
 /// puller's pre-demoter binding sticks (H-form: requested-first `p652early`
 /// keeps TH). A walk-selected keeper is post-demoter by construction and
-/// never keeps, so the fresh leg falls through instead (backlog #656 leg
+/// never keeps, so the fresh leg falls through instead (leg
 /// (b2): the real-cell Archive-Zip posture). Undecidable request text counts
-/// as requesting (fail closed = the pre-#656 behavior binds).
+/// as requesting (fail closed = the earlier behavior binds).
 // Portage: depgraph.py, _create_graph (top-level atoms resolve first).
 fn keeper_requested(ctx: &ResolveCtx<'_>, category: &str, package: &str) -> bool {
     ctx.atoms.iter().any(|a| {
@@ -1782,7 +1782,7 @@ struct ExpandSingleVersionVirtualArmArgs<'a> {
     gate: CategoryGate<'a>,
 }
 
-/// The pre-#647 shape, kept for single-tree-version virtuals: the nested
+/// The earlier shape, kept for single-tree-version virtuals: the nested
 /// choice is Portage's inner `dep_zapdeps` return, which keeps the
 /// demoted-but-available arm; the outer choice then demotes the whole
 /// conjunction through the existing `||` ranking. The conjunction extras
@@ -1995,7 +1995,7 @@ mod tests {
         }
     }
 
-    /// The parent pre-filter (backlog #694's sibling): every `virtual/` atom
+    /// The parent pre-filter (backlog's sibling): every `virtual/` atom
     /// counts, under a USE group, an `||` group, a blocker, a version
     /// operator or a slot, and a string without one names nothing.
     #[test]
@@ -2028,7 +2028,7 @@ mod tests {
         split_or_groups(depstr, &HashSet::from(["amd64".to_string()]))
     }
 
-    /// Backlog #572 review focus: a mixed virtual is not expanded. The S0
+    /// Review focus: a mixed virtual is not expanded. The S0
     /// shape (bare plain atom beside the group, `probe572_mixed.py`) is
     /// suppressed by Portage; the gate pins that shape plus its valid-syntax
     /// cousins, since `probe572_mixed_exact.py` shows a same-cp plain pin
@@ -2068,7 +2068,7 @@ mod tests {
         }
     }
 
-    /// Backlog #647 second lift: the real perl virtuals' conjunction extras
+    /// Second lift: the real perl virtuals' conjunction extras
     /// ride the expansion. Portage matches `:=` like a plain slot and skips
     /// blockers in its choice bins, and the M3 playground falls through with
     /// exactly this shape — while the mixed-disjunction vetoes above stay.
@@ -2089,9 +2089,9 @@ mod tests {
         }
     }
 
-    /// Backlog #652 R5: a USE-conditional spelling of a version-forcing
+    /// R5: a USE-conditional spelling of a version-forcing
     /// requirement is undecidable for the singleton matcher, so it must
-    /// count as forcing (fail closed = pre-#652 unconditional enforcement),
+    /// count as forcing (fail closed = earlier unconditional enforcement),
     /// never as walk-selected. RED before the R5 fix (fail-open returned
     /// false → the gate would skip enforcement); GREEN after.
     #[test]

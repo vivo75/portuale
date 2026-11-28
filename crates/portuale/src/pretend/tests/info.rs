@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn info_scalar_value_prefers_the_calling_env_over_the_config() {
-    // Backlog #219: `--info`'s scalar dump reads the calling env
+    // `--info`'s scalar dump reads the calling env
     // over the config files (real `settings.get(k)`, env-first
     // `lookuplist`), not `other_vars` with an env fallback.
     // Hermetic without `with_test_env` (that hook lives in

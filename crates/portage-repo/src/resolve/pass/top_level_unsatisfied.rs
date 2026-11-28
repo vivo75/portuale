@@ -183,10 +183,10 @@ pub(crate) fn step_top_level_unsatisfied(
             // (S4; Portage lists the binary, e.g. S0 `F-binary-rewritten`).
             // A binary selection rejected for its USE reports Portage's
             // `use flag configuration mismatch` row instead of vanishing
-            // into the plain miss (#402: selection saw no ebuilds, so the
+            // into the plain miss (selection saw no ebuilds, so the
             // gate carries none — mirroring the empty `candidates` pool).
             // One rejected for stale baked deps reports `changed deps`
-            // under `binpkg_changed_deps_active` (#420).
+            // under `binpkg_changed_deps_active`.
             // Otherwise the ebuild-side report below applies unchanged.
             if ctx.usepkgonly {
                 let mut binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
@@ -259,9 +259,9 @@ pub(crate) fn step_top_level_unsatisfied(
             // ebuild pool above has no version match here, or the walk
             // would have selected it). Local `PKGDIR` binaries keep the
             // miss text below (no cell covers that shape). A remote
-            // rejected for its USE reports the mismatch row too (#402);
+            // rejected for its USE reports the mismatch row too;
             // one rejected for stale baked deps reports `changed deps`
-            // under `binpkg_changed_deps_active` (#420); the gates compare
+            // under `binpkg_changed_deps_active`; the gates compare
             // against the same-version ebuild, or nothing under
             // `--usepkgonly`/a dropped ebuild db, exactly like selection's
             // `retain`.

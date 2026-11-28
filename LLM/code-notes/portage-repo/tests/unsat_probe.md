@@ -10,3 +10,4 @@ Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
 - The installed instance itself stays probed: masking only the v2 candidate still seeds through v1.
 - #257: a non-installed built (binary) parent. No vdb owner, the parent is a merge-bound binary graph entry; Portage's `_slot_operator_unsatisfied_backtrack` masks it (`slot_operator_mask_built`, `_emerge/depgraph.py:2896-2903`) instead of seeding a reinstall.
 - Already masked as a binary: Portage's `dep.parent not in _runtime_pkg_mask` gate (`:3447-3448`) stops the loop.
+- Backlog numbers removed from the comment (original text): The graph's merge-bound binary is the parent even when another build of the package is installed: it is masked, the installed twin not seeded (backlog #491; Portage's `parent.installed` is false for the graph's pick).

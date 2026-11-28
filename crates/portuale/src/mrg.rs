@@ -1112,8 +1112,8 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "installed-package database backend: files (default, the classic VDB tree), sqlite or redb; also PORTUALE_VDB_BACKEND (environment, then make.conf)",
     },
-    // mrg-only: behaviour that is not a plain option yet (`future_options.rs`,
-    // #706). Consumed by the action that uses it; never reaches `emerge`.
+    // mrg-only: behaviour that is not a plain option yet (`future_options.rs`).
+    // Consumed by the action that uses it; never reaches `emerge`.
     Opt {
         id: "future_options",
         long: "--future-options",

@@ -98,3 +98,21 @@ Autounmask suggestion, abort-path, cascade, and breakage tests.
 
 ## fn abort_outcome_membership_and_order (#517 (b))
 - Portage's merge-order bias (`_merge_order_bias`, parent count descending) puts a parentless top target last; the cycle arms (one parent each) drain first. Verified against host Portage's re-display (`[ebuild] top`, `[nomerge] a`, `[ebuild] b`, `[ebuild] a`) for the `mid` and `last` tops.
+
+## fn autounmask_proposes_unmask_for_masked_dep
+- Backlog numbers removed from the comment (original text): Backlog #445: a package.mask'd *dependency* resolves once masks are accepted, with the `=<cpv>` change recorded. Expected value from Portage 3.0.82.2 (host staged-fixture probe, `emerge --pretend --autounmask dev-libs/maskneedpkg`): `=dev-libs/maskeddep-1.0` under the `package.unmask` changes plus the keep-masks NOTE, with merge rows for both packages.
+
+## fn flip_revealed_disjunction_defers_to_the_drained_graph
+- Backlog numbers removed from the comment (original text): A flip-revealed `||` group defers to the drained graph (#398).  `pg398-t` pulls `pg398-a` plainly, then `pg398-c`'s `pg398-a[flip]` flips the already-resolved slot on. The flip reveals `|| ( dev-libs/pg398-x dev-libs/pg398-y )` while `pg398-b` (queued behind the trigger) still has to pull `pg398-y` into the graph. Choosing at flip time picks first-listed `pg398-x` with neither alternative visible; Portage 3.0.82.2 (`emerge -pv --autounmask-use=y dev-libs/pg398-t`, `LLM/evidence/2026-10-18-398/v3-t-portage.txt`) merges `y` but never `x`.
+
+## fn pg34_napp_pubgrub_records_the_use_change_gate
+- Backlog numbers removed from the comment (original text): S9 #363: `--solver=pubgrub` must record Portage's `package.use` change instead of silently applying it: `pg34-nlib` carries default-off `f` while its parent needs `nlib[f]`, so the default solver reports one USE change and stays `Complete` (the CLI fails the run later in `_display_autounmask`, Portage's `need_config_change` gate). Portage: depgraph.py need_config_change:11708.
+
+## fn aup0b_pubgrub_records_the_parent_flip_and_fails_like_the_default_solver
+- Backlog numbers removed from the comment (original text): #429(b): `aup0b` DEPENDs `aup0d[foo(-)?,bar(-)?]` and the child declares no `foo`: only a flip of the parent's own `foo` helps. Portage records `-foo` on the parent and fails (no merge rows); `--solver=pubgrub` used to accept the plan with `foo` on. Expected values: the default solver's, which `autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b` pins against Portage 3.0.82.2.
+
+## fn autounmask_use_suggests_an_implicit_iuse_flag
+- Backlog numbers removed from the comment (original text): Backlog #663: an implicit-IUSE flag (`elibc_musl`, `USE_EXPAND_IMPLICIT`) is flippable by autounmask, like Portage's `Package._iuse.get_flag` (`_iuse_implicit_match`). Expected value from Portage 3.0.83 via the fixture oracle (`LLM/evidence/2026-11-06-663/`).
+
+## fn autounmask_levels_order_license_keywords_masks_least_invasive_first
+- Backlog numbers removed from the comment (original text): Backlog #431 S2: the level list both the walk and the solver bridge retry over.

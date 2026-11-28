@@ -727,7 +727,7 @@ pub struct RunPackageArgs<'a> {
     /// Portage's scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes
     /// through `EbuildExecuter`, so it skips the no-op source phases like a
     /// merge; a direct `ebuild <file> package` is manual `doebuild()` mode
-    /// and runs every phase (backlog #458).
+    /// and runs every phase.
     /// Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
     pub skip_noop_src_phases: bool,
     /// The up-front `pkg_pretend` pass already ran it (scheduler /
@@ -769,7 +769,7 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         log_file: ebuild_phases::PhaseLog::Foreground,
         build_env,
         // Scheduler-driven `--buildpkgonly` skips the no-op source phases
-        // like a merge (backlog #458); a direct `ebuild <file> package`
+        // like a merge; a direct `ebuild <file> package`
         // runs every phase like `doebuild()`.
         skip_noop_src_phases,
         skip_pretend,
@@ -3174,11 +3174,11 @@ mod tests {
 
     #[test]
     fn run_package_with_src_phase_skip_runs_setup_then_install_only() {
-        // Backlog #458: the scheduler-driven `--buildpkgonly` path sets
+        // The scheduler-driven `--buildpkgonly` path sets
         // `skip_noop_src_phases`, so a sourceless ebuild (`DEFINED_PHASES`
         // misses every skippable phase) runs `pkg_pretend`/`pkg_setup`
         // then straight to `src_install` -- the same gate the merge path
-        // pins in #456. Skipped phases never spawn, so they leave no
+        // pins in. Skipped phases never spawn, so they leave no
         // stamps; the packaging tail still runs.
         // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
         let tmp = tempdir();
@@ -3241,7 +3241,7 @@ mod tests {
 
     #[test]
     fn run_package_with_src_phase_skip_still_runs_a_defined_src_phase() {
-        // Backlog #458 guard: the flag threads the same gate, so a package
+        // Guard: the flag threads the same gate, so a package
         // defining a skippable phase (`dev-libs/unsetcflagspkg` defines
         // `src_compile`) still runs the full chain.
         let tmp = tempdir();

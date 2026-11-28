@@ -520,7 +520,7 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
     );
 }
 
-/// Backlog #420 cell B: under `--binpkg-changed-deps`, a binary built
+/// Cell B: under `--binpkg-changed-deps`, a binary built
 /// against since-changed deps reports Portage's `changed deps` masked row
 /// instead of vanishing into the plain `no binary packages` miss.
 /// Without the gate the same visible binary is selectable (no rows).
@@ -587,14 +587,14 @@ fn binary_masked_rows_report_changed_deps_rejections() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// Backlog #420: a binary rejected by both gates reports Portage's first
+/// A binary rejected by both gates reports Portage's first
 /// reason (`respect_use` before `changed_deps`, the `elif` order at
 /// depgraph.py:6655-6671), never both.
 #[test]
 fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
-    // The user enables `x`, the binary was baked without it (the #402
-    // mismatch shape), and its RDEPEND is stale too (the #420 shape).
+    // The user enables `x`, the binary was baked without it (the
+    // mismatch shape), and its RDEPEND is stale too (the stale-binding shape).
     let mut config = test_config();
     config.package_use_user = vec![("=dev-libs/bcdeppkg-1.0".to_string(), vec!["x".to_string()])];
     let root = TempDir::new("portuale-420-gate-order");
@@ -636,7 +636,7 @@ fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// Backlog #420: the dependency disclosure merges the ebuild and binary
+/// The dependency disclosure merges the ebuild and binary
 /// pools into one block, cpv-deduped like Portage's `show_masked_packages`
 /// (`shown_cpvs`) — ebuild rows first, a binary twin of a listed row dropped.
 #[test]

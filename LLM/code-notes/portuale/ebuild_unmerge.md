@@ -54,6 +54,7 @@ Package removal: `ebuild <file> unmerge`. Context moved out of the code comments
 - `_prune_plib_registry(unmerge=True, ...)` (confirmed by reading the Portage call site, not just the method itself -- see `ebuild_merge::preserve_libs_on_unmerge` for the full grounding). `own_slot` defaults to `"0"` the same way `parse_slot`'s fallback already does, matching Portage's `_pkg_str` `settings["SLOT"]` fallback for a package with no recorded slot at all.
 - `_prune_plib_registry`'s tail, which runs on unmerge too, not only on merge: a preserved library whose last surviving consumer is the package now being removed is orphaned -- delete it and drop it from the registry. Portage's `unmerge_no_replacement = unmerge and not unmerge_with_replacement`: in replacement mode a consumer owned by the old instance still counts (it survives through the replacing package), the old instance's own linkmap data is excluded, the merge-side just-preserved set is scanned in, and the replacing package's own `NEEDED` lines are fed explicitly (Portage's `include_file` -- the new entry is still `-MERGING-`; see `ebuild_merge::find_unused_preserved_libs`). `exclude_pkgs`: the unmerged instance itself, plus (database backends, #310) the same-slot instances this replace loop already unmerged -- their entries stay installed until the publishing commit, where `files` has already removed their directories, so they must not feed the linkage map of the later instances' prune.
 - A replaced instance (`is_replacement`, i.e. the merge's replace loop) with no `CONTENTS` file walks an empty file list instead of failing, like Portage's `getcontents()` returning `{}` on `ENOENT` (vartree.py, `dblink.getcontents`; #348 S6 M1: resolve-fixture seeds carry no `CONTENTS`, and the same-`pf` reinstall must still unmerge them). Scoped to missing files only (other io errors still fail); a standalone unmerge keeps the "not installed" error `emerge -C` relies on.
+- Backlog numbers removed from the comment (original text): A replaced instance with no `CONTENTS` (a resolve-fixture seed, never a real merge) owns no recorded files: walk an empty list instead of failing, like Portage's `getcontents()` returning `{}` on `ENOENT` (vartree.py, `dblink.getcontents`). Scoped to the replace loop (`is_replacement`) and to missing files only: a standalone unmerge keeps the "not installed" error `emerge -C` relies on (#348 S6 M1).
 
 ## fn delete_vdb_dir
 - `WriteTxn::delete_entry` is the old body, unchanged: `remove_dir_all` of the entry, then the best-effort category `rmdir` (Portage's `dblink.delete()`: a best-effort `os.rmdir` of its now-maybe-empty parent category directory, ignored on failure -- another installed package in the same category is the common case). Split out of `run_unmerge` so `ebuild_merge::merge_binpkg`'s replace path can drop an old version's vdb entry without going through the phase machinery (N14).
@@ -127,3 +128,15 @@ Package removal: `ebuild <file> unmerge`. Context moved out of the code comments
   Portage: vartree.py:2866-3245, :3370-3499. Gated on
   `UnmergeOptions.direct` (set from `MergeOptions.direct` in the replace
   loop, set for direct `ebuild unmerge`, unset for `emerge -C`).
+
+## fn parse_contents_keeps_spaces_in_paths_and_skips_junk
+- Backlog numbers removed from the comment (original text): Portage 3.0.82.2, S0 cell S1 shapes (#357): the shared parser keeps the full path; a non-matching line is skipped.
+
+## fn unmerge_pkgfiles_tolerates_missing_contents_only_as_replacement
+- Backlog numbers removed from the comment (original text): Replace loop (#348 S6 M1): a replaced instance with no recorded files walks an empty list instead of failing, like Portage's `getcontents()` returning `{}` on `ENOENT`.
+
+## fn replace_keeps_a_file_recorded_under_a_second_symlinked_path
+- Backlog numbers removed from the comment (original text): Backlog #381 (Portage 3.0.82.2, S0 cell V1): the replacer records the file under `/alias/f`, the replaced instance under `/usr/share/t381/f`, both spellings live-resolving to one directory. Portage prints `--- replaced obj` and keeps the file; the exact-only check lets the orphan arm delete it.
+
+## fn replace_keeps_a_file_when_the_old_record_uses_the_alias_spelling
+- Backlog numbers removed from the comment (original text): Backlog #381 (Portage 3.0.82.2, S0 cell V2): the mirror of the previous test — the replaced instance records `/alias/f`, the replacer `/usr/share/t381/f`. Same `--- replaced obj` on Portage.

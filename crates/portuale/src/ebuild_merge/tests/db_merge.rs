@@ -41,7 +41,7 @@ fn use_db(kind: portage_vdb::BackendKind, root: &Path, db_path: &Path) -> Arc<dy
 /// same thing `verify` ignores: directory mtimes). The group/other
 /// write bits are masked: another test's in-process `brush` phase can
 /// flip the process umask (`022`/`002`) between the two runs being
-/// compared (#343).
+/// compared.
 fn entry_files(db: &dyn InstalledDb, key: &EntryKey) -> Tree {
     let image = db.entry_image(key).unwrap().expect("entry is installed");
     image
@@ -196,7 +196,7 @@ fn binpkg_merge_matches_files(kind: portage_vdb::BackendKind) {
     );
     assert_eq!(on_sqlite.0, on_files.0, "entry files differ");
     // Bytes only: the payload modes follow the process umask, which
-    // another test's in-process `brush` phase can flip mid-run (#343).
+    // another test's in-process `brush` phase can flip mid-run.
     assert_eq!(
         tree_bytes(on_sqlite.1),
         tree_bytes(on_files.1),
@@ -524,7 +524,7 @@ fn a_source_merge_on_sqlite_matches_the_files_merge() {
         if name == "BUILD_TIME" || name == "metadata" {
             continue;
         }
-        // Masked: the process umask can differ between the two runs (#343).
+        // Masked: the process umask can differ between the two runs.
         assert_eq!(on_sqlite.0[name].0 & 0o7755, mode & 0o7755, "{name} mode");
         // `CONTENTS` records each file's mtime, which a fresh
         // build moves: compare the lines without their mtime.
@@ -544,7 +544,7 @@ fn a_source_merge_on_sqlite_matches_the_files_merge() {
         }
         assert_eq!(&on_sqlite.0[name].1, data, "{name} bytes");
     }
-    // Bytes only, as above: payload modes follow the process umask (#343).
+    // Bytes only, as above: payload modes follow the process umask.
     assert_eq!(
         tree_bytes(on_sqlite.1),
         tree_bytes(on_files.1),
@@ -821,7 +821,7 @@ fn sequence_equivalence(kind: portage_vdb::BackendKind) {
     // the merges below record the merge-time `FEATURES` into the vdb
     // `environment`, so no other test may mutate them mid-sequence. Shares
     // the lock the mutating tests hold (`PLACED_CONFIG_ENV_LOCK`); immune
-    // to a poisoned mutex so one failed holder cannot cascade (#343).
+    // to a poisoned mutex so one failed holder cannot cascade.
     let _env = crate::remote::tests::PLACED_CONFIG_ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1429,7 +1429,7 @@ fn a_contents_path_with_spaces_is_removed_and_the_prefix_decoy_is_kept_on_databa
 
 /// A same-version reinstall with a smaller image removes the dropped files on
 /// every backend: the replacing package's ownership comes from its pending
-/// entry, not from the live entry it replaces (#354).
+/// entry, not from the live entry it replaces.
 #[test]
 fn a_same_version_reinstall_removes_dropped_files_on_every_backend() {
     for kind in db_kinds() {

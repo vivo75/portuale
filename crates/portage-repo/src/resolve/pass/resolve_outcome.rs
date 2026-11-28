@@ -41,7 +41,7 @@ pub(crate) fn resolve_queue_atom(args: ResolveQueueAtomArgs<'_>) -> Result<Prete
         ctx.root
     };
     // The slot-operator auto-rebuild set is an argument (`__auto_rebuild__`): a
-    // rebuilt package is selected like one and takes its best visible version (#728).
+    // rebuilt package is selected like one and takes its best visible version.
     // Portage: depgraph.py, _want_update_pkg (`arg_atoms`), _gen_reinstall_sets
     resolve_pretend(
         &SelectSource {

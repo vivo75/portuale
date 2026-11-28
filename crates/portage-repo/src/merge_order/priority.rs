@@ -42,7 +42,7 @@ pub struct DepEdge {
     pub alt: Option<(u32, u32)>,
     /// Which `deps`-tuple key this came from (0=`RDEPEND` .. 4=`BDEPEND`).
     pub key: u8,
-    /// On a `||` branch the walk itself chose for this group (#625).
+    /// On a `||` branch the walk itself chose for this group.
     pub walk_chosen: bool,
 }
 

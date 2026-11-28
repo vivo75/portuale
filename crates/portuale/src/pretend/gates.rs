@@ -62,9 +62,9 @@ pub(crate) struct PretendChangesShowHeaderArgs {
 /// Whether a `--pretend` run whose resolve completed prints the
 /// resolution header before the rows: Portage's `display()` (header +
 /// rows) runs for every completed `--pretend` resolve, with or without
-/// autounmask changes (backlog #462, #466). `--json` keeps stdout
+/// autounmask changes. `--json` keeps stdout
 /// machine-readable (no header); an aborted resolve keeps its own preamble
-/// arms (backlog #406, the abort-preamble shape).
+/// arms.
 // Portage: _emerge/depgraph.py, _display_autounmask (_show_merge_list)
 pub(crate) fn pretend_changes_show_header(args: PretendChangesShowHeaderArgs) -> bool {
     let PretendChangesShowHeaderArgs {
@@ -131,7 +131,7 @@ pub(crate) fn resolution_header_shown(args: ResolutionHeaderShownArgs) -> bool {
 /// nor `--nodeps` given (either forces the spinner into QUIET mode, which
 /// also suppresses the `... done!` completion and the timing report).
 /// `--debug` is the third QUIET trigger; callers pass `quiet || debug` as the
-/// first argument (backlog #614).
+/// first argument.
 // Portage: _emerge/depgraph.py, backtrack_depgraph
 pub(crate) fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
     !quiet && !nodeps
@@ -139,7 +139,7 @@ pub(crate) fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
 
 /// Whether a resolve-phase error prints the resolution notice on its way
 /// out: the top-level all-masked abort does, `--pretend` or not (backlog
-/// #406, owner 2026-10-19: Portage prints it in both). Every other error
+/// Owner 2026-10-19: Portage prints it in both). Every other error
 /// shape stays silent (out of scope).
 // Portage: _emerge/depgraph.py, _start_resolution_display
 pub(crate) fn top_level_abort_notice_shown(msg: &str) -> bool {
@@ -158,7 +158,7 @@ pub(crate) fn is_required_use_report(msg: &str) -> bool {
 
 /// A resolve error whose first line is Portage's `there are no ebuilds (or
 /// binary packages) to satisfy "<atom>"`: it prints the resolution notice
-/// first too, and a blank line ahead of the `emerge:` line (backlog #470).
+/// first too, and a blank line ahead of the `emerge:` line.
 pub(crate) fn is_plain_miss_report(msg: &str) -> bool {
     msg.starts_with("there are no ebuilds to satisfy \"")
         || msg.starts_with("there are no binary packages to satisfy \"")

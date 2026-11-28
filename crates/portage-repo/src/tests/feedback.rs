@@ -281,7 +281,7 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
         }
     };
     mk("pinner-1.0", "=dev-libs/souprov-1.0");
-    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
+    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins.
     mk("souprov-1.0", "");
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
@@ -357,7 +357,7 @@ fn collect_feedback_collects_a_dropped_pin_once() {
         }
     };
     mk("pinner-1.0", "=dev-libs/souprov-1.0");
-    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
+    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins.
     mk("souprov-1.0", "");
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
@@ -602,7 +602,7 @@ fn missing_dep_trigger_names_the_installed_parent_instance() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// #697: a merge-bound binary parent whose dependency cannot be met is masked
+/// A merge-bound binary parent whose dependency cannot be met is masked
 /// as that build only. The plain `!=cat/pkg-ver` form is ignored by the binary
 /// pool and would hide the ebuild instead, so the binary came back every pass.
 /// Portage: depgraph.py `_add_dep` masks the binary package object.
@@ -650,7 +650,7 @@ fn missing_dep_trigger_masks_a_binary_parent_by_build() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// #685: a positive constraint that names a slot admits every candidate of the
+/// A positive constraint that names a slot admits every candidate of the
 /// other slots, so a pin on slot 23 cannot empty a request for slot 22.
 #[test]
 fn slot_scoped_positive_constraint_spares_other_slots() {
@@ -670,7 +670,7 @@ fn slot_scoped_positive_constraint_spares_other_slots() {
     ));
 }
 
-/// #685: an enforced pin whose atom has no slot is filed under the one slot
+/// An enforced pin whose atom has no slot is filed under the one slot
 /// whose update it breaks; two broken slots leave it unscoped.
 #[test]
 fn enforced_pin_is_filed_under_the_broken_slot() {

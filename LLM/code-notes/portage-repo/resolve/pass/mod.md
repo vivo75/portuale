@@ -6,7 +6,7 @@ One resolver pass (BFS walk) over the dependency graph.
 - The same effective-config view the loop feeds `collect_feedback` + driver / `assemble_result` (cloned out of `bp`; only `&bp` is borrowed in here, so no `config_owned` dance is needed).
 - `union_constraints` is pass-constant (`bp` is never mutated mid-walk, only the overlay): C1 readers see positives + rendered negatives as one bucket.
 - First-pass `--debug` prints each argument as `Arg:` / `Atom:` lines via `resolver_trace::tr!`.
-
+- Backlog numbers removed from the comment (original text): Pass-constant: `bp` is never mutated mid-walk (only the overlay). Stale pre-skip wants die here, so every `||` re-pops against the post-skip graph instead of vetoing the retry (backlog #652 leg A). Portage: depgraph.py, _backtrack_depgraph.
 
 ## fn run_pass (walk-long installed-metadata memo, backlog #441 S1 / #457)
 - Swaps `ctx.installed_meta_memo` into the fresh `PassState` at pass start and back at every exit (the `?` arm restores too: a failed pass retries on the same ctx). The `?`-to-`match` rewrite is only the restore; verdicts are unchanged.

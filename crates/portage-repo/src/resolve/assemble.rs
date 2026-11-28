@@ -350,7 +350,7 @@ pub(crate) fn assemble_result(
         gate: ctx.gate(),
     });
     // A slot-operator rebuild joins the walk as a parentless root, so no edge says why it is in
-    // the plan: name the provider whose new sub-slot caused it (#713).
+    // the plan: name the provider whose new sub-slot caused it.
     for (provider_cpv, consumer_cpv) in &abi_rebuilds {
         let provider = pass
             .entries

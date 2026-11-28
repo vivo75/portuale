@@ -815,7 +815,7 @@ pub(crate) fn phase_isolation(
     // no userns appears because no uid mapping is needed. (The `unshare(1)`
     // shim's `--map-root-user` maps only the caller, which is why the shim
     // never runs on the demoted path.) `pid` rides the same path via the
-    // demoted `pre_exec` fork dance (#635): CLONE_NEWPID without Portage's
+    // demoted `pre_exec` fork dance: CLONE_NEWPID without Portage's
     // PID-1 re-exec (`pid-ns-init`, process.py:1111-1145) is fatal, not
     // degraded — the first fork becomes init, its exit tears the ns down,
     // and later forks fail ENOMEM (proven in

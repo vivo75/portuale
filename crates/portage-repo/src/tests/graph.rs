@@ -1271,7 +1271,7 @@ fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
 
 #[test]
 fn rebuild_if_deep_restart_rebuilds_a_reached_consumer() {
-    // Backlog #394: `-u --deep --rebuild-if-* dev-libs/r394top` reaches the
+    // `-u --deep --rebuild-if-* dev-libs/r394top` reaches the
     // installed `rebuildconsumer` (RDEPEND) whose buildtime `DEPEND` on the
     // merging trigger is stale, so Portage restarts the walk with the
     // consumer force-reinstalled (`_rebuild_config.trigger_rebuilds`,
@@ -1394,7 +1394,7 @@ fn rebuild_if_deep_restart_is_off_at_backtrack_zero() {
 
 #[test]
 fn complete_walk_reuses_a_locked_merge_instead_of_dropping_it() {
-    // Backlog #394 half (2): complete mode never wants an update
+    // Half (2): complete mode never wants an update
     // (`want_update = !complete_mode` in `resolve/pretend.rs`), so a
     // non-top-level merge would demote to kept on the phase-2 walk.
     // Locked cps reuse their phase-1 graph node instead, the way Portage's
@@ -2762,7 +2762,7 @@ fn masked_dep_report_carries_the_chain_to_the_argument() {
 
 #[test]
 fn masked_dep_pubgrub_matches_default_abort() {
-    // S9 #364: `--solver=pubgrub` must abort exactly like the default
+    // S9 `--solver=pubgrub` must abort exactly like the default
     // solver when a dependency is masked-only (Portage's "All ebuilds
     // that could satisfy … have been masked" block).
     // Portage: depgraph.py, _show_unsatisfied_dep.
@@ -3462,7 +3462,7 @@ fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_firs
 
 #[test]
 fn required_use_pubgrub_top_level_matches_default_refusal() {
-    // S9 #365: `--solver=pubgrub` must refuse exactly like the default
+    // S9 `--solver=pubgrub` must refuse exactly like the default
     // solver when a selected ebuild violates REQUIRED_USE (Portage's
     // post-selection check in `depgraph.py _add_pkg`).
     let default = graph_real_err("dev-libs/requiredusebadpkg");

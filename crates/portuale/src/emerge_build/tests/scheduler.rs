@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::{BTreeSet, HashSet};
 
-/// Backlog #197 fix round 1: one failed `-jN` build fires each
+/// Fix round 1: one failed `-jN` build fires each
 /// failure event exactly once. Real `_build_exit`'s failure arm
 /// assigns absolutely (`Scheduler.py:1662`, `failed =
 /// len(self._failed_pkgs)` -- 1 for a single failure), then drops
@@ -75,7 +75,7 @@ fn system_loadavg_1min_reads_a_plausible_value() {
     assert!(la >= 0.0 && la.is_finite(), "{la}");
 }
 
-/// Backlog #376: a build thread that panics reports a failure for its
+/// A build thread that panics reports a failure for its
 /// entry instead of leaving the scheduler waiting forever on its result.
 #[test]
 fn a_panicking_build_thread_becomes_a_failure_message() {

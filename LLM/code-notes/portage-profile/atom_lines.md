@@ -69,6 +69,7 @@ Profile-file atom validation (`grabfile_package` / `grabdict_package` port, #341
 
 ## fn filter_atom_lines_with_sources
 - Backlog #462: [`filter_atom_lines`] keeping each kept line's source file, so the `package.mask` fold can record which fragment contributed each stacked entry (Portage's `getmaskingreason` file lookup). Same validation, warnings and order; `filter_atom_lines` delegates to it and maps to the plain shape, so every other fold is byte-identical.
+- Backlog numbers removed from the comment (original text): [`filter_atom_lines`] keeping each kept line's source file: the `package.mask` fold needs the origin fragment to answer Portage's `getmaskingreason` (`# <file>:` + comment lines in the unmask block, backlog #462). Same validation, warnings and order; only the shape differs.
 
 ## const WARN_RANK_VIRTUALS_PROFILE
 - Rank 6: `virtuals` files are read through the profile chain; Portage's `VirtualsManager` warns after the `package.mask` reads of the same run (#513).

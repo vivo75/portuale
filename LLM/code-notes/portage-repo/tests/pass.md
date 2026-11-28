@@ -122,3 +122,9 @@ Single-walk (`run_pass`) unit tests: binary instances, blockers, masks, and repo
 
 ## fn run_pass_package_use_mask_hides_test_deps
 - Backlog #161 S6.
+
+## fn run_pass_update_deep_keeps_the_installed_masked_or_alternative
+- Backlog numbers removed from the comment (original text): Backlog #615: `-uD[N] dev-libs/omasked` keeps the installed masked alternative instead of aborting. `omaskedinstalled-1.0` is installed but masked in the tree (`profiles/package.mask`); the `||` picks it (`other_installed`, #22 slice 4). Under `--update`, Portage ignores visibility when every match is masked (`_select_pkg_highest_available_imp`, `depgraph.py:8525-8532`: "all are masked, so ignore visibility") and keeps the installed instance. Portuale's installed fallback skipped `||`-chosen edges, so the masked tree copy left `NoVisibleCandidate`, the MissingDep trigger masked the parent, and the pass dead-ended (rc 1). The fallback now keeps the installed instance for bare atoms whose tree copies are all masked.
+
+## fn assemble_result_reports_the_kept_installed_package_that_package_mask_hides
+- Backlog numbers removed from the comment (original text): Backlog #662: the kept installed `omaskedinstalled-1.0` lands in `GraphResult::installed_masked` (Portage's `_masked_installed`, printed as `!!! The following installed packages are masked:`). Expected value from Portage 3.0.83 via the fixture oracle (`LLM/evidence/2026-11-06-662/`): `- dev-libs/omaskedinstalled-1.0::testrepo`.

@@ -20,3 +20,9 @@ Scheduler pins: merge-wait scope shapes, the cycle unblock, and the pretend repl
 
 ## fn package_env_merge_wait_holds_one_packages_merge (#512, item (1))
 - Review follow-up I1.
+
+## fn run_build_scheduler_single_failure_counts_failed_exactly_once
+- Backlog numbers removed from the comment (original text): Backlog #197 fix round 1: one failed `-jN` build fires each failure event exactly once. Real `_build_exit`'s failure arm assigns absolutely (`Scheduler.py:1662`, `failed = len(self._failed_pkgs)` -- 1 for a single failure), then drops the freed build slot (`running`, `:1663-1665`): exactly two `>>> Jobs:` lines, ending at `failed == 1`. The pre-fix code fired `job_failed` + `build_finished` twice (once in the `Err` arm, once in the `Some` arm), reaching `failed == 2`. Drives the real scheduler (`run_build_scheduler`) over the `schedbad` fixture (its `src_install` dies) with a caller-owned display, so the counters pin the wiring, not just the display.
+
+## fn a_panicking_build_thread_becomes_a_failure_message
+- Backlog numbers removed from the comment (original text): Backlog #376: a build thread that panics reports a failure for its entry instead of leaving the scheduler waiting forever on its result.

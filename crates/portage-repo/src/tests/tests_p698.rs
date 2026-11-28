@@ -1,4 +1,4 @@
-//! #698: an upgrade is withheld only when an installed pin holder has no route
+//! An upgrade is withheld only when an installed pin holder has no route
 //! to the new version; otherwise the holders join the plan, in every solver.
 //!
 //! Expected behaviour comes from the charter (property 1: every kept package
@@ -8,7 +8,7 @@
 use super::tests_consumer_pin_conflict::{hermetic_root, request_in};
 use super::*;
 
-/// The shared fixture vdb plus the installed #698 holders, all recording the
+/// The shared fixture vdb plus the installed holders, all recording the
 /// pins the provider's old sub-slot left in them.
 fn p698_root(world: &[&str]) -> TempDir {
     let base = hermetic_root(world);
@@ -26,7 +26,7 @@ fn p698_root(world: &[&str]) -> TempDir {
             "dev-libs/p573virt-1",
             "=dev-libs/p569prov-5.42* dev-libs/p569prov:0/5.42=",
         ),
-        // #733: `p733top` has `PDEPEND=p733dep`, and `p733dep` needs `p733top` back.
+        // `p733top` has `PDEPEND=p733dep`, and `p733dep` needs `p733top` back.
         ("dev-libs/p733top-1", ""),
         ("dev-libs/p733dep-1", "dev-libs/p733top"),
     ];
@@ -106,7 +106,7 @@ fn holders_with_a_route_join_the_upgrade() {
     }
 }
 
-/// #713, charter property 5: a holder that joins the plan only because the provider
+/// Charter property 5: a holder that joins the plan only because the provider
 /// moves names that provider as its parent, so the plan says why it is there.
 #[test]
 fn p713_co_upgraded_holders_name_the_provider_as_parent() {
@@ -128,7 +128,7 @@ fn p713_co_upgraded_holders_name_the_provider_as_parent() {
     }
 }
 
-/// #718 (a): the pubgrub bridge names the provider as the parent of its holders too.
+/// The pubgrub bridge names the provider as the parent of its holders too.
 #[test]
 fn p718_pubgrub_holders_name_the_provider_as_parent() {
     let world = [
@@ -149,7 +149,7 @@ fn p718_pubgrub_holders_name_the_provider_as_parent() {
     }
 }
 
-/// #713, charter property 5: a consumer rebuilt only because the provider's sub-slot changed
+/// Charter property 5: a consumer rebuilt only because the provider's sub-slot changed
 /// names that provider as its parent (the walk queues such rebuilds as parentless roots).
 #[test]
 fn p713_slot_operator_rebuilds_name_the_provider_as_parent() {
@@ -184,7 +184,7 @@ fn a_holder_without_a_route_still_withholds_the_upgrade() {
             !merged(&result).contains(&"dev-libs/p569prov-5.44".to_string()),
             "{kind}: the provider must not move past a holder with no route"
         );
-        // The bridge prints no skipped-update block (#431 S1 cut).
+        // The bridge prints no skipped-update block.
         assert!(
             kind == SolverKind::PubGrub || !result.skipped_updates.is_empty(),
             "{kind}: the withheld update is reported"
@@ -192,7 +192,7 @@ fn a_holder_without_a_route_still_withholds_the_upgrade() {
     }
 }
 
-/// The #698 holders, the not-installed `p727top` (its `||` group lists the new
+/// The holders, the not-installed `p727top` (its `||` group lists the new
 /// provider first) and a request for it, with the given `--update` setting.
 fn p727_resolve(kind: SolverKind, root: &Path, atoms: &[&str], update: bool) -> GraphResult {
     let world = [
@@ -213,7 +213,7 @@ fn p727_resolve(kind: SolverKind, root: &Path, atoms: &[&str], update: bool) -> 
         .expect("the #727 request resolves")
 }
 
-/// #727, owner decision 2026-11-12 (smallest plan): a request that names neither the
+/// Owner decision 2026-11-12 (smallest plan): a request that names neither the
 /// provider nor `--update` leaves the provider where it is, in every solver; the
 /// co-upgrade applies when the provider is requested or the request updates deeply.
 #[test]
@@ -256,7 +256,7 @@ fn p727_a_plain_request_leaves_the_provider_where_it_is() {
     }
 }
 
-/// #730, charter property 1: `p727virt-2` accepts only the new provider through an `||` arm
+/// Charter property 1: `p727virt-2` accepts only the new provider through an `||` arm
 /// whose package has no ebuild (like `virtual/perl-Storable`); with the provider kept at 5.42
 /// every solver plans `-1`, the virtual that accepts it.
 #[test]
@@ -277,7 +277,7 @@ fn p730_a_kept_provider_picks_the_virtual_that_accepts_it() {
     }
 }
 
-/// #733: a kept installed package is a leaf without `--deep`, so its entry carries no
+/// A kept installed package is a leaf without `--deep`, so its entry carries no
 /// dependency edges; the `--tree` would otherwise nest the requested `p733top` under
 /// the hidden `p733dep` that needs it back.
 #[test]
@@ -294,7 +294,7 @@ fn p733_a_kept_installed_package_carries_no_edges_without_deep() {
     }
 }
 
-/// #716/#732: every merge-bound pubgrub entry, the slot-operator rebuilds of the holders
+/// Every merge-bound pubgrub entry, the slot-operator rebuilds of the holders
 /// included, carries the dependency data `--json` reports.
 #[test]
 fn p732_every_merge_bound_pubgrub_entry_carries_its_dep_input() {
@@ -320,7 +320,7 @@ fn p732_every_merge_bound_pubgrub_entry_carries_its_dep_input() {
     }
 }
 
-/// #728, charter property 3: a package rebuilt for the provider's new sub-slot moves to its
+/// Charter property 3: a package rebuilt for the provider's new sub-slot moves to its
 /// best visible version, in every solver. `p728virt` pins `p728core` with `~`, so both move
 /// together and the plan stays consistent.
 #[test]
@@ -356,7 +356,7 @@ fn p728_a_rebuilt_package_moves_to_its_best_visible_version() {
     }
 }
 
-/// The shared fixture vdb plus the installed #715 provider (sub-slot `0/1`) and
+/// The shared fixture vdb plus the installed provider (sub-slot `0/1`) and
 /// two holders built against it (`p715prov:0/1=`).
 fn p715_root(world: &[&str]) -> TempDir {
     let base = hermetic_root(world);
@@ -416,7 +416,7 @@ fn assert_provider_before_holders(kind: SolverKind) {
     }
 }
 
-/// #715 (charter property 2): holders rebuilt for a new provider sub-slot come
+/// (charter property 2): holders rebuilt for a new provider sub-slot come
 /// after the provider, even when the provider waits for a dependency of its own.
 #[test]
 fn p715_pubgrub_rebuild_rows_follow_the_provider() {
@@ -429,7 +429,7 @@ fn p715_portage_rebuild_rows_follow_the_provider() {
     assert_provider_before_holders(SolverKind::Portage);
 }
 
-/// The note #703 records: the provider slot, both versions and each route-less
+/// The note records: the provider slot, both versions and each route-less
 /// holder with the recorded atom that pins the old version. `p698rebuild` has a
 /// route, so it is not listed.
 fn expected_no_route() -> Vec<HeldBackNoRoute> {
@@ -447,7 +447,7 @@ fn expected_no_route() -> Vec<HeldBackNoRoute> {
     }]
 }
 
-/// #703, charter property 5 (messages help): the withheld upgrade names the one
+/// Charter property 5 (messages help): the withheld upgrade names the one
 /// holder that cannot follow it (default solver).
 #[test]
 fn p703_route_less_holder_is_recorded() {
@@ -489,7 +489,7 @@ fn p698_root_with(world: &[&str], extra: &[&str]) -> TempDir {
     base
 }
 
-/// #774, charter properties 1 and 5: the only version of a holder that accepts
+/// Charter properties 1 and 5: the only version of a holder that accepts
 /// the new provider (`p774mask-2`) is keyword-masked, so the holder has no
 /// route the user can install. The provider stays where it is and the holder is
 /// named, in every solver. Source: charter, not Portage.

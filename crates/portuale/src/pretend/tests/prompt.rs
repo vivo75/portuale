@@ -161,7 +161,7 @@ fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage() {
 #[cfg(unix)]
 fn sigint_during_merge_exits_130_after_exiting_on_signal_like_portage() {
     // Portage: Scheduler.py, merge (`sighandler`). A `^C` during a merge prints
-    // `Exiting on signal 2` and exits 128+2 (backlog #411).
+    // `Exiting on signal 2` and exits 128+2.
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let portuale_bin = built_portuale_bin();

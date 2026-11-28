@@ -1,7 +1,7 @@
-//! #652 leg A (N-form consumer path) + leg B (H-form upgrade hold): RED pins.
+//! Leg A (N-form consumer path) + leg B (H-form upgrade hold): RED pins.
 //!
-//! S0 #652 (`LLM/evidence/2026-11-04-652/`, this branch) refuted the
-//! novel-demoter corner and rescoped #652 to two live shapes, both with a
+//! S0 (`LLM/evidence/2026-11-04-652/`, this branch) refuted the
+//! novel-demoter corner and rescoped to two live shapes, both with a
 //! committed Portage-3.0.83 oracle:
 //!
 //! - Leg A (N-form): Try-Tiny binds the dead installed SLU virtual and the
@@ -16,7 +16,7 @@
 //!   resolves `=perl-5.44*`), the walk skips it (re-resolves to `=perl-5.42*`
 //!   verbatim in the trace), the consumer `||` keeps the virtual conjunction
 //!   over Sub-Name throughout. Portuale latches the pre-skip flat choice
-//!   (the #643 inline expansion binds the dead arm) and never re-pops it,
+//!   (the inline expansion binds the dead arm) and never re-pops it,
 //!   so it merges Sub-Name where Portage holds.
 //! - Leg B (H-form): under the LIVE merging transient the seed feed fires
 //!   both fall-throughs where Portage merges Encode but holds TH. Bed
@@ -27,7 +27,7 @@
 //!   gimp identical: Encode row 22, no TH row, perl U). Portuale fires
 //!   both seeds (demoter `p651prov-5.44.0` survives) and merges both pins.
 //!
-//! The `p652*` fixture family extends the #651 C1 substrate hermetically
+//! The `p652*` fixture family extends the C1 substrate hermetically
 //! (same `p651prov` provider axis + `p651enc/p651th` virtuals +
 //! `p651enccore/p651thcore` pins + installed `p651holder/p651top/p651pin`
 //! background pressure; reused where the shape fits, forked where the new
@@ -84,7 +84,7 @@ fn resolve_bare_in(root: &Path, atoms: &[&str]) -> GraphResult {
 ///
 /// Posture note (deliberate, bed-grounded): portuale upgrades the provider
 /// outright on this indirect shape where Portage/C1 skip it (the C1-bare
-/// selection-side divergence family, out of #652's scope -- the transient
+/// selection-side divergence family, out of's scope -- the transient
 /// selection is untouched by the consumer re-pop). The test therefore pins
 /// the holder pressure that DOES render (top reinstalls) and leaves the
 /// provider outcome unasserted, so the fix turning the consumer hold green
@@ -142,7 +142,7 @@ fn nform_consumer_holds_the_virtual_no_subname() {
 
 /// Leg B (H-form): the requested early TH consumer over the bare provider.
 /// The fixture vdb grew three installed `=5.42*` holders under Task 1
-/// (`p656hold{1,2,3}`), so this world renders the #656 leg-(a) holder
+/// (`p656hold{1,2,3}`), so this world renders the leg-(a) holder
 /// shape -- and Portage on exactly this shape reinstalls: H1
 /// (`probe656h_oracle.py`: `SUCCESS True`,
 /// `MERGELIST ['dev-lang/perl-5.42.2', 'dev-perl/s652early-1']`, no skip,
@@ -168,7 +168,7 @@ fn hform_upgrade_holds_th_while_encode_merges() {
         .map(|e| format!("{}/{}", e.category, e.package))
         .collect();
     // Holder-win posture: the transient reinstalls (H1 oracle mergelist;
-    // the #656 leg-(a) enforcement-open mask, not the selection-side U).
+    // the leg-(a) enforcement-open mask, not the selection-side U).
     let prov = result
         .entries
         .iter()

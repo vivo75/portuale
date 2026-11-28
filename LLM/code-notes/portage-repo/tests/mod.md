@@ -158,3 +158,9 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 
 ## fn make_repo_dirs (#564)
 - A missing directory drops the repo since #564 (Portage's nonexistent-directory rule), so fake repos must exist.
+
+## fn graph_result_pubgrub
+- Backlog numbers removed from the comment (original text): Like `graph_result_real`, but resolved with the pubgrub engine: the S9 (#363/#364/#365) parity probes assert these match the default solver's abort outcome and notice vectors. Same request, only the resolver differs.
+
+## fn autounmask_dep_chain_names_the_set_argument
+- Backlog numbers removed from the comment (original text): A set member is named by its set (`@name`), like Portage's `SetArg` in `_get_dep_chain`; an atom outside the set map keeps its text (#345).

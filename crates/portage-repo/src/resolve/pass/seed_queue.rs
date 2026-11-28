@@ -101,12 +101,12 @@ pub(crate) fn seed_queue(
     // A new-style virtual's fall-through `||` arm rides as the virtual's own
     // dep (Portage's `_expand_new_virtuals` attributes expanded atoms to the
     // virtual), seeded at the arm the post-upgrade graph selects so the next
-    // walk merges it (backlog #572). A seed whose guard-demotion input was
+    // walk merges it. A seed whose guard-demotion input was
     // transient never rides: when every recorded demoter is masked in this
     // pass's backtrack state, the demotion input is gone and the installed
     // arm it held down survives Portage's post-skip re-resolution instead
     // (dep_check.py :636-655/:599-616) -- queueing the arm would merge where
-    // Portage holds the binding (#651). A seed with no demoters has no
+    // Portage holds the binding. A seed with no demoters has no
     // transient input and always rides. The verdict comes from the existing
     // mask state, never a new walk.
     // Portage: dep_check.py, dep_zapdeps.
@@ -141,7 +141,7 @@ pub(crate) fn seed_queue(
 
 /// Whether the backtrack state masks `cat/pkg-ver`: the higher-in-slot node
 /// is skipped, so a seed committed under its guard-demotion no longer has
-/// a demotion input (backlog #651). Exact `!=cpv` hit only (the
+/// a demotion input. Exact `!=cpv` hit only (the
 /// `check_runtime_pkg_mask` precedent); a `[binary]`-marked negative masks a
 /// binary candidate, never a demoter version.
 fn demoter_masked(bp: &BacktrackParams, cat: &str, pkg: &str, ver: &str) -> bool {

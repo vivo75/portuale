@@ -527,7 +527,7 @@ fn user_package_use_build_id_line_applies_only_to_the_equal_instance() {
     }
 }
 
-/// Backlog #402: under `--binpkg-respect-use`, a top-level atom whose only
+/// Under `--binpkg-respect-use`, a top-level atom whose only
 /// binaries are USE-mismatched reports Portage's masked block — one
 /// cpv-deduped `use flag configuration mismatch` row — not the plain
 /// `no binary packages` miss.

@@ -47,3 +47,6 @@ Dependency priorities, the edges they label and the ignore rungs.
 
 ## impl Display for DepPriority
 - Ports Portage's `_emerge/DepPriority.py::DepPriority.__str__` -- the single highest classification. `Priority:` lines and `digraph:` edge labels both use it.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): On a `||` branch the walk itself chose for this group (#625).

@@ -39,3 +39,6 @@
 
 ## warm-up run (Task 11)
 - The compared `--pretend` runs share one scratch `ROOT`: a warm-up run establishes the updates record first, so both compared runs skip the block (and the ambient repo set behind it) and stay byte-identical.
+
+## fn nospinner_is_accepted_and_changes_nothing
+- Backlog numbers removed from the comment (original text): Backlog #453 B: Portage accepts `--nospinner` (`_emerge/main.py:37`); portuale never animates, so it parses as a no-op.

@@ -29,3 +29,6 @@ Phase-environment unit tests (path vars, PATH composition, quoting, eclass locat
 
 ## fn drop_ebuild_phase_pops_only_the_phase_var (#516)
 - A `misc-functions.sh` spawn (`install_qa_check ...`) is not an ebuild phase — Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE` from the child env — while an ebuild phase spawn keeps it. Portage: `_emerge/EbuildPhase.py`, `MiscFunctionsProcess._spawn`.
+
+## fn phase_env_names_the_user_bashrc_and_hook_dir_under_the_config_root
+- Backlog numbers removed from the comment (original text): The phase env names the user's bashrc and hook directory under the config root, as `doebuild_environment` does (`doebuild.py:535-540`; observed values in `LLM/evidence/2026-10-18-372-s0/`). Backlog #372.

@@ -225,7 +225,7 @@ fn built_parent_update_probe_counts_a_restricting_consumer_the_walk_never_reache
     // Portage: `_slot_operator_check_reverse_dependencies` excuses a parent that
     // has an upgrade available only when `_too_deep(parent.depth)` is false; a
     // `@world` member the request does not reach has an unreachable depth, so
-    // its `<dev-libs/mbabilib-2.0` atom still refuses mbabilib-2.0 (backlog #491).
+    // its `<dev-libs/mbabilib-2.0` atom still refuses mbabilib-2.0.
     let root = mbabilib_vdb("0/1");
     // `dev-libs/abk0a` has a tree ebuild above the installed 0.1.
     let d = root.join("var/db/pkg/dev-libs/abk0a-0.1");

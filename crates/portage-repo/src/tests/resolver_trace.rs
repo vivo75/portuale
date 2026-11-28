@@ -1,6 +1,6 @@
 use super::*;
 
-/// #134 (Phase 5b S4): an installed `Child:` row's `USE="…"`
+/// (Phase 5b S4): an installed `Child:` row's `USE="…"`
 /// column must carry the vdb-recorded USE, not `""`. The fixture's
 /// vdb is `IUSE=flip` / `USE=` (built -flip), so
 /// `installed_use_str` renders `-flip` -- the minimum bar S0's

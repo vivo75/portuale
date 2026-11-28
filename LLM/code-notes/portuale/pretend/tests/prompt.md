@@ -62,3 +62,6 @@ Prompt EOF/SIGINT behavior, the --ask privilege offer, and the prompt line buffe
 
 ## fn ask_declined_writes_no_resume_list (updates era)
 - A declined `--ask` run still records the updates mtimes; the pin compares the `resume` section (round-tripped through `read_resume_list`) instead of the whole file.
+
+## fn sigint_during_merge_exits_130_after_exiting_on_signal_like_portage
+- Backlog numbers removed from the comment (original text): Portage: Scheduler.py, merge (`sighandler`). A `^C` during a merge prints `Exiting on signal 2` and exits 128+2 (backlog #411).

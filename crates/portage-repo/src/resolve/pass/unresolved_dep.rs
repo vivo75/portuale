@@ -651,7 +651,7 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
             // pool selection consulted (Portage's one block over all dbs): a
             // binary selection rejected for its USE or stale baked deps
             // discloses here with the same chain walk, instead of falling
-            // through to the plain miss (#420).
+            // through to the plain miss.
             let masked = dep_masked_rows(ctx, config, key, display_atom);
             if !masked.is_empty() {
                 // A supersede refreshes the just-computed rows too.

@@ -1,4 +1,4 @@
-//! Hang watchdog for the unit-test binary (backlog #376).
+//! Hang watchdog for the unit-test binary.
 //!
 //! Started before `main` by an `.init_array` entry, so no test has to opt in.
 //! Every 30 s it adds up the CPU ticks of this process and all its

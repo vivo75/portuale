@@ -24,3 +24,4 @@ Slot-operator eliminate/scan tests: bridge arm, lookup, eight rules, reachabilit
 
 ## fn slot_operator_rebuild_entries_reports_the_refused_stale_pin
 - #765: the p573virt shape through `stale_pin_base` (shared with `tests/rebuild_scan.rs`, hence `pub(super)`): the provider moves 5.42 -> 5.44 past the consumer's recorded `=dev-libs/prov-5.42*`, so nothing is scheduled and the one `StalePinRefusal` comes back. The solver-level twin is `solver_bridge::tests::pg765_bridge_result_carries_the_stale_pin_refusal`.
+- Backlog numbers removed from the comment (original text): The stale-pin arm's refusal reaches the caller: the plan moves the provider past the consumer's recorded `=` pin, nothing is scheduled, and the refusal comes back with the entries instead of being dropped (backlog #765; the `--solver=pubgrub` bridge reports it).

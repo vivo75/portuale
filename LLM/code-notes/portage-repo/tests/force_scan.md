@@ -29,3 +29,6 @@ Slot-change probe and update force-scan tests: moved children, stale binaries.
 - The old premise (an `||` alternative never vetoes) is replaced by
   selected-arm binding for `|| ( ... )` groups; the `without_or_groups` unit test is replaced by
   `replacement_accepts_binds_the_selected_or_arm`.
+
+## fn replacement_accepts_binds_the_selected_or_arm
+- Backlog numbers removed from the comment (original text): #618: only the selected `||` arm binds the replacement. The consumer's live `|| ( =accprov-1.5 =accprov-2.0 )` must not accept the 2.0 candidate through the unselected `=accprov-2.0` arm: in-graph first, then installed (`dep_zapdeps`), so a merge-bound 1.5 selects `=accprov-1.5` even though the installed 2.0 would select the other arm, and `=accprov-1.5` rejects 2.0. An arm matching the installed instance pulls the same child and constrains nothing.

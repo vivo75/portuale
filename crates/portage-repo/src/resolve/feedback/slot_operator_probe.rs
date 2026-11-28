@@ -30,7 +30,7 @@ pub(crate) fn step_slot_operator_probe(
             });
         // A non-installed built (binary) parent is masked, not seeded; filed
         // through the shared helper with the missing-dep trigger arm. Builds of
-        // the same version that fail the same way go with it (#805).
+        // the same version that fail the same way go with it.
         let binary_masks = crate::resolve::peel::with_siblings(ctx, config, pass, binary_masks);
         if file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly, ctx.root) {
             return Some(PassDecision::Feedback(BacktrackFeedback::Config {

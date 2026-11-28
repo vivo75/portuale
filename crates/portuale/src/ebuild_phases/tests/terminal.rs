@@ -1,4 +1,4 @@
-//! Phases and the controlling terminal (backlog #408).
+//! Phases and the controlling terminal.
 //!
 //! Oracle: a probe under a real pty (`LLM/evidence/2026-10-18-408-s0/`):
 //! `bash -i -c true` in a `process_group(0)` child stops with SIGTTIN even

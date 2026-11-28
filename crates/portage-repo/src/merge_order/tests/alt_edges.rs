@@ -390,7 +390,7 @@ fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
     );
 }
 
-/// #625(b): two merge-bound arms of one `||`, the walk recorded the second.
+/// Two merge-bound arms of one `||`, the walk recorded the second.
 /// The edge goes to the recorded arm, not to the first all-in-graph branch.
 /// Portage: depgraph.py, _add_pkg_dep_string (edges only for the selected
 /// atoms); oracle `LLM/evidence/2026-11-06-sweep/625b/probe625b_oracle.py`.

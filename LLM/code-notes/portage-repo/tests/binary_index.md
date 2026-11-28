@@ -29,3 +29,6 @@ Binary candidate tests: local/remote indexes, multi-instance dedup, slot trigger
 
 ## fn fixture_repo_constrained_atom_finds_the_named_repo_only
 - Fixture `dev-libs/overlayonlypkg` exists only in the overlay repo: proves portage-repo's candidate strings carry `::reponame` end to end, not just that portage-dep parses and matches it in isolation.
+
+## fn getbinpkg_record_filter_matches_like_wildcard_package_set
+- Backlog numbers removed from the comment (original text): Backlog #347 S9: a `Packages` record matching `--getbinpkg-exclude` (or missing from a non-empty `--getbinpkg-include`) never becomes a candidate (Portage `bintree.py:1825-1846`). Grounded in S0 cells `g01-exclude` (exclude) and `g02-include` (whitelist).

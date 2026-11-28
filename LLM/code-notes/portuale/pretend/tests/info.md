@@ -9,3 +9,6 @@
 
 ## fn info_masks_url_passwords_like_hide_url_passwd
 - `sync-uri` of repos and binrepos goes through `_hide_url_passwd` (#504).
+
+## fn info_scalar_value_prefers_the_calling_env_over_the_config
+- Backlog numbers removed from the comment (original text): Backlog #219: `--info`'s scalar dump reads the calling env over the config files (real `settings.get(k)`, env-first `lookuplist`), not `other_vars` with an env fallback. Hermetic without `with_test_env` (that hook lives in portage-profile's own `cfg(test)`): a probe key no other code reads, mutated under a lock, ambient value saved/restored via a `Drop` guard so an assertion panic cannot leak it.

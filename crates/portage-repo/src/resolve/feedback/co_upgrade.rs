@@ -1,5 +1,5 @@
 //! Co-upgrade: an installed holder of a pin that an upgrade breaks may follow
-//! the upgrade instead of withholding it (backlog #698).
+//! the upgrade instead of withholding it.
 //!
 //! The decision uses repo facts only (no solver state), so every solver can
 //! share it. Charter property 1 (every kept package has its dependencies)
@@ -26,7 +26,7 @@ pub(crate) type Followers = ((String, String), (String, String));
 /// The version the installed holder `(category, package, version)` should move to so it can follow an
 /// upgrade of `provider` to the versions rendered in `new_provider`
 /// (`cat/pkg-ver:slot/sub::repo`): some visible candidate of the holder (a masked
-/// version is not a route the user can install, #774), in its installed slot and not older than it, whose `*DEPEND` names `provider`
+/// version is not a route the user can install), in its installed slot and not older than it, whose `*DEPEND` names `provider`
 /// only in ways the new versions satisfy. A rebuild of the same version
 /// counts (its tree dependencies, not the vdb ones, are what binds).
 ///
@@ -141,7 +141,7 @@ pub(crate) fn holder_routes(
 /// Whether the request wants `provider` updated: it names the package itself
 /// (a command-line atom or a set member), or it is an `--update` that walks
 /// dependencies (`--deep`). Otherwise a withheld update stays withheld, the
-/// smallest plan (#727). Portage: depgraph.py, `_want_update_pkg`
+/// smallest plan. Portage: depgraph.py, `_want_update_pkg`
 /// (`arg_atoms or update`, within `--deep`).
 pub(crate) fn request_updates(
     atoms: &[String],
@@ -163,7 +163,7 @@ pub(crate) fn request_updates(
 /// holder that cannot follow (or whose pin is a USE dependency) stay withheld.
 /// `None` when nothing is withheld or nothing can follow. Next to the request
 /// comes each `(holder, provider)` `(category, package)` pair, so the result of
-/// the second walk can name why a holder is in the plan. The notes (#703) name
+/// the second walk can name why a holder is in the plan. The notes name
 /// the holders that cannot follow, whether or not a second walk runs.
 pub(crate) fn co_upgrade_request(
     ctx: &ResolveCtx<'_>,
@@ -304,7 +304,7 @@ pub(crate) fn provider_atoms(
 /// The atoms on `provider` that a candidate's tree dependencies *require*: every
 /// atom outside a `||` group, and for a `||` group the atoms of its arms only
 /// when every arm names `provider`. A group with an arm on another package can
-/// be met without the provider, so it constrains nothing (backlog #781).
+/// be met without the provider, so it constrains nothing.
 pub(crate) fn tree_route_atoms(
     texts: &[&str],
     use_flags: &HashSet<String>,
@@ -361,7 +361,7 @@ pub(crate) fn tree_route_atoms(
 /// (`cat/pkg-ver:slot/sub::repo`): `None` when an atom outside any `||` group, or
 /// a group whose arms all name the provider, rejects it; otherwise the atoms to
 /// ask for so that each group is met without a rejecting arm (the first arm
-/// that accepts the provider, else the first arm on other packages; backlog #808).
+/// that accepts the provider, else the first arm on other packages).
 pub(crate) fn tree_follow_atoms(
     texts: &[&str],
     use_flags: &HashSet<String>,
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn or_group_with_an_arm_off_the_provider_constrains_nothing() {
-        // #781: the `p569virt` shape, a version menu plus another package.
+        // The `p569virt` shape, a version menu plus another package.
         assert_eq!(
             atoms("|| ( =dev-libs/prov-5.42* dev-libs/core ) dev-libs/prov:="),
             ["dev-libs/prov:="]
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn follow_asks_for_the_arm_off_the_provider() {
-        // #808: the rejecting arm is skipped, the other package is asked for.
+        // The rejecting arm is skipped, the other package is asked for.
         assert_eq!(
             follow("|| ( =dev-libs/prov-5.42* dev-libs/other ) dev-libs/prov:="),
             Some(vec!["dev-libs/other".to_string()])

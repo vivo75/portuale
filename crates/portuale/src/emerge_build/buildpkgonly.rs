@@ -205,7 +205,7 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
                 use_flags,
                 // Scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes
                 // through `EbuildExecuter`, so the no-op source-phase skip
-                // fires exactly like on the merge path (backlog #458).
+                // fires exactly like on the merge path.
                 // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
                 skip_noop_src_phases: true,
                 // The up-front pass above already replayed `pretend`:

@@ -105,7 +105,7 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         log_file: ebuild_phases::PhaseLog::capture(log_path.as_deref()),
         build_env: &build_env,
         // Same merge-path `EbuildExecuter` skip as the serial merge
-        // above (backlog #456); the background capture only decides
+        // above; the background capture only decides
         // where the phases that do run are logged.
         // Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
         skip_noop_src_phases: true,
@@ -1349,8 +1349,7 @@ pub(crate) fn run_build_scheduler(
 
 /// The failure a worker thread that panicked reports in place of its result.
 /// Without it the scheduler would wait forever on a result nobody sends (its
-/// own `tx` clone keeps the channel open), so a panic became a silent hang
-/// (backlog #376).
+/// own `tx` clone keeps the channel open), so a panic became a silent hang.
 pub(crate) fn worker_panic_message(
     entry: &GraphEntry,
     payload: Box<dyn std::any::Any + Send>,

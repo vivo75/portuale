@@ -1,6 +1,6 @@
 use super::*;
 
-/// Backlog #183: interrupting a merge while its vdb entry is still
+/// Interrupting a merge while its vdb entry is still
 /// being written leaves `-MERGING-<pf>` and nothing at `<pf>` -- real
 /// `dbtmpdir` visibility from its creation (before `pkg_preinst` and
 /// the `${ROOT}` copy) to the `_movefile` into place after the old

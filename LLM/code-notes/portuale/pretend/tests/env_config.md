@@ -9,6 +9,7 @@ Config-derived pretend gates: buildpkg, pkgdir trust, shell splitting, default o
 ## fn pkgdir_index_trusted_folds_the_resolved_features_chain
 - Backlog #199 fix round 1: `pkgdir_index_trusted` is Portage's `bintree.populate`'s own `reindex = "pkgdir-index-trusted" not in features` (`bintree.py:936-938`) over the folded `FEATURES` chain, defaulting to trusted when nothing configures `FEATURES` at all (Portage's host `make.globals` default, `cnf/make.globals:81`).
 - A later layer negates it (the `make.conf`-layer case); `-*` clears the chain; the `other_vars` fallback (the case `config_features_list` falls back for) still decides.
+- Backlog numbers removed from the comment (original text): #356 S4 Q3: a base layer silent on the token (the synthetic base seeded when no `make.globals` is read) is not a negation.
 
 ## fn shell_split_handles_quotes_and_escapes
 - Unterminated quote: consume the rest.

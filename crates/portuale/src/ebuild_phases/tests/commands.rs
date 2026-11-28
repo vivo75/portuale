@@ -1420,7 +1420,7 @@ fn foreground_unpack_tees_portages_markers_to_stdout_and_build_log() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The merge-path no-op src-phase skip (backlog #456,
+/// The merge-path no-op src-phase skip (backlog,
 /// `EbuildExecuter._can_skip_source_phases`): `dev-libs/schedleaf-a`
 /// ships no `SRC_URI` and defines only `src_install`
 /// (`DEFINED_PHASES=install` in its md5-cache entry), so a merge run

@@ -129,3 +129,9 @@
 
 ## fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning
 - The user `package.keywords` file merges into the accept-keywords dict before `package.accept_keywords` entries extend it per atom; the framed deprecation warning fires on read (#547, S0 k01/k05).
+
+## fn package_mask_files_track_the_contributing_fragment_for_getmaskingreason
+- Backlog numbers removed from the comment (original text): Backlog #462: the unmask block's `# <file>:` line and comment lines replay Portage's `getmaskingreason` (fragment file + the `#` block above the matching atom). The fold records each stacked entry's origin fragment; `masking_file_comment` replays the comment walk. Oracle: the staged-fixture c1 cell (host Portage 3.0.82.2, `LLM/evidence/2026-10-21-f462/portage.txt`).
+
+## fn user_profile_test_root
+- Backlog numbers removed from the comment (original text): Scaffolding for the #346 S1 user-profile tests: a temp config root with `repo/profiles/leaf` as the selected profile (`make.profile` symlinked to it) plus `etc/portage/profile/<file>` per `user_files`. Portage 3.0.82.2 appends that directory as its last profile node (LocationsManager.py:169-189); every expected value below replays an S0 `u*` cell from `LLM/evidence/2026-10-15-346-s0/u/`, never portuale output.

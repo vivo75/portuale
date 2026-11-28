@@ -62,7 +62,7 @@ pub(crate) fn assemble_pass_result(
 }
 
 /// Mark, per entry and `||` group, the first branch whose atoms are all among
-/// the atoms the walk chose for that owner (#625).
+/// the atoms the walk chose for that owner.
 // Portage: depgraph.py, _add_pkg_dep_string (edges only for selected atoms)
 fn mark_walk_or_choices(
     entries: &mut [GraphEntry],

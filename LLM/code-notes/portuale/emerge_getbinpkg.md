@@ -281,3 +281,15 @@ Backlog #511. The loop runs `binrepos.iter().rev()`: Portage processes `reversed
 
 ## fn run_merge_plan_refuses_a_remote_binpkg_whose_index_lacks_a_checksum
 - Portage 3.0.83-r1 (`LLM/evidence/2026-10-23-500-501/`, `s2-hb-size-only`).
+
+## fn failed_install_pkg_msg_matches_portage_failed_pkg_msg_bytes
+- Backlog numbers removed from the comment (original text): The merge-phase half of `failed_pkg_msg`: `install`/`to`, never `emerge`/`for` (backlog #444: a postinst failure still merges). Ground truth: `LLM/evidence/2026-10-21-b444/portage.txt` (`>>> Failed to install ... to ..., Log file:` rows).
+
+## fn merge_one_binary_entry_postinst_failure_matches_the_portage_endgame
+- Backlog numbers removed from the comment (original text): Backlog #459 (Portage `vartree.py::dblink.merge` `_postinst_failure`, `_emerge/EbuildMerge.py::_merge_exit`, `_emerge/PackageMerge.py::_install_exit`, `Scheduler.py::_do_merge_exit`; oracle `LLM/evidence/2026-10-21-f459/`): a binary merge whose `pkg_postinst` dies still lands (files and vdb entry) but the entry reports the postinst marker, so the loop prints `>>> Completed`, skips the world record and keeps the builddir.
+
+## fn merge_one_binary_entry_builds_under_the_entrys_own_portage_tmpdir
+- Backlog numbers removed from the comment (original text): Backlog #467 (Portage `_emerge/Binpkg.py::_start` reads `settings["PORTAGE_TMPDIR"]` after `setcpv`, so `package.env` moves the binary entry's build dir; oracle `LLM/evidence/2026-10-21-r463/`). The matched directory need not exist: `Binpkg` runs no `_check_temp_dir`, the merge creates it.
+
+## fn verified_digest_names_sort_uppercase_hashes_before_size
+- Backlog numbers removed from the comment (original text): Backlog #436 (d): PORTAGE_CHECKSUM_FILTER filters hashes while preserving at least one.

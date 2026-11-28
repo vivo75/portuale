@@ -271,7 +271,7 @@ pub(crate) fn slot_conflict_puller_cpv(
 }
 
 /// Adds each installed consumer's `||` arm the merge satisfies as a parent of the
-/// merge-bound instance it matches (backlog #606).
+/// merge-bound instance it matches.
 // Portage: depgraph.py, _add_parent_atom
 pub(crate) fn add_merge_parents(
     conflicts: &mut [SlotConflict],
@@ -532,7 +532,7 @@ pub(crate) fn synthesize_surviving_conflict_entries(
                 blockers: Vec::new(),
                 slot: None,
                 sub_slot: None,
-                // Backlog #610: the instance's repo, so the row renders
+                // The instance's repo, so the row renders
                 // `dev-libs/r592ds-1::testrepo` like Portage's instead of
                 // the repo-less `dev-libs/r592ds-1::`. Slot/sub-slot stay
                 // absent deliberately: these conflict rows render slot-less

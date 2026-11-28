@@ -646,7 +646,7 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
         conflicts[0].conflict.unsolvable,
         "a required-set closure member is a graph node with parents"
     );
-    // #483: the consumer this run replaces leaves the graph with its
+    // The consumer this run replaces leaves the graph with its
     // dependency, so the installed edge no longer makes a parent.
     let mut upgraded = graph_entry("dev-libs", "bconsumer", "2.0");
     upgraded.outcome = PretendOutcome::Upgrade {

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn backtrack_default_matches_portage_twenty() {
-    // Backlog #263 (R1): real's default `--backtrack` is 20, not 10.
+    // (R1): real's default `--backtrack` is 20, not 10.
     // Grounded in real Portage 3.0.82.2 (`/usr/sbin/emerge`):
     // `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads
     // `max_retries = 0 if nodeps else myopts.get("--backtrack", 20)`,

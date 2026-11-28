@@ -13,6 +13,7 @@ Parameters a backtracking pass runs with.
 - Similar-grouping gates: same `cat/pkg` (the listing is scoped by cp), same main slot, `is_visible` under the effective config (Portage passes no `autounmask_level` at its own call site either), not `--exclude`d (same `matches_config_entry` idiom as selection), not already masked (exact-`!=cpv`-string presence -- same-version-different-repo is treated as masked, absent from fixtures), and not already a conflict party. The ebuild-only listing moots Portage's installed-skip and its built/binpkg-visibility branches (no counterpart, documented cut). Portage's `if conflict_atoms` gate; deterministic group order.
 - Portage's `backtrack_data.sort`.
 - Two known ceilings, both documented (neither is exercised by any fixture, and ranking-only effects cannot change the explored set, only its order): portuale keeps two per conflict -- existing + current -- where Portage ranks every pulled version, so a 3+-version conflict drops its third candidate; and `conflict_atoms` membership is version+slot only (Portage joins atoms via `atom.match(pkg.with_use(...))`, so a parent that version-matches but USE-mismatches counts as conflicting here and merely inflates the choice's length). Portage's `instances[0]` is always the resolved version, so the 692746 append only fires when the instance list is somehow empty.
+- Backlog numbers removed from the comment (original text): Stable ascending length sort, so equal-length choices keep version-desc order. A built `:S/SS=` atom opposing a choice is healed by rebuilding its consumer, not by keeping the old version, so it weighs half a plain atom. Portage counts every atom alike; the half weight only breaks the ties that sent the walk into a long cascade (#799) and leaves a clear majority alone.
 
 ## enum BacktrackFeedback
 - Phase C2 (023); exactly as the old live-`bp` code did. A pass with both growth and a conflict takes the growth -- Portage would park the config node and explore the conflict first; that combined ordering is a deliberate C2 cut.
@@ -125,3 +126,9 @@ Parameters a backtracking pass runs with.
 
 ## fn BacktrackParams::initial (seed masks)
 - `runtime_pkg_mask` and `mask_order` start from `ResolveRequest::seed_masks`: empty except for the CLI's complete walk, which passes the first walk's `GraphResult::settled_masks` (filled by `assemble_result` from the settled node's params). Portage runs `_complete_graph` in the depgraph that settled, under its `runtime_pkg_mask`. See `code-notes/portuale/pretend/resolve_phases.md`, "complete walk seeded with the settled masks".
+
+## fn built_slot_operator_atoms_weigh_half
+- Backlog numbers removed from the comment (original text): #799: three installed consumers' built atoms weigh less than two plain atoms, so the version the plan's own packages want is not masked first.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): Parent-posture holds recorded by the seed feed (backlog #656 leg (b)): one entry per held `(owner, atom)`. Re-checkable search state, not a log line -- every pass re-derives the verdict and the feed logs the re-fire, so a stale hold cannot outlive the posture that filed it. Insert-only per key (a flipped verdict drops the record outright), so the search terminates. Included in `params_equal`.

@@ -3,7 +3,7 @@
 //! `portage.eapi_is_supported` (`lib/portage/__init__.py`).
 //!
 //! The struct carries all 38 `_eapi_attrs` fields; later slices wire the
-//! phase-side ones to their call sites (plan #348 S2/S5/S6).
+//! phase-side ones to their call sites.
 
 use std::fmt;
 

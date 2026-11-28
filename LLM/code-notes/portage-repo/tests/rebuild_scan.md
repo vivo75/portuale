@@ -72,3 +72,16 @@ Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal ve
 
 - The #744 shape without `--deep`: a consumer outside the walk whose
   provider the plan moves is rebuilt.
+
+## fn rebuild_if_394_vdb
+- Backlog numbers removed from the comment (original text): ---- `--rebuild-if-*` restart scan (backlog #394): over the reached set (merges and kept-installed nodes) name the installed parents whose walked buildtime edge lands on a dep this run merges. Portage records those edges in `_rebuild_config.add` and restarts the walk with the parents force-reinstalled (`depgraph.py:424-442`, `:531-576`, `:5692-5698`, outer loop `:12235`); the re-walk prints the `rR` row (oracle `LLM/evidence/2026-10-19-394/out/portage-a-unbuilt-deep.txt`: `U rebuildtrigger-2.0 [1.0]` + `rR rebuildconsumer-1.0` + `N r394top-1`, backtrack 1/20). ----
+- Backlog numbers removed from the comment (original text): vdb with installed `rebuildtrigger-1.0` + `rebuildconsumer-1.0` (the `#394` oracle shape; the consumer's walked edge lives on its entry's `deps`, like the walk records it).
+
+## fn rebuild_if_restart_names_a_reached_parent_behind_a_merged_build_dep
+- Backlog numbers removed from the comment (original text): The #394 oracle shape: the trigger upgrades, the consumer is kept but walked with a buildtime edge to it. Portage restarts and prints the consumer `rR`.
+
+## fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reachable
+- Backlog numbers removed from the comment (original text): An installed consumer the `--deep` walk recursed into is scheduled by the same-slot arm even when it is outside the reachable scope (#598); the same consumer unwalked is not. Portage: depgraph.py, _add_pkg (recurse under --deep)
+
+## fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run
+- Backlog numbers removed from the comment (original text): #601: an installed consumer that is **upgrading in the same run** still contributes the `(provider, consumer)` display pair Portage lists under "causing rebuilds". Portage's `_compute_abi_rebuild_info` walks `_slot_operator_deps` and accepts a merge-bound replacement of the installed parent, upgrade or rebuild (`depgraph.py:1076-1090`); the cell has 48 rows where portuale has 34 because the scan's `in_graph && !already` skip (`rebuild_scan.rs:158`) drops every merge-bound consumer. Portage: depgraph.py, _compute_abi_rebuild_info

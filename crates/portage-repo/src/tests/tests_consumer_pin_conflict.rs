@@ -83,7 +83,7 @@ pub(super) fn resolve_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// and triangle shapes act only here.
 pub(super) fn complete_request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
     // Portage's first walk adds no installed-consumer pin: with no backtracking
-    // the upgrade stays in the plan the complete walk then starts from (#700).
+    // the upgrade stays in the plan the complete walk then starts from.
     let first = ResolveRequest {
         backtrack_max: 0,
         ..request_in(root, atoms)
@@ -742,7 +742,7 @@ fn triangle_backtracks_like_portage_in_both_argument_orders() {
 fn printed_count_of_the_dead_end_cells_matches_portage() {
     // The driver prints Portage's `backtracked` (D:12407-12418: a restart
     // always counts, any other failed pass only while unexplored nodes
-    // remain). R6 (#600); oracle rows in
+    // remain). R6; oracle rows in
     // `LLM/evidence/2026-10-26-575-residues/r6/captures/full-table.md`.
     let keeper = hermetic_root(&["dev-libs/keeper"]);
     let igw = hermetic_root(&["dev-libs/igw0a"]);

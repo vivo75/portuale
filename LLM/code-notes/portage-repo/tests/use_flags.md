@@ -65,3 +65,6 @@ Effective-USE layer-precedence, stable-flag and memo tests.
 
 ## fn use_context_fingerprint_debug_asserts_on_post_freeze_mutation
 - Backlog #121 (audit O6): mutating a USE-context field after `resolve_config` froze its digest trips the frozen-base `debug_assert_eq!`.
+
+## fn effective_use_flags_applies_the_user_profile_level_last
+- Backlog numbers removed from the comment (original text): #346 S1: the user profile is Portage's last profile node, so its `package.use` and force/mask entries win over the chain levels in the per-level walks. Replays S0 u04 (`package.use` enables `x`) and u06/u07 (force/mask decide `(x)`/`(-x)`) at the unit level; the contract pins replay the full cells against Portage 3.0.82.2.

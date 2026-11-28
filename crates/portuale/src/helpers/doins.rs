@@ -1312,7 +1312,7 @@ pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i3
     if r != 0 { Err(last_errno()) } else { Ok(()) }
 }
 
-// The BSDs use `extattr_*`, which is not ported (backlog #665): no
+// The BSDs use `extattr_*`, which is not ported: no
 // attributes are listed and reading or setting one reports ENOTSUP, the
 // same answer a filesystem without xattr support gives.
 #[cfg(not(target_os = "linux"))]

@@ -1,5 +1,5 @@
 // Embeds the vendored ebuild phase runtime (`bin/`) and the package-set
-// definitions (`cnf/sets/portage.conf`) into the binary (backlog #322 S2),
+// definitions (`cnf/sets/portage.conf`) into the binary,
 // so a `portuale` copied out of its build tree -- a container, a minimal
 // host -- still has them. The output is a table, `ENTRIES`, that
 // `src/embedded_runtime.rs` extracts at run time.

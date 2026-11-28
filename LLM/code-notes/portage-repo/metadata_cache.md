@@ -25,6 +25,7 @@ md5-cache reading, the aux-metadata provider and pregen/regen switches.
 ## fn md5_cache_entry_is_valid
 - Portage `_pull_valid_cache` validates each rung once and the resolver reads the same cp many times. The validator does not look at `*DEPEND` values, but the raw bytes are what Portage reads.
 - E4: trust the entry -- Portage would report the package as non-existent, but no portuale reader reaches an ebuild-less entry.
+- Backlog numbers removed from the comment (original text): Whether the on-disk entry passes Portage's `validate_entry` for the `md5_database` (pairs) format, memoised per path. Validates the raw text, which is also what `read_md5_cache` returns verbatim (#391).  `true` when the ebuild is missing (trust the entry) and when `pf` is not a `package-version` name at all.
 
 ## fn pregen_md5_cache_enabled
 - Portage's chain: `parse_layout` resolves `cache-formats` (lowercased + split, auto-detect `md5-dict` then `pms`) into the repo's list (`config.py:1564-1577`); `iter_pregenerated_caches` (`config.py:576-605`) yields one database per known format in list order, skipping unknown names; `get_pregenerated_cache` (`config.py:607-616`) keeps only the first. So `cache-formats = pms md5-dict` resolves to `metadata/cache` even when only `metadata/md5-cache` exists -- every lookup misses and falls through -- and `foo` yields no pregen cache at all. Backlog #55 decision L1. Pure, so the read-path gate and `--regen`'s writer both resolve the same way; memoised per path only by callers.

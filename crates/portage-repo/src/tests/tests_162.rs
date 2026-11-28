@@ -2057,7 +2057,7 @@ fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- `promote_tied_alternative`'s `want_update` gate (backlog #683). ----
+// ---- `promote_tied_alternative`'s `want_update` gate. ----
 //
 // Portage `dep_zapdeps` (dep_check.py:771-775) skips the installed-slots
 // promotion when the staying choice wants an update

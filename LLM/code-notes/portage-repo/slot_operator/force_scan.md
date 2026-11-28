@@ -35,3 +35,5 @@ Slot-operator update-force and slot-change probes.
   same child and constrains nothing (Portage's `atom.match(dep.child)` skip).
   An unselected accepting arm can no longer force a replacement the selected
   arm rejects. Unit twin: `replacement_accepts_binds_the_selected_or_arm`.
+- Backlog numbers removed from the comment (original text): Whether the tree ebuild that would replace an installed consumer accepts the candidate child: every unblocked atom it carries on the provider, other than one the installed instance already matches, must match the candidate. Each `||` group contributes only its chosen arm's atoms (in-graph first, then installed; an unselected arm binds nothing, a selected arm that rejects the candidate vetoes it, backlog #618). A consumer without a visible tree ebuild at its installed version or without such atoms accepts.
+- Backlog numbers removed from the comment (original text): Each `||` group contributes only its chosen arm (in-graph first, then installed); an atom matching the installed instance pulls the same child and constrains nothing (backlog #618).

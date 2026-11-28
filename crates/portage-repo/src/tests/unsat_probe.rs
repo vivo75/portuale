@@ -351,8 +351,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         "the stale binary parent is masked"
     );
     // The graph's merge-bound binary is the parent even when another build of
-    // the package is installed: it is masked, the installed twin not seeded
-    // (backlog #491; Portage's `parent.installed` is false for the graph's pick).
+    // the package is installed: it is masked, the installed twin not seeded.
     let (base_t, repos_t) = unsat_base(
         "binary-twin",
         &[("unsatpar", built)],

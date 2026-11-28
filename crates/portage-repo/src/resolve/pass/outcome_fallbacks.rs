@@ -99,7 +99,7 @@ pub(crate) fn apply_outcome_fallbacks(
     // A dependency no ebuild or binary satisfies but an installed instance
     // does settles `AlreadyInstalled`, never a miss (Portage iterates the
     // installed db on every resolve). Slot and slot-operator atoms keep the
-    // long-standing rule (an installed match suffices: #233's probe has a
+    // long-standing rule (an installed match suffices: the probe has a
     // stale `:0/1` matching the installed instance in vartree); bare and
     // version-range atoms additionally require the cp to have no tree or
     // binary candidate at all, so a package whose ebuilds are all masked
@@ -130,7 +130,7 @@ pub(crate) fn apply_outcome_fallbacks(
     // installed instance keeps it even when the tree copies are all
     // masked. This covers `||`-chosen edges too -- their disjunction
     // already selected this alternative, so the miss must not stand and
-    // the MissingDep trigger must not fire (backlog #615: `-uD[N]
+    // the MissingDep trigger must not fire (`-uD[N]
     // dev-libs/omasked` merges `omasked-1.0` on host Portage with an
     // installed-masked warning, while portuale aborted rc 1 "All ebuilds
     // ... have been masked"). Version/slot atoms keep the rule above
@@ -218,7 +218,7 @@ pub(crate) fn apply_outcome_fallbacks(
             outcome = forced;
         }
     }
-    // A rebuilt package selected like an argument (#728) may come back as a plain
+    // A rebuilt package selected like an argument may come back as a plain
     // reinstall of the best version: it is still the slot-operator rebuild.
     if bp.slot_operator_replace_installed.contains(key)
         && let PretendOutcome::Reinstall {
