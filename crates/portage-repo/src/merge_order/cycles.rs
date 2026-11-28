@@ -290,11 +290,7 @@ pub(crate) fn elementary_cycles(
 /// count, descending (`depgraph.py`, `_merge_order_bias`; Python's sort is
 /// stable, so ties keep insertion order). The bias decides the fallback
 /// pick for pure cycles.
-pub(crate) fn reduced_merge_order(
-    g: &Digraph,
-    drain: &HashSet<usize>,
-    late: &[bool],
-) -> Vec<usize> {
+pub(crate) fn reduced_merge_order(g: &Digraph, drain: &HashSet<usize>) -> Vec<usize> {
     // A node is a leaf when it has no still-remaining child in the drain set.
     let mut remaining: HashSet<usize> = drain.clone();
     // Bias order, computed once: parent count, descending, stable over the
@@ -311,18 +307,13 @@ pub(crate) fn reduced_merge_order(
             })
             .collect();
         if leaves.is_empty() {
-            // Lowest-order remaining node; target-rooted instances go first.
+            // Lowest-order remaining node.
             let pos: HashMap<usize, usize> =
                 biased.iter().enumerate().map(|(p, &i)| (i, p)).collect();
             leaves = remaining
                 .iter()
                 .copied()
-                .min_by_key(|&i| {
-                    (
-                        late.get(i).copied().unwrap_or(false),
-                        pos.get(&i).copied().unwrap_or(usize::MAX),
-                    )
-                })
+                .min_by_key(|&i| pos.get(&i).copied().unwrap_or(usize::MAX))
                 .into_iter()
                 .collect();
         }
@@ -418,7 +409,6 @@ pub(crate) fn cycle_report(
             }
         }
     }
-    let late: Vec<bool> = entries.iter().map(|e| e.targets_running_root).collect();
-    let display = reduced_merge_order(&g, &drain, &late);
+    let display = reduced_merge_order(&g, &drain);
     (cycles, display)
 }

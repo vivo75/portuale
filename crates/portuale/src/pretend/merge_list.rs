@@ -696,31 +696,26 @@ pub(crate) fn render_tree_rows(args: RenderTreeRowsArgs<'_>) {
     if disp_tree {
         // The tree-mode serialization order, computed on the displayed
         // slice so abort-partial lists stay self-consistent.
-        let tree_order =
-            if circular_forced_display && display_entries.iter().any(|e| e.targets_running_root) {
-                // A cross-root cycle partial goes in reversed, like Portage's
-                // stuck remainder (never re-serialized).
-                (0..display_entries.len()).rev().collect()
-            } else if circular_forced_display {
-                // Portage's circular re-display walks `handler.merge_list`
-                // (the reduced leaf-drain order) through the same `display()`
-                // reversal; `display_entries` (the abort `partial`) already is
-                // that reduced order, so it goes in as-is and `print_tree`'s
-                // reversal produces Portage's walk.
-                // Portage: depgraph.py, _show_circular_deps.
-                (0..display_entries.len()).collect()
-            } else {
-                portage_repo::tree_display_order(portage_repo::TreeDisplayOrderArgs {
-                    entries: display_entries,
-                    top_level_atoms: expanded_atoms,
-                    config,
-                    root,
-                    implicit_system_deps,
-                    repos,
-                    dynamic_deps,
-                    circular: &result.circular_dependency,
-                })
-            };
+        let tree_order = if circular_forced_display {
+            // Portage's circular re-display walks `handler.merge_list`
+            // (the reduced leaf-drain order) through the same `display()`
+            // reversal; `display_entries` (the abort `partial`) already is
+            // that reduced order, so it goes in as-is and `print_tree`'s
+            // reversal produces Portage's walk.
+            // Portage: depgraph.py, _show_circular_deps.
+            (0..display_entries.len()).collect()
+        } else {
+            portage_repo::tree_display_order(portage_repo::TreeDisplayOrderArgs {
+                entries: display_entries,
+                top_level_atoms: expanded_atoms,
+                config,
+                root,
+                implicit_system_deps,
+                repos,
+                dynamic_deps,
+                circular: &result.circular_dependency,
+            })
+        };
         *rendered_rows = print_tree(PrintTreeArgs {
             entries: display_entries,
             display_order: &tree_order,
