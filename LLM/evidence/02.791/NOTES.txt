@@ -1,0 +1,2 @@
+#791/#808 evidence. Branch backlog/791-808-pubgrub-holds-provider (both repos, from #781 commits 07874242 / pmtest 44a4531).
+mkroots.sh = 02.773 plus root a808. Before (a10/pg moved the provider, a808/pg refused) was observed live before the change; after in what-this-proves.

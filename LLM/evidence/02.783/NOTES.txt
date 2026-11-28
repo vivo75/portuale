@@ -1,0 +1,8 @@
+#783 evidence (branch backlog/783-pubgrub-deep-bound, both repos, from #780 commits 7843192f / pmtest 4b410a4). No product code.
+Witness tried: a stale consumer TWO levels below a merge-bound package. Throwaway fixtures (not kept): p783top-2 (RDEPEND =p569prov-5.44* p783mid, new),
+p783mid-1 (installed, RDEPEND p783leaf), p783leaf-1 (installed, vdb RDEPEND dev-libs/p569prov:0/5.42=, tree RDEPEND dev-libs/p569prov:=), world atom p783top.
+`emerge -pv --update --deep=N @world`, N = 0, 1, 2: BOTH solvers print `rR p783leaf-1` and the same NOTE at every N. So the default solver does not bound
+the rebuild scan by the walk either (its consumer set comes from required_set_reachable_cps, not installed_walked): the premise of #783 is not witnessed.
+Side finding (root `pull`, `--update --deep=1`, root from mkroots.sh): default prints `N p569core-1.0` + `rR p569virt-1`; pubgrub prints `rR p569virt-1` only.
+At --deep=0, no --deep and --deep=3 pubgrub prints p569core too. Cause seen with PORTUALE_PG_TRACE=1: at --deep=1 p569virt-1 is a kept leaf (no edges, no
+policy=Rebuild round); the R row is added after the solve by bridge_slot_operator_rebuilds, so its dependencies are never solved. Filed as #811.

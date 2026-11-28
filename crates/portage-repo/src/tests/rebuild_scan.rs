@@ -1974,6 +1974,7 @@ fn slot_operator_rebuild_scan_does_not_schedule_a_consumer_whose_dependency_forb
             atom: "=dev-libs/prov-5.42*".to_string(),
             provider: "dev-libs/prov-5.44".to_string(),
             no_ebuild: false,
+            tree_pin: false,
         }]
     );
     let _ = fs::remove_dir_all(&base);
@@ -2328,6 +2329,7 @@ fn resolve_reports_a_stale_binding_the_plan_cannot_repair() {
             atom: "=dev-libs/p569prov-5.42*".to_string(),
             provider: "dev-libs/p569prov-5.44".to_string(),
             no_ebuild: false,
+            tree_pin: false,
         }]
     );
 }

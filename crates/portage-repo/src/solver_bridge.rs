@@ -5399,10 +5399,25 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     // so the round that found its route-less holder is the one that knows them.
     let mut no_route: Vec<super::HeldBackNoRoute> = Vec::new();
     let mut parents: Vec<super::Followers> = Vec::new();
+    let mut rebuilt: Vec<(String, String)> = Vec::new();
+    // The last round that solved: a later round that asks for more and fails (an arm the
+    // engine cannot merge) keeps its plan instead of aborting the run (#809).
+    let mut last: Option<(GraphResult, Vec<String>)> = None;
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
-        let (mut result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
+        let (mut result, stale, fix) = match resolve_pubgrub_at(req, &opts) {
+            Ok(round) => round,
+            Err(_) if last.is_some() => {
+                let (mut result, atoms) = last.take().expect("checked");
+                result.held_back_no_route = no_route;
+                name_holder_parents(&mut result, &parents, &rebuilt);
+                drop_unrequired_pins(&mut result, &req.atoms, &atoms);
+                return Ok(result);
+            }
+            Err(e) => return Err(e),
+        };
         no_route.extend(fix.no_route);
         parents.extend(fix.parents);
+        rebuilt.extend(fix.rebuilt);
         let fresh_rebuild: Vec<String> = fix
             .rebuild
             .into_iter()
@@ -5415,17 +5430,18 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             .collect();
         if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
             result.held_back_no_route = no_route;
-            name_holder_parents(&mut result, &parents);
+            name_holder_parents(&mut result, &parents, &rebuilt);
             drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
             return Ok(result);
         }
+        last = Some((result, opts.extra_atoms.clone()));
         opts.masked_binaries.extend(stale);
         opts.extra_rebuild.extend(fresh_rebuild);
         opts.extra_atoms.extend(fresh_atoms);
     }
     resolve_pubgrub_at(req, &opts).map(|(mut result, _, _)| {
         result.held_back_no_route = no_route;
-        name_holder_parents(&mut result, &parents);
+        name_holder_parents(&mut result, &parents, &rebuilt);
         drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
         result
     })
@@ -5453,8 +5469,15 @@ fn drop_unrequired_pins(result: &mut GraphResult, asked: &[String], pins: &[Stri
 
 /// A holder that joins the plan only because its provider moves names that
 /// provider as its parent, so the plan says why it is there (#718, as #713 does
-/// for the default solver).
-fn name_holder_parents(result: &mut GraphResult, parents: &[super::Followers]) {
+/// for the default solver). A holder the plan rebuilds also files the
+/// `(provider, holder)` display pair, so its row is tagged `r` and the provider's
+/// "causes rebuilds for" block lists it, as for a rebuild the slot-operator pass finds
+/// (#780). A pair is kept only while both rows are in the final plan.
+fn name_holder_parents(
+    result: &mut GraphResult,
+    parents: &[super::Followers],
+    rebuilt: &[(String, String)],
+) {
     for entry in &mut result.entries {
         for (holder, provider) in parents {
             if (&entry.category, &entry.package) == (&holder.0, &holder.1)
@@ -5465,6 +5488,26 @@ fn name_holder_parents(result: &mut GraphResult, parents: &[super::Followers]) {
             }
         }
     }
+    let planned = |cpv: &str, reinstall: bool| {
+        result.entries.iter().any(|e| {
+            let name = format!("{}/{}", e.category, e.package);
+            match &e.outcome {
+                PretendOutcome::Reinstall { version, .. } if reinstall => {
+                    format!("{name}-{version}") == cpv
+                }
+                PretendOutcome::Upgrade { to, .. } if !reinstall => format!("{name}-{to}") == cpv,
+                _ => false,
+            }
+        })
+    };
+    let pairs: Vec<_> = rebuilt
+        .iter()
+        .filter(|(provider, holder)| planned(provider, false) && planned(holder, true))
+        .cloned()
+        .collect();
+    result.abi_rebuilds.extend(pairs);
+    result.abi_rebuilds.sort();
+    result.abi_rebuilds.dedup();
 }
 
 /// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
@@ -5695,7 +5738,18 @@ fn resolve_pubgrub_at(
         record_relaxed_changes(req, &lazy, &order, &mut result);
     }
     let stale = stale_built_binaries(req, &lazy, &result.entries);
-    let fix = holder_fix(req, asked, &lazy, &installed, &result.entries);
+    let mut fix = holder_fix(req, asked, &lazy, &installed, &result.entries);
+    let plan = PlanView {
+        req,
+        lazy: &lazy,
+        installed: &installed,
+        entries: &result.entries,
+        keys: dep_keys(req),
+    };
+    tree_refusal_fix(&plan, asked, &result.stale_pin_refusals, &mut fix);
+    if matches!(req.deep, Deep::Bounded(_)) {
+        solve_scanned_rebuilds(&result.entries, &result.abi_rebuilds, &mut fix);
+    }
     Ok((result, stale, fix))
 }
 
@@ -5708,6 +5762,9 @@ struct HolderFix {
     no_route: Vec<super::HeldBackNoRoute>,
     /// `(holder, provider)` as `(category, package)`: why a holder joins the plan (#718).
     parents: Vec<super::Followers>,
+    /// `(provider_cpv, holder_cpv)` of each holder the plan rebuilds because its provider
+    /// moves: the display pair the slot-operator pass files for a walked consumer (#780).
+    rebuilt: Vec<(String, String)>,
 }
 
 /// Installed packages whose recorded dependency on a package the plan moves no
@@ -5725,20 +5782,16 @@ fn holder_fix(
 ) -> HolderFix {
     use super::{provider_atoms, provider_atoms_accept};
     let bound = |e: &GraphEntry| super::merge_bound_version(&e.outcome).cloned();
-    let keys: &[usize] = if req.with_bdeps {
-        &[0, 1, 2, 3, 4]
-    } else {
-        &[1, 3, 4]
-    };
+    let keys = dep_keys(req);
     let mut fix = HolderFix::default();
     // Only holders the plan or the world reaches matter, like the default
-    // solver's reverse scan; with no world the plan's own dependencies seed it (#700).
+    // solver's reverse scan. The plan's own dependencies always seed it: a
+    // world atom that is not installed yet reaches nothing installed (#700, #781).
     let mut seeds = req.config.complete_seed_atoms.clone();
-    if seeds.is_empty() {
-        seeds = super::merge_bound_dep_atoms(entries);
-    } else {
+    if !seeds.is_empty() {
         seeds.extend(req.atoms.iter().cloned());
     }
+    seeds.extend(super::merge_bound_dep_atoms(entries));
     seeds.sort();
     seeds.dedup();
     let reachable = crate::slot_operator::InstalledReachability::for_run(&req.root, req.with_bdeps)
@@ -5842,9 +5895,19 @@ fn holder_fix(
             skipped_version: &new_ver,
             holders: &broken,
         });
-        if note.is_some() || !super::request_updates(asked, req.update, &req.deep, &provider) {
-            // A holder cannot follow, or the request does not ask for the provider
-            // (#727): the provider stays where it is.
+        let plan = PlanView {
+            req,
+            lazy,
+            installed,
+            entries,
+            keys,
+        };
+        let required = || plan_requires_move(&plan, &provider, &old_str);
+        if note.is_some()
+            || !(super::request_updates(asked, req.update, &req.deep, &provider) || required())
+        {
+            // A holder cannot follow, or nothing asks for or requires the provider's
+            // move (#727, #781): the provider stays where it is.
             fix.no_route.extend(note);
             fix.atoms
                 .push(format!("={}/{}-{}", e.category, e.package, old.version));
@@ -5854,6 +5917,10 @@ fn holder_fix(
                 let target = route.expect("every holder has a route");
                 if target == *v {
                     fix.rebuild.push(format!("{c}/{p}-{v}"));
+                    fix.rebuilt.push((
+                        format!("{}/{}-{new_ver}", e.category, e.package),
+                        format!("{c}/{p}-{v}"),
+                    ));
                 } else {
                     fix.atoms.push(format!("={c}/{p}-{target}"));
                 }
@@ -5861,6 +5928,209 @@ fn holder_fix(
         }
     }
     fix
+}
+
+/// A rebuild the slot-operator scan added after the solve has no dependencies in the
+/// plan: past a `--deep=N` bound its package was a kept leaf, so what the rebuilt
+/// package needs (a `||` arm that only the new provider selects) was never solved.
+/// Ask for it as a rebuild member, so the next round expands its dependencies (#811),
+/// and carry its `(provider, consumer)` display pair, which only the scan files.
+fn solve_scanned_rebuilds(
+    entries: &[GraphEntry],
+    abi_rebuilds: &[(String, String)],
+    fix: &mut HolderFix,
+) {
+    for e in entries {
+        if let PretendOutcome::Reinstall {
+            version,
+            slot_operator_rebuild: true,
+            ..
+        } = &e.outcome
+        {
+            let cpv = format!("{}/{}-{version}", e.category, e.package);
+            fix.rebuilt
+                .extend(abi_rebuilds.iter().filter(|(_, c)| *c == cpv).cloned());
+            fix.rebuild.push(cpv);
+        }
+    }
+}
+
+/// The dependency-string indexes the holder pass reads: build-time ones only with `--with-bdeps`.
+fn dep_keys(req: &ResolveRequest) -> &'static [usize] {
+    if req.with_bdeps {
+        &[0, 1, 2, 3, 4]
+    } else {
+        &[1, 3, 4]
+    }
+}
+
+/// The solved plan and what it was solved against, as the holder pass reads it.
+struct PlanView<'a> {
+    req: &'a ResolveRequest,
+    lazy: &'a LazyRepo,
+    installed: &'a [super::InstalledPackage],
+    entries: &'a [GraphEntry],
+    /// The dependency-string indexes that count (see [`holder_fix`]).
+    keys: &'a [usize],
+}
+
+/// Whether a package the plan merges has a tree dependency on `provider` that
+/// rejects its installed version `old_str`: the move is then not optional (#781).
+fn plan_requires_move(plan: &PlanView<'_>, provider: &(String, String), old_str: &str) -> bool {
+    let PlanView {
+        req,
+        lazy,
+        installed,
+        entries,
+        keys,
+    } = *plan;
+    entries.iter().any(|m| {
+        let Some(ver) = super::merge_bound_version(&m.outcome) else {
+            return false;
+        };
+        let Some(rec) = lazy
+            .load_versions(&format!("{}/{}", m.category, m.package))
+            .ok()
+            .and_then(|vs| vs.into_iter().find(|v| &v.version == ver))
+        else {
+            return false;
+        };
+        let texts: Vec<&str> = keys.iter().map(|k| rec.raw_deps[*k].as_str()).collect();
+        // The USE of the installed instance, when there is one (a new package has none).
+        let use_flags = installed
+            .iter()
+            .find(|i| i.category == m.category && i.package == m.package)
+            .map(|i| {
+                super::read_vdb_flag_set(&req.root, &i.category, &i.package, &i.version, "USE")
+            })
+            .unwrap_or_default();
+        let atoms = super::tree_route_atoms(&texts, &use_flags, provider);
+        !atoms.is_empty() && !super::provider_atoms_accept(&atoms, old_str)
+    })
+}
+
+/// What the tree-pin refusals of the solved plan ask of the next solve (#791,
+/// #808). A consumer outside the walk whose own tree ebuild rejects the new
+/// provider either has a `||` arm that accepts it (the arm's packages are asked
+/// for, so the plan merges them and the consumer is rebuilt), or is pinned: the
+/// move is then withheld, as for a holder with no route, unless the plan itself
+/// requires it or the user asked for a version of the provider.
+fn tree_refusal_fix(
+    plan: &PlanView<'_>,
+    asked: &[String],
+    refusals: &[super::StalePinRefusal],
+    fix: &mut HolderFix,
+) {
+    let PlanView {
+        req,
+        lazy,
+        installed,
+        entries,
+        keys,
+    } = *plan;
+    // Per withheld provider: the note under construction.
+    let mut withheld: Vec<super::HeldBackNoRoute> = Vec::new();
+    let mut asks: Vec<String> = Vec::new();
+    for r in refusals.iter().filter(|r| r.tree_pin && !r.no_ebuild) {
+        let Some(e) = entries.iter().find(|e| {
+            super::merge_bound_version(&e.outcome)
+                .is_some_and(|v| r.provider == format!("{}/{}-{v}", e.category, e.package))
+        }) else {
+            continue;
+        };
+        let Some(consumer) = installed.iter().find(|i| i.cpv() == r.consumer) else {
+            continue;
+        };
+        let provider = (e.category.clone(), e.package.clone());
+        let slot = e.slot.as_deref().unwrap_or("0");
+        let new_ver = super::merge_bound_version(&e.outcome)
+            .cloned()
+            .unwrap_or_default();
+        let new = format!(
+            // match-str-ok: merge-list entry (Option slot/sub-slot), not a Candidate
+            "{}/{}-{new_ver}:{slot}/{}",
+            e.category,
+            e.package,
+            e.sub_slot.as_deref().unwrap_or(slot)
+        );
+        let Some(old) = installed
+            .iter()
+            .find(|i| i.category == e.category && i.package == e.package && i.slot == slot)
+        else {
+            continue;
+        };
+        let deps =
+            lazy.installed_dep_strings(&consumer.category, &consumer.package, &consumer.version);
+        let tree = lazy
+            .load_versions(&format!("{}/{}", consumer.category, consumer.package))
+            .ok()
+            .and_then(|vs| vs.into_iter().find(|v| v.version == consumer.version))
+            .map_or(deps, |rec| rec.raw_deps);
+        let texts: Vec<&str> = keys.iter().map(|k| tree[*k].as_str()).collect();
+        let use_flags = super::read_vdb_flag_set(
+            &req.root,
+            &consumer.category,
+            &consumer.package,
+            &consumer.version,
+            "USE",
+        );
+        // An arm naming a package with no version in the tree cannot be merged (#809): the
+        // consumer is then as pinned as if the group had no other arm.
+        let mergeable = |atom: &String| {
+            portage_solver::Dep::parse(atom).is_ok_and(|d| {
+                lazy.load_versions(&format!("{}", d.cpn))
+                    .is_ok_and(|vs| !vs.is_empty())
+            })
+        };
+        if let Some(arm) = super::tree_follow_atoms(&texts, &use_flags, &provider, &new)
+            .filter(|arm| arm.iter().all(mergeable))
+        {
+            asks.extend(arm);
+            continue;
+        }
+        let old_str = old.match_str(&req.root);
+        let named = super::provider_atoms(
+            &asked.iter().map(String::as_str).collect::<Vec<_>>(),
+            &HashSet::new(),
+            &provider,
+        );
+        if plan_requires_move(plan, &provider, &old_str)
+            || (!named.is_empty() && !super::provider_atoms_accept(&named, &old_str))
+        {
+            continue;
+        }
+        let holder = (
+            format!("{}/{}", consumer.category, consumer.package),
+            consumer.version.clone(),
+            r.atom.clone(),
+        );
+        match withheld
+            .iter_mut()
+            .find(|h| h.category == provider.0 && h.package == provider.1)
+        {
+            Some(h) => h.holders.push(holder),
+            None => withheld.push(super::HeldBackNoRoute {
+                category: provider.0.clone(),
+                package: provider.1.clone(),
+                slot: slot.to_string(),
+                installed_version: old.version.clone(),
+                skipped_version: new_ver,
+                holders: vec![holder],
+            }),
+        }
+    }
+    for h in &mut withheld {
+        h.holders.sort();
+        fix.atoms.push(format!(
+            "={}/{}-{}",
+            h.category, h.package, h.installed_version
+        ));
+    }
+    fix.no_route.extend(withheld);
+    // An arm of a withheld provider's consumer is moot: the provider stays.
+    if fix.no_route.is_empty() {
+        fix.atoms.extend(asks);
+    }
 }
 
 /// Name the keyword, licence and mask changes the relaxed plan's members need
@@ -10329,6 +10599,7 @@ mod tests {
                 atom: "=dev-libs/p569prov-5.42*".to_string(),
                 provider: "dev-libs/p569prov-5.44".to_string(),
                 no_ebuild: false,
+                tree_pin: false,
             }],
             "{:?}",
             pg34_plan(&result)
@@ -10419,6 +10690,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Charter property 1 (a rebuilt package's dependencies hold): under
+    /// `--deep=1` the installed `p569virt-1` is a kept leaf, so only the scan
+    /// finds its rebuild. Its tree `||` leaves `~p569core-1.0` once `p569prov`
+    /// is 5.44, so the plan must merge `p569core` and keep the display pair (#811).
+    #[test]
+    fn pg811_bridge_solves_the_dependencies_of_a_scanned_rebuild() {
+        // The vdb carries the tree's own text, as the fixture root's installed copy does.
+        let root = pg770_root(
+            "portage-bridge-pg811-a",
+            "|| ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* \
+             ~dev-libs/p569core-1.0 ) dev-libs/p569prov:0/5.42=\n",
+        );
+        let mut req = fixture_request(&["dev-libs/p569pull"]);
+        req.root = root.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.update = true;
+        req.deep = super::super::Deep::Bounded(1);
+        req.config.complete_seed_atoms = vec!["dev-libs/p569pull".to_string()];
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("resolves");
+        let plan = pg34_plan(&result);
+        assert!(pg770_reinstalls(&result, "p569virt"), "{plan:?}");
+        assert!(
+            result.entries.iter().any(|e| e.package == "p569core"),
+            "{plan:?}"
+        );
+        assert_eq!(result.abi_rebuilds.len(), 1, "{:?}", result.abi_rebuilds);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Control: a recorded binding that is not stale schedules nothing.
     #[test]
     fn pg770_bridge_leaves_a_consumer_without_a_stale_binding() {
@@ -10480,15 +10783,16 @@ mod tests {
         (dir, result)
     }
 
-    /// PMS `sec:slot-dep`, charter property 1: the plan upgrades `p569prov`
-    /// to 5.44; the installed `p573virt-1` recorded `:0/5.42=`, but its tree
-    /// ebuild needs `=dev-libs/p569prov-5.42*`, so a rebuild cannot follow
-    /// the upgrade. The bridge names it and schedules no rebuild.
+    /// Charter property 1 (a kept package's dependencies hold): the installed
+    /// `p573virt-1` recorded `:0/5.42=` and its tree ebuild needs
+    /// `=dev-libs/p569prov-5.42*`, so a rebuild cannot follow an upgrade of
+    /// `p569prov` to 5.44 and nothing else requires it. The bridge keeps the
+    /// provider at 5.42 and names the consumer (#773, #791).
     #[test]
-    fn pg773_bridge_refuses_a_rebuild_its_tree_pin_rejects() {
-        let (dir, result) = pg773_solve("portage-bridge-pg773-a", "p573virt-1");
+    fn pg791_bridge_holds_the_provider_a_pinned_consumer_cannot_follow() {
+        let (dir, result) = pg773_solve("portage-bridge-pg791-a", "p573virt-1");
         assert!(
-            result.entries.iter().any(|e| e.package == "p569prov"
+            !result.entries.iter().any(|e| e.package == "p569prov"
                 && matches!(e.outcome, super::super::PretendOutcome::Upgrade { .. })),
             "{:?}",
             pg34_plan(&result)
@@ -10498,15 +10802,82 @@ mod tests {
             "{:?}",
             pg34_plan(&result)
         );
+        let [held] = &result.held_back_no_route[..] else {
+            panic!("{:?}", result.held_back_no_route);
+        };
         assert_eq!(
-            result.stale_pin_refusals,
-            vec![super::super::StalePinRefusal {
-                consumer: "dev-libs/p573virt-1".to_string(),
-                atom: "=dev-libs/p569prov-5.42*".to_string(),
-                provider: "dev-libs/p569prov-5.44".to_string(),
-                no_ebuild: false,
-            }]
+            (held.package.as_str(), held.skipped_version.as_str()),
+            ("p569prov", "5.44")
         );
+        assert_eq!(
+            held.holders,
+            vec![(
+                "dev-libs/p573virt".to_string(),
+                "1".to_string(),
+                "=dev-libs/p569prov-5.42*".to_string()
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter property 1: the tree of `p808virt-1` accepts the new provider
+    /// through the `||` arm naming `p808other`, which the plan does not merge
+    /// on its own. The bridge asks for that arm, so the plan merges it and
+    /// rebuilds the consumer instead of refusing (#808).
+    #[test]
+    fn pg808_bridge_asks_for_the_arm_that_accepts_the_new_provider() {
+        let (dir, result) = pg773_solve("portage-bridge-pg808-a", "p808virt-1");
+        let plan = pg34_plan(&result);
+        assert!(
+            result.entries.iter().any(|e| e.package == "p569prov"
+                && matches!(e.outcome, super::super::PretendOutcome::Upgrade { .. })),
+            "{plan:?}"
+        );
+        assert!(
+            result.entries.iter().any(|e| e.package == "p808other"),
+            "{plan:?}"
+        );
+        assert!(pg770_reinstalls(&result, "p808virt"), "{plan:?}");
+        assert!(
+            result.stale_pin_refusals.is_empty() && result.held_back_no_route.is_empty(),
+            "{:?}",
+            result.stale_pin_refusals
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter property 5 (the plan says what causes a rebuild): the holder
+    /// `p808virt-1` is rebuilt because `p569prov` moves to 5.44, so the plan files
+    /// the `(provider, holder)` pair the default solver files, with no deep walk (#780).
+    #[test]
+    fn pg780_bridge_files_the_display_pair_of_a_holder_rebuild() {
+        let (dir, result) = pg773_solve("portage-bridge-pg780-a", "p808virt-1");
+        assert_eq!(
+            result.abi_rebuilds,
+            vec![(
+                "dev-libs/p569prov-5.44".to_string(),
+                "dev-libs/p808virt-1".to_string()
+            )],
+            "{:?}",
+            pg34_plan(&result)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Charter property 5 (a message that is true, no abort): the `||` arm of
+    /// `p809virt-1` that would accept the new provider names `p809missing`,
+    /// which has no version. The arm cannot be merged, so the consumer is as
+    /// pinned as `p573virt-1`: the provider stays and the consumer is named (#809).
+    #[test]
+    fn pg809_bridge_treats_an_unmergeable_arm_as_a_pin() {
+        let (dir, result) = pg773_solve("portage-bridge-pg809-a", "p809virt-1");
+        assert!(
+            !result.entries.iter().any(|e| e.package == "p569prov"
+                && matches!(e.outcome, super::super::PretendOutcome::Upgrade { .. })),
+            "{:?}",
+            pg34_plan(&result)
+        );
+        assert_eq!(result.held_back_no_route.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

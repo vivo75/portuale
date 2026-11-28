@@ -1,0 +1,1 @@
+#780 evidence. Branch backlog/780-pubgrub-replaced-tag (both repos, from #809 commits 1e16c2f4 / pmtest 0c4b700). Roots: LLM/evidence/02.791/mkroots.sh. run.sh = both solvers on one root. Before: pull --update, pg printed bare R and no pair (observed live before the change).
