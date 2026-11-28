@@ -651,6 +651,23 @@ pub(crate) fn read_vdb_string(
     vdb_aux_get(root, category, package, version, filename)
 }
 
+/// Whether the installed package `cpv` records `atom` in `DEPEND`/`BDEPEND`
+/// and in none of `RDEPEND`/`PDEPEND`/`IDEPEND`. False when it is not installed.
+pub fn installed_binding_is_build_time_only(root: &Path, cpv: &str, atom: &str) -> bool {
+    let Some(p) = all_installed_packages(root)
+        .iter()
+        .find(|p| p.cpv() == cpv)
+        .cloned()
+    else {
+        return false;
+    };
+    let has = |keys: [&str; 3]| {
+        keys.iter()
+            .any(|k| read_vdb_string(root, &p.category, &p.package, &p.version, k).contains(atom))
+    };
+    has(["DEPEND", "BDEPEND", "BDEPEND"]) && !has(["RDEPEND", "PDEPEND", "IDEPEND"])
+}
+
 /// Flattens `depstr` against `use_flags` into dependency-atom tokens (`||`
 /// dropped) for order-independent comparison. `None` if `depstr` doesn't parse.
 pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<String>> {
