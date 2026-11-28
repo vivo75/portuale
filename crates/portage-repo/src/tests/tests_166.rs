@@ -91,7 +91,7 @@ fn filter_usepkg_166_include_drops_a_non_match() {
     assert_eq!(out.len(), 1);
 }
 
-/// A binary dropped by the filters is a reason-less masked row (backlog #416); the
+/// A binary dropped by the filters is a reason-less masked row; the
 /// surviving version is not listed, and nothing dropped means no report.
 #[test]
 fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason() {
@@ -618,7 +618,7 @@ fn synthesize_166_files_the_instance_beside_its_siblings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Backlog #610: the filed entry carries the instance's repo, so its row
+/// The filed entry carries the instance's repo, so its row
 /// renders `dev-libs/r592ds-1::testrepo` like Portage's instead of the
 /// repo-less `dev-libs/r592ds-1::`. Oracle: Portage 3.0.83
 /// `emerge -pv dev-libs/r592dtop` (D default,

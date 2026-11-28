@@ -139,20 +139,12 @@ pub(crate) fn collect_probe_parents(
     parents
 }
 
-/// The atom texts of one recorded dependency key that are parent atoms of the
-/// installed package: every atom outside a `||` group, plus **one** arm per
-/// `||` group — the one `dep_zapdeps` selects. The walk only records the atom
-/// it resolved (`_add_parent_atom(pkg, (dep.parent, dep.atom))`,
-/// `depgraph.py:3787`, with `dep.atom` from `selected_atoms`, `dep_check.py:928-937`),
-/// so a group's unselected arms are not parent atoms and cannot veto a
-/// candidate.
-///
-/// Arm choice follows `dep_zapdeps`' `choice_bins` (`dep_check.py:382-394`):
-/// an arm whose package is already in this pass's graph wins
-/// (`preferred_in_graph`, `:633-649`, `:694-696`), then an arm matching an
-/// installed instance, else the group contributes nothing. A key whose dep
-/// string does not reduce contributes nothing (Portage's `dep_check` fails it
-/// and the walk stops before recording any parent atom).
+/// The atom texts of one recorded dependency key (reduced against
+/// `use_flags`) that are parent atoms of the installed package: every atom
+/// outside a `||` group, plus the atoms of **one** arm per `||` group, nested
+/// groups likewise. The arm is the first one a package this pass merges
+/// satisfies, else the first one an installed instance satisfies, else the
+/// group contributes nothing. A key that does not reduce contributes nothing.
 // Portage: dep_check.py, dep_zapdeps
 pub(crate) fn selected_parent_atoms(
     depstr: &str,
@@ -289,7 +281,7 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
 /// Whether `tok` matches an installed instance of its own package: the atom
 /// pulls the same child the update probe already has, so Portage skips it
 /// instead of accepting through it (`atom.match(dep.child)` in
-/// `_slot_operator_update_probe`; backlog #618).
+/// `_slot_operator_update_probe`).
 pub(crate) fn atom_matches_installed_instance(tok: &str, root: &Path) -> bool {
     parse_dep_atom(tok, "abi_probe_installed_skip").is_some_and(|la| {
         la.blocker == portage_dep::Blocker::None
@@ -327,7 +319,7 @@ pub(crate) fn atom_matches_installed_instance(tok: &str, root: &Path) -> bool {
 /// `_slot_operator_deps` (`depgraph.py:3818-3825`), so a menu pin like
 /// `=prov-5.42*` never joins the probe's atom loop, and the probe files the
 /// backtrack while the old pin stays satisfied by the installed instance it
-/// already matched (the keep-both outcome, backlog #641). An arm therefore
+/// already matched (the keep-both outcome). An arm therefore
 /// also accepts when it matches an installed instance of the provider.
 /// Portage: _emerge/depgraph.py, _slot_operator_update_probe
 /// (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
@@ -363,7 +355,7 @@ fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
         collect_dep_units(&tree, &mut flat);
         // The replacement's selected atoms for this key, the portuale form of
         // Portage's `_select_atoms_probe` set: only these arms join the
-        // candidate intersection (backlog #642).
+        // candidate intersection.
         let selected: HashSet<String> = selected_parent_atoms(depstr, root, entries, use_flags)
             .into_iter()
             .collect();
@@ -384,7 +376,7 @@ fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
             }
             // Unselected arms never joined Portage's intersection, so only
             // selected arms constrain the unit; a unit with no selected arm
-            // is neutral (backlog #642).
+            // is neutral.
             let selected_named: Vec<&&str> = named
                 .iter()
                 .filter(|tok| selected.contains(**tok))
@@ -485,7 +477,7 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
 /// Portage reinstalls and the installed children they were built against.
 /// Parents and kept children land in `slot_operator_replace_installed`; a
 /// child a merging upgrade subsumes lands in `probe_replaced` only (backlog
-/// #642: seeding it would ghost a reinstall node Portage never has, while
+/// Seeding it would ghost a reinstall node Portage never has, while
 /// the upgrade row still needs its `r` tag).
 pub(crate) struct SlotConflictAbiProbe {
     /// The parent cps `_replace_installed_atom(dep.parent)` files.
@@ -651,7 +643,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // parent's atoms (an exact pin on the old version leaves
                     // none) and skips an atom the replacement does not select
                     // (`atom_not_selected`). Portuale checks the selected arms
-                    // of each `||` group (backlog #642); a group with no
+                    // of each `||` group; a group with no
                     // selected arm is neutral.
                     // Portage: depgraph.py, _slot_operator_update_probe
                     // (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
@@ -684,7 +676,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // ghost a same-version reinstall node beside the upgrade
                     // that Portage never has (its one set just tags the
                     // upgrade row), while the upgrade row still needs its
-                    // `r` tag from the mirror (backlog #642).
+                    // `r` tag from the mirror.
                     if m.installed {
                         if upgrade_subsumes_child(
                             entries,

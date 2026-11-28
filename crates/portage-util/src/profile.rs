@@ -1,4 +1,4 @@
-//! Phase timers behind `PORTUALE_PROFILE=1` (backlog #455, plan S0).
+//! Phase timers behind `PORTUALE_PROFILE=1`.
 //!
 //! `span("name")` returns a guard that prints `[profile] name: <seconds>` to
 //! stderr when dropped, only when the variable is set (read once). Off by

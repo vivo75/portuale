@@ -24,3 +24,6 @@ gets only Portage's options unless it costs under 20 lines, and no option here
 is read by `emerge` (all three act on `mrg --check-world`). When one is, the
 parse is `resolve(None, env, conf)`, the same call the VDB selection makes from
 `emerge` with its flags absent.
+
+## module
+- Backlog numbers removed from the comment (original text): Future options (#706): behaviour that is not a plain option yet, switched on by name with `--future-options=name,other=value`. Each one is in [`GATES`] with its stage, so promoting it to a plain option or removing it is one line there. `alpha` is off unless asked for, `beta` is on unless switched off with `name=false`, `ga` is always on and stays only so old command lines still parse.  Precedence per option, lowest to highest: the stage default, `make.conf`, the environment (`PORTUALE_FUTURE_OPTIONS`), the command line. When the command line carries the option, `make.conf` is not read at all.

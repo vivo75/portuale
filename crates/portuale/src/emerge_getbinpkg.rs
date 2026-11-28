@@ -3046,7 +3046,7 @@ mod tests {
     #[test]
     fn failed_install_pkg_msg_matches_portage_failed_pkg_msg_bytes() {
         // The merge-phase half of `failed_pkg_msg`: `install`/`to`, never
-        // `emerge`/`for` (backlog #444: a postinst failure still merges).
+        // `emerge`/`for`.
         // Ground truth: `LLM/evidence/2026-10-21-b444/portage.txt`
         // (`>>> Failed to install ... to ..., Log file:` rows).
         assert_eq!(
@@ -3407,7 +3407,7 @@ mod tests {
 
     #[test]
     fn merge_one_binary_entry_postinst_failure_matches_the_portage_endgame() {
-        // Backlog #459 (Portage `vartree.py::dblink.merge`
+        // (Portage `vartree.py::dblink.merge`
         // `_postinst_failure`, `_emerge/EbuildMerge.py::_merge_exit`,
         // `_emerge/PackageMerge.py::_install_exit`,
         // `Scheduler.py::_do_merge_exit`; oracle
@@ -3464,7 +3464,7 @@ mod tests {
 
     #[test]
     fn merge_one_binary_entry_builds_under_the_entrys_own_portage_tmpdir() {
-        // Backlog #467 (Portage `_emerge/Binpkg.py::_start` reads
+        // (Portage `_emerge/Binpkg.py::_start` reads
         // `settings["PORTAGE_TMPDIR"]` after `setcpv`, so `package.env`
         // moves the binary entry's build dir; oracle
         // `LLM/evidence/2026-10-21-r463/`). The matched directory need not
@@ -3854,7 +3854,7 @@ mod tests {
             verified_digest_names_filtered(&rec(&[("MD5", "y")]), None),
             None
         );
-        // Backlog #436 (d): PORTAGE_CHECKSUM_FILTER filters hashes while preserving at least one.
+        // (d): PORTAGE_CHECKSUM_FILTER filters hashes while preserving at least one.
         assert_eq!(
             verified_digest_names_filtered(
                 &rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")]),

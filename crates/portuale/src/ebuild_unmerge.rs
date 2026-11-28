@@ -1052,7 +1052,7 @@ pub(crate) fn unmerge_pkgfiles_into(
         // `{}` on `ENOENT` (vartree.py, `dblink.getcontents`). Scoped to
         // the replace loop (`is_replacement`) and to missing files only:
         // a standalone unmerge keeps the "not installed" error
-        // `emerge -C` relies on (#348 S6 M1).
+        // `emerge -C` relies on.
         Ok(None) if is_replacement => String::new(),
         Err(portage_vdb::Error::Io { source, .. })
             if is_replacement && source.raw_os_error() == Some(2) =>
@@ -1324,7 +1324,7 @@ mod tests {
 
     #[test]
     fn parse_contents_keeps_spaces_in_paths_and_skips_junk() {
-        // Portage 3.0.82.2, S0 cell S1 shapes (#357): the shared parser
+        // Portage 3.0.82.2, S0 cell S1 shapes: the shared parser
         // keeps the full path; a non-matching line is skipped.
         let text = "obj /usr/share/t355/a b.txt abc123 100\n\
                     sym /usr/share/t355/c d -> a b.txt 100\n\
@@ -2705,7 +2705,7 @@ mod tests {
         std::fs::create_dir_all(&vdb).unwrap();
         std::fs::write(vdb.join("SLOT"), "0\n").unwrap();
         let options = UnmergeOptions::default();
-        // Replace loop (#348 S6 M1): a replaced instance with no recorded
+        // Replace loop: a replaced instance with no recorded
         // files walks an empty list instead of failing, like Portage's
         // `getcontents()` returning `{}` on `ENOENT`.
         unmerge_pkgfiles(UnmergePkgfilesArgs {
@@ -3149,7 +3149,7 @@ mod tests {
 
     #[test]
     fn replace_keeps_a_file_recorded_under_a_second_symlinked_path() {
-        // Backlog #381 (Portage 3.0.82.2, S0 cell V1): the replacer
+        // (Portage 3.0.82.2, S0 cell V1): the replacer
         // records the file under `/alias/f`, the replaced instance
         // under `/usr/share/t381/f`, both spellings live-resolving to
         // one directory. Portage prints `--- replaced obj` and keeps
@@ -3196,7 +3196,7 @@ mod tests {
 
     #[test]
     fn replace_keeps_a_file_when_the_old_record_uses_the_alias_spelling() {
-        // Backlog #381 (Portage 3.0.82.2, S0 cell V2): the mirror of the
+        // (Portage 3.0.82.2, S0 cell V2): the mirror of the
         // previous test — the replaced instance records `/alias/f`, the
         // replacer `/usr/share/t381/f`. Same `--- replaced obj` on Portage.
         let tmp = tempdir();

@@ -353,7 +353,7 @@ fn skip_block_pins_skip_non_selected_or_branches() {
 
 #[test]
 fn plain_pull_mirrors_the_scan_filing_into_the_replace_display_set() {
-    // Backlog #608 (`-pvD dev-libs/p569pull`, oracle
+    // (`-pvD dev-libs/p569pull`, oracle
     // `D-p569pull-portage.txt`): one backtrack, and the slot-operator
     // replace set names both the installed consumer and the provider whose
     // installed child's slot atom matches the upgrade row (`r U`, not plain

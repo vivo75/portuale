@@ -85,3 +85,6 @@
   behaviour a bug. The pid/nanos digits are unknown here, so the
   fallback is legitimate only when even the shortest possible
   child name (`/portuale-vdb-ipc-0-0/s`, 24 bytes) overflows.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): mrg-only: behaviour that is not a plain option yet (`future_options.rs`, #706). Consumed by the action that uses it; never reaches `emerge`.

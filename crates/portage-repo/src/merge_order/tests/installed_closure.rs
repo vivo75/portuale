@@ -345,7 +345,7 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep_only_with_an_eb
 
 #[test]
 fn usable_installed_by_cp_drops_a_package_whose_slot_operator_binding_the_plan_breaks() {
-    // #680: the installed XS module is bound to perl:0/1.0; the plan merges
+    // The installed XS module is bound to perl:0/1.0; the plan merges
     // perl at sub-slot 2.0, so the installed module cannot stand in for its
     // rebuild. The unbound tool stays usable.
     let root = mo_tmp_vdb(

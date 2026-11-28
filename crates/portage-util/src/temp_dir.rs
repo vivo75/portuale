@@ -6,7 +6,7 @@
 //! Naming: `$TMPDIR/portuale-td-{tag}-{seq}-{pid}-{nanos}`. The prefix is the
 //! sweep's match key; the pid/nanos tail tells a live run's directories
 //! from a dead one's, and `seq` (a per-process counter) keeps two threads
-//! that read the same clock tick apart (backlog #632).
+//! that read the same clock tick apart.
 
 use std::fs;
 use std::ops::Deref;
@@ -251,7 +251,7 @@ mod tests {
 mod collision_tests {
     use super::*;
 
-    /// Backlog #632: two guards created in the same clock tick must never
+    /// Two guards created in the same clock tick must never
     /// share a path (they used to, and one's `Drop` then deleted the
     /// other's scratch root mid-test).
     #[test]

@@ -1,6 +1,6 @@
-//! #650: a seed committed under a transient guard-demotion must not survive the skip.
+//! A seed committed under a transient guard-demotion must not survive the skip.
 //!
-//! S0 #649 (`LLM/evidence/2026-11-03-649/REPORT.md`) locks the cause: on the
+//! S0 (`LLM/evidence/2026-11-03-649/REPORT.md`) locks the cause: on the
 //! `dev-lang_perl` cell the transient `dev-lang/perl-5.44.0` sits in some
 //! pass's `entries`, `select_expansion_arms` (`rev_dep_or.rs:510`,
 //! `keep_demoted: false`) runs the bug-531656 downgrade guard (`:546-561`)
@@ -60,14 +60,14 @@ fn resolve_bare_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// The bare N1 leg on portuale's side: the transient MERGES here
 /// (`U p650prov-5.44.0`) where the cell skips it -- the recorded
 /// selection-side divergence (S0 §6 "N1 vs N2 perl-row divergence"), NOT
-/// #650's scope. With the merge, the demotion is an upgrade-demotion, and the
+/// in scope. With the merge, the demotion is an upgrade-demotion, and the
 /// virtuals' only re-evaluating parent is the replacing transient itself.
 /// Portage then keeps the installed arms (replacing parent: the
 /// `if not replacing` bypass, `dep_check.py:480/:531`), so NEITHER
 /// fall-through arm merges.
 ///
-/// Re-pinned 2026-11-05 (#657): this leg used to assert both fall-throughs
-/// merged ("no change" guard against over-blunting #650). The bed disproves
+/// Re-pinned 2026-11-05: this leg used to assert both fall-throughs
+/// merged ("no change" guard against over-blunting). The bed disproves
 /// that for the no-fresh-puller shape: L0 `l0-20261105T191358Z` real
 /// `app-office_libreoffice.txt` / `media-gfx_gimp.txt` merge perl-5.44.0 and
 /// carry NO `perl-core/Test-Harness` row, while Encode (pulled by the fresh

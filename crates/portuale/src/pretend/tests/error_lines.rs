@@ -1,6 +1,6 @@
 use super::*;
 
-/// Plan #347 S8 (347-ERR): option-parsing failures print Portage's
+/// (347-ERR): option-parsing failures print Portage's
 /// `emerge: error:` line without the `usage:` block (347-USG cut).
 /// The trailing-newline rule (D4) is byte-exact: messages Portage
 /// passes to `parser.error` carry their own trailing `\n` and gain
@@ -39,7 +39,7 @@ fn parsed(args: &[&str]) -> Result<EmergeOpts<'static>, std::process::ExitCode> 
     parse_emerge_args(owned)
 }
 
-/// Backlog #405: a bundled `-X` takes the rest of the bundle or the next argument
+/// A bundled `-X` takes the rest of the bundle or the next argument
 /// as its value; `-j`/`-l` followed by letters is the bare option plus more short
 /// flags. Oracle: Portage 3.0.82.2, `LLM/evidence/2026-10-18-405-s0/compare.txt`
 /// (`-pX` errors, `-jabc` is `-j -a -b -c`).
@@ -61,7 +61,7 @@ fn bundled_x_and_j_l_clusters_parse_like_portage() {
     assert!(opts.pretend && opts.load_average.is_none());
 }
 
-/// Backlog #401: `-f`/`-F` parse as options and bundle letters; `-F` implies `-f`.
+/// `-f`/`-F` parse as options and bundle letters; `-F` implies `-f`.
 /// Portage: `_emerge/actions.py` (`fetchonly`, `fetch_all_uri`).
 #[test]
 fn fetchonly_and_fetch_all_uri_parse_alone_and_in_bundles() {

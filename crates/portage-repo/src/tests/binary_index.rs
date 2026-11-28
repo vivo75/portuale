@@ -410,7 +410,7 @@ fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
     );
 }
 
-/// Backlog #347 S9: a `Packages` record matching `--getbinpkg-exclude`
+/// A `Packages` record matching `--getbinpkg-exclude`
 /// (or missing from a non-empty `--getbinpkg-include`) never becomes a
 /// candidate (Portage `bintree.py:1825-1846`). Grounded in S0 cells
 /// `g01-exclude` (exclude) and `g02-include` (whitelist).

@@ -227,7 +227,7 @@ pub(crate) struct SlotOperatorRebuilds {
 /// default solver seeds the consumer as one instead); the bridge passes the
 /// installed packages its solve walked, and the scan runs with
 /// `tree_pin_refuses` set: a consumer whose own tree ebuild rejects the
-/// provider the run leaves behind is not rebuilt (#773).
+/// provider the run leaves behind is not rebuilt.
 pub(crate) fn slot_operator_rebuild_entries(
     args: SlotOperatorRebuildEntriesArgs<'_>,
 ) -> SlotOperatorRebuilds {

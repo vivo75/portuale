@@ -38,6 +38,7 @@ the slot sets the reorder pass ranks.
   rule (plan 06.739 Q1).
 
 ## fn branch_preference (#740, residue of plan 02.692)
+- Doc-comment truth (checked 2026-11-28): "installed" means the *package* `cat/pkg` has any installed instance (`branch_preference_uncached` tests `self.installed.contains("cat/pkg")`), not an instance in the atom's slot or matching its version. Callers: the planner and `rebuild::reduced_recorded_atoms` (recorded `||` groups reduced against the installed `USE`). `AltPreference::BestVisibleInstalled` carries the same meaning.
 - Portage's terms (`dep_check.py`, `dep_zapdeps` choice bins): a branch whose
   `cat/pkg`s are all installed (`Installed`) beats one that is merely
   available (`Available`); a branch with an atom no visible ebuild satisfies
@@ -119,6 +120,7 @@ the slot sets the reorder pass ranks.
 - Charter property 2 (PMS 8.1: a build tool must be usable, backlog
   #746): a runtime edge out of a package the plan builds with is a
   build-time need in fact, so the cut spares it.
+- Backlog numbers removed from the comment (original text): Charter property 2 (PMS 8.1: a build tool must be usable): a direct runtime edge out of a package the plan builds with is a build-time need, so the cut spares it (one level, #764).
 
 ## fn build_time_in_fact_tree
 

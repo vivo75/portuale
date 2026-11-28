@@ -91,7 +91,8 @@ numbers and forbid straying outside it, because "three plans all claimed 371".
 - Commits are paired: **pmtest first**, then portuale quoting the pmtest short
   sha; pmtest's message names the portuale branch and slice.
 - Corpus blesses ride in the pmtest commit, never here.
-- Pushes go together, portuale first.
+- Pushes go together, pmtest first: portuale quotes the pmtest short sha, so
+  the quoted commit goes to the remote first (history stays linear).
 
 ## Gates
 

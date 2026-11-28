@@ -52,6 +52,8 @@ The `ebuild <file> <command>` CLI: option/command recognition plus real executio
 - `merge`/`qmerge`/`unmerge` refuse unprivileged callers up front (Portage's `bin/ebuild` has no such guard and just fails mid-phase; portuale gives the same clear error `emerge` does via `privileges::is_privileged`).
 - One command at a time, not the whole slice at once, mirroring Portage's `bin/ebuild` `for arg in pargs: doebuild(...)` loop which re-derives the environment fresh per top-level command.
 - #348 S3 P3: the direct path runs Portage's `_validate_deps` REQUIRED_USE gate once per invocation (before any phase, after the unsupported-EAPI refusal): `required_use_refusal` over the md5-cache `REQUIRED_USE`, the standalone full effective USE and the implicit-folded IUSE, under `attrs.required_use` (S1). Merge/unmerge internals never re-gate (resolver-owned merge path, never-gated teardown). `clean` stays exempt (dry-run stub, unreachable in the real branch -- and Portage itself returns 0 there).
+- Backlog numbers removed from the comment (original text): Manual mode runs every phase like `doebuild()`; the skip is scheduler-path only (backlog #458).
+- Backlog numbers removed from the comment (original text): A direct `ebuild` run executes every phase like `doebuild()`; the no-op src-phase skip is merge-path only (backlog #456).
 
 ## fn unmerge_and_package_options
 - Takes the caller's once-resolved `Config` (#349 S4; falls back to

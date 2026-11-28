@@ -73,3 +73,26 @@ The slot-conflict ABI probe.
 
 ## gate threading (#571)
 - `SlotConflictAbiProbeArgs`, `ReplacementParentAcceptsArgs` and the positional helpers (`highest_visible_slot`, `greedy_pinned_cps`, `greedy_pin_survives_revision`) carry the gate. `collect_probe_parents` is vdb-only and needs none.
+
+## fn selected_parent_atoms
+- Portage: the walk only records the atom it resolved (`_add_parent_atom(pkg, (dep.parent, dep.atom))`, `depgraph.py:3787`, `dep.atom` from `selected_atoms`, `dep_check.py:928-937`), so a group's unselected arms are not parent atoms and cannot veto a candidate.
+- Arm choice follows `dep_zapdeps`' `choice_bins` (`dep_check.py:382-394`): an arm whose package is in this pass's graph wins (`preferred_in_graph`, `:633-649`, `:694-696`), then an arm an installed instance matches (`or_member_matches_installed`, atom matched against version/slot/sub-slot/repo of each installed ref), else the group contributes nothing. Simplified: the first arm in written order, not Portage's full bin ranking.
+- A key whose dep string does not reduce contributes nothing (Portage's `dep_check` fails it and the walk stops before recording any parent atom).
+- Reader: `StalePinCtx::held_back` (`rebuild_scan.rs`), via `stale_pin_for_consumer`.
+
+## fn atom_matches_installed_instance
+- Backlog numbers removed from the comment (original text): Whether `tok` matches an installed instance of its own package: the atom pulls the same child the update probe already has, so Portage skips it instead of accepting through it (`atom.match(dep.child)` in `_slot_operator_update_probe`; backlog #618).
+
+## struct LiveUnitsAcceptArgs
+- Backlog numbers removed from the comment (original text): Whether every dependency unit of a replacement parent that names `provider` accepts `cand`. An atom outside a `||` group is a unit of its own; a `||` group is one unit, but only its *selected* arms constrain the probe: Portage intersects the candidate sets of the replacement parent's selected atoms (`atom_not_selected`, `all_candidate_pkgs`, `depgraph.py:2747-2790`), so a group whose selected arms all reject `cand` vetoes it even when an unselected arm would tree-match, while a group with no selected arm at all is neutral (its atoms never join the intersection). Selection reuses [`selected_parent_atoms`] (the `dep_zapdeps` in-graph / installed preference the recorded-parent side already models). USE conditionals are reduced against `use_flags` first. False when no unit names the provider at all; a key whose dep string does not reduce is skipped (the old `flat_dep_atoms` `filter_map` skip), so one unparseable key cannot veto the whole replacement parent.  A group arm the merge does not take may stay bound to a kept installed instance instead of vetoing: Portage records only `:=`/soname atoms in `_slot_operator_deps` (`depgraph.py:3818-3825`), so a menu pin like `=prov-5.42*` never joins the probe's atom loop, and the probe files the backtrack while the old pin stays satisfied by the installed instance it already matched (the keep-both outcome, backlog #641). An arm therefore also accepts when it matches an installed instance of the provider. Portage: _emerge/depgraph.py, _slot_operator_update_probe (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`) Arguments of [`live_units_accept`].
+
+## fn live_units_accept
+- Backlog numbers removed from the comment (original text): The replacement's selected atoms for this key, the portuale form of Portage's `_select_atoms_probe` set: only these arms join the candidate intersection (backlog #642).
+- Backlog numbers removed from the comment (original text): Unselected arms never joined Portage's intersection, so only selected arms constrain the unit; a unit with no selected arm is neutral (backlog #642).
+
+## struct SlotConflictAbiProbe
+- Backlog numbers removed from the comment (original text): [`slot_conflict_abi_probe_full`]'s two filings: the installed parents Portage reinstalls and the installed children they were built against. Parents and kept children land in `slot_operator_replace_installed`; a child a merging upgrade subsumes lands in `probe_replaced` only (backlog #642: seeding it would ghost a reinstall node Portage never has, while the upgrade row still needs its `r` tag).
+
+## fn slot_conflict_abi_probe_full
+- Backlog numbers removed from the comment (original text): Every live unit on the provider must accept C: Portage intersects the candidate sets of the replacement parent's atoms (an exact pin on the old version leaves none) and skips an atom the replacement does not select (`atom_not_selected`). Portuale checks the selected arms of each `||` group (backlog #642); a group with no selected arm is neutral. Portage: depgraph.py, _slot_operator_update_probe (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
+- Backlog numbers removed from the comment (original text): Portage files the installed child too: `new_child_slot is None and child.installed`, where `child` is the instance the parent's built atom matches (`depgraph.py:2457-2460`). A child a merging upgrade subsumes in this pass is display-only: seeding it would ghost a same-version reinstall node beside the upgrade that Portage never has (its one set just tags the upgrade row), while the upgrade row still needs its `r` tag from the mirror (backlog #642).

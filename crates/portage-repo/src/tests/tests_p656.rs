@@ -1,9 +1,9 @@
-//! #656 RED pins: leg (b) parent-posture hold + leg (a) enforcement-open.
+//! RED pins: leg (b) parent-posture hold + leg (a) enforcement-open.
 //!
 //! New file (not an extension of `tests_p651.rs` / `tests_p652b.rs`): both
 //! legs need new fixture atoms and new worlds that fit neither the C1
 //! substrate legs (bare / chained-holder) nor the N-form / H-form legs.
-//! The `p656*` atoms extend the #651 C1 substrate hermetically (same
+//! The `p656*` atoms extend the C1 substrate hermetically (same
 //! `p651prov` provider axis + `p651enc`/`p651th` virtuals +
 //! `p651enccore`/`p651thcore` pins + installed `p651holder`/`p651top`/
 //! `p651pin` background pressure; reused where the shape fits, forked where

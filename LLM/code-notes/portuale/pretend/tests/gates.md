@@ -25,3 +25,19 @@ Display and early-return gates for non-pretend runs.
 - Backlog #185 fix round 1: Portage's `_emerge/depgraph.py::_start_resolution_display` (`depgraph.py:12086-12132`) prints the header without consulting `--nodeps` (the `spinner.mode = QUIET` assignment at `:12129-12130` comes after the header block), while the `Calculating dependencies ... done!` notice and the timing report are suppressed under `--nodeps` (QUIET spinner: `end_notice()` reports nothing to complete) or `--quiet`.
 - (ask, tree, verbose, quiet) -> header shown; (quiet, nodeps) -> notice + timing shown.
 - The three review shapes (`--verbose` in each): `--nodeps` non-pretend -> header shown, calc/timing hidden; plain -> both shown; `--quiet` -> neither.
+
+## fn top_level_all_masked_abort_prints_the_notice_on_and_off_pretend
+- Backlog numbers removed from the comment (original text): Plan #351 S7 (351-ABORT): a non-`--pretend` run that aborts on a top-level all-masked target prints the resolution notice on its way out; the `--pretend` arm stays silent (Q6) and every other resolve error shape is out of scope. Oracle: Portage 3.0.82.2 A cells `LLM/evidence/2026-10-15-346-s0/a/` (`a01` and `a02` -p both print; backlog #406).
+- Backlog numbers removed from the comment (original text): A plain miss prints the notice too (backlog #470); the USE-flag variant keeps today's silence.
+
+## fn abort_preamble_opens_with_the_banner_blank_line
+- Backlog numbers removed from the comment (original text): Backlog #453 D: the mid-resolve abort preamble opens with Portage's leading blank line (`_start_resolution_display` writes `"\n" + banner`). Oracle: Portage 3.0.82.2 non-tty capture of `--pretend dev-libs/missingdep` (staged fixtures).
+- Backlog numbers removed from the comment (original text): Backlog #621: under `--quiet` Portage prints no resolution display at all -- `_start_resolution_display` skips the banner (`depgraph.py:12219`: `"--quiet" not in myopts`) and forces the spinner QUIET (`:12259-12260`), so `end_notice()` is false and neither the notice completion nor the report prints. Oracle: Portage 3.0.83 `--pretend --quiet dev-libs/missingdep` on the fixture tree: empty stdout, rc 1.
+- Backlog numbers removed from the comment (original text): Backlog #453 A: with colour on, the banner is `darkgreen` and the cut seconds keep Portage's empty escape pair (determinism: the seconds themselves are still omitted). Oracle: the `--color=y` pipe capture of `--pretend dev-libs/maskedpkg`.
+- Backlog numbers removed from the comment (original text): Backlog #614: `--debug` sets PORTAGE_DEBUG=1, which puts the spinner in QUIET mode; neither the notice completion nor the report is printed, only the banner.
+
+## fn timing_line_prints_seconds_when_given
+- Backlog numbers removed from the comment (original text): Backlog #803: on a terminal the timing line carries the real seconds (`took 1.33 s`) instead of the cut `took  s` that read as broken; the cut forms stay for non-terminal runs (the contract suite).
+
+## fn pretend_changes_show_header_only_for_completed_pretend_text_runs
+- Backlog numbers removed from the comment (original text): Backlog #462: a `--pretend` run whose resolve completed with autounmask changes prints the resolution header before the rows (Portage's `_show_merge_list` before the change blocks). `--json` keeps stdout machine-readable; an aborted resolve keeps its own preamble arms; a non-pretend run goes through the existing `!pretend` arm.

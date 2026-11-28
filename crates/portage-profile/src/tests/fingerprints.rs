@@ -1,6 +1,6 @@
 use super::*;
 
-/// #105: `resolve_config` freezes the immutable USE-context digest
+/// `resolve_config` freezes the immutable USE-context digest
 /// into `use_context_base`, and `use_context_base_fingerprint` is
 /// content-derived while excluding `autounmask_use` -- the one field
 /// the `'backtrack` loop mutates, which the memo keys hash
@@ -38,7 +38,7 @@ fn use_context_base_fingerprint_is_frozen_at_resolution_and_excludes_autounmask_
     );
 }
 
-/// #114: `resolve_config` also freezes the visibility base (masks +
+/// `resolve_config` also freezes the visibility base (masks +
 /// the license/keyword/property/restrict acceptance lists +
 /// `license_groups`) and it is content-derived.
 #[test]

@@ -8,6 +8,7 @@ One shared `CONTENTS` line parser (#357); every backend and caller uses it.
 - `bin` is kept although Portage's regex rejects it: portuale-written vdbs may hold it, and dropping those rows would silently un-claim paths.
 - md5 is any non-space run (the plan's `(\S+)`); the unit tests pin `abc`-style md5s the conformance corpus also uses. mtime must be all digits (then `i64`; overflow rejects).
 - A trailing `\r` is a line ending, never path content: Portage reads the file in text mode (universal newlines).
+- Backlog numbers removed from the comment (original text): One parser for `CONTENTS` lines, shared by every backend and caller.  Portage splits each line with `_contents_re`: `obj` takes the path up to the last two whitespace-separated fields (`md5`, `mtime`), `sym` cuts at the last ` -> ` before the trailing `mtime`, and `dir`/`dev`/`fif` take the rest of the line, so paths with spaces survive. A line that matches nothing is skipped. Every previous whitespace-`split` site mis-parsed those paths (see #357).
 
 ## fn parse_line
 - `obj`: `rsplit_once(' ')` twice from the right (path keeps spaces, including a trailing one); empty path or md5 rejects.

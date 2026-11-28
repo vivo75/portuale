@@ -19,6 +19,8 @@ Effective USE and USE mask/force resolution.
 - Backlog #103: the per-call `HashSet` clone was ~14 M `String` clones on a deep `emerge -pu`; callers share the `Rc` and clone only where ownership is genuinely needed.
 
 - S3 (#346): `EffectiveUseFlagsArgs::build_id` carries the binary `BUILD_ID` (None for ebuilds); every `package.use` tier matches with it (`config_entries_matching_with_build_id`), and it joins the memo key -- same-string binary instances otherwise share one entry.
+- Backlog numbers removed from the comment (original text): Memoised per (config USE context, candidate): the reference workload calls this ~20k times for a few hundred distinct candidates. Pure in its six args; thread-local, lock-free. `category`/`package`/`iuse`/`keywords` all join the key even though `candidate_str` usually implies them (`--dynamic-deps=n` can pass vdb-built metadata for a tree cpv). `build_id` joins too: same-string binary instances differ only by build (#346 S3).
+
 ## fn use_context_fingerprint
 - Backlog #105: the immutable part is frozen by `resolve_config` into `Config::use_context_base`, so production hashes that `u64` plus the live `autounmask_use` -- the one field the backtracking loop mutates (each tier / `flag_is_settable` probe adds an entry), hashed in full, so a single added entry always changes the key. The production path hashes [`portage_profile::Config::use_context_base`]. A hand-built `Config` (tests, `Config::default()`) has no base and falls back to `portage_profile::use_context_base_fingerprint`, so an in-place edit of any context field is still seen.
 - Backlog #121: on the frozen path a `debug_assert_eq!` recomputes the base and fails loudly on post-freeze mutation -- silent memo poisoning otherwise. Zero cost in release.
@@ -44,6 +46,8 @@ Effective USE and USE mask/force resolution.
 - `seed` is empty for every `package.use.mask`/`.force` caller; `keywords_accepted` seeds it with `ACCEPT_KEYWORDS` (Portage `KeywordsManager.getMissingKeywords`'s `pgroups`).
 
 - S3 (#346): new `build_id` parameter, threaded into the match; mask/force display callers without a candidate pass `None` (ebuild-equivalent behaviour).
+- Backlog numbers removed from the comment (original text): Folds matching `entries` (raw `(atom, tokens)` pairs, already in profile-chain / source order) onto `seed` in source order, with `package.use` incremental semantics -- so a later `-flag` cancels an earlier `flag`. Plain file order, not a specificity sort (correct for the `targets/*` child-unmask pattern). Portage: stack_lists(incremental=True) over getUseMask/getUseForce The candidate's binary build-id (if any) reaches the match, like every `_pkg_str` comparison in Portage (dep:2994-3008, #346 S3).
+
 ## fn resolved_use_mask_or_force
 - Portage `UseManager.getUseMask(pkg)` / `getUseForce(pkg)`: the four (or, for a non-stable candidate, two) sources stacked **interleaved per profile level** and then collapsed with one incremental `stack_lists` -- so a global `use.mask` `-flag` line at a later profile level cancels an earlier level's `package.use.mask` entry. Per level, in Portage's own order: global `use.mask`, global `use.stable.mask` (stable only), `package.use.mask` (atom-specificity ordered within the level via `specificity_ordered_flags`), `package.use.stable.mask` (stable only).
 - The `dev-libs/glib sysprof` / `arch/amd64 -sysprof` case: the flat `Config::use_mask` union `package_use_mask` union structurally cannot express the cancellation.
@@ -51,6 +55,8 @@ Effective USE and USE mask/force resolution.
 - Backlog #122: `category`/`package` are key components in their own right, not merely implied by `candidate_str` -- every current caller builds that string from these same two values, but the coupling was conventional rather than structural.
 
 - S3 (#346): `ResolvedUseMaskOrForceArgs::build_id` joins the `RUMF_CACHE` key for the same reason as the EUF key; the per-level `package.use.mask`/`.force` folds match with it.
+- Backlog numbers removed from the comment (original text): Memoised per (which, stable, USE context, candidate); the levels are fixed at config resolution, so the walk result is stable. Thread-local, lock-free. Same-string binary instances differ only by build-id (#346 S3), so it joins the key.
+
 ## fn forced_or_masked_flags
 - Portage `_display_use`'s own `self.forced_flags = pkg.use.force | pkg.use.mask` (fed to `map_to_use_expand(..., forced_flags=True)`), restricted to `iuse`'s own declared flags: the set of this candidate's IUSE flags that `emerge --pretend -v` wraps in `( … )` because they're force-enabled or mask-disabled and so not actually under the user's control. Built from the exact same `use.force`/`use.mask` + `package.use.force`/`.mask` (+ the stable variants when the candidate is stable) layering `effective_use_flags` already applies -- reusing `specificity_ordered_flags` so a more-specific `-flag` cancels a less-specific force/mask identically.
 
@@ -60,3 +66,6 @@ Effective USE and USE mask/force resolution.
 ## fn atom_specificity
 - Full port of Portage `best_match_to_list`'s specificity ranking (dep:2796-2884): full operators as before; extended atoms rank below everything (`=*` 0, slotted −1, plain −2 — the code values, which differ from the docstring). Anything unparseable is −2. S3 parses entries with `allow_wildcard: true, allow_repo: Some(true)` so the extended tiers apply; before that every wildcard fell into −2 via the default `parse_atom` rejection.
 - #346 S2: `effective_use_flags_uncached` and `forced_or_masked_flags_unfiltered` feed `is_stable` the effective KEYWORDS (Portage `isStable` reads `getKeywords`, the profile-modified list), so every `EffectiveUseFlagsArgs`/`ForcedOrMaskedFlagsArgs` caller inherits it.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): The binary `BUILD_ID`, if the candidate is a binpkg instance: an `=`+build-id `package.use` line applies only to the equal build (Portage `_pkg_str` comparison, dep:2994-3008, #346 S3). `None` for ebuilds, which carry no build-id.

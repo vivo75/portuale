@@ -679,7 +679,7 @@ fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
 
 #[test]
 fn package_mask_files_track_the_contributing_fragment_for_getmaskingreason() {
-    // Backlog #462: the unmask block's `# <file>:` line and comment lines
+    // The unmask block's `# <file>:` line and comment lines
     // replay Portage's `getmaskingreason` (fragment file + the `#` block
     // above the matching atom). The fold records each stacked entry's
     // origin fragment; `masking_file_comment` replays the comment walk.
@@ -2534,7 +2534,7 @@ fn package_use_loads_tokens_and_skips_bare_atom_lines() {
     );
 }
 
-/// Scaffolding for the #346 S1 user-profile tests: a temp config root with
+/// Scaffolding for the user-profile tests: a temp config root with
 /// `repo/profiles/leaf` as the selected profile (`make.profile` symlinked
 /// to it) plus `etc/portage/profile/<file>` per `user_files`. Portage
 /// 3.0.82.2 appends that directory as its last profile node

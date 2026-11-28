@@ -1,6 +1,6 @@
 use super::*;
 
-/// #313: a local-transport client script gets `PORTUALE_BIN` (the shim's
+/// A local-transport client script gets `PORTUALE_BIN` (the shim's
 /// target) and has the server's `PORTUALE_VDB_*` removed from its
 /// inherited environment (`get_envs` reports a removal as `None`).
 #[test]

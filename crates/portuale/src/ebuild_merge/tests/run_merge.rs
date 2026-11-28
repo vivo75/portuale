@@ -316,7 +316,7 @@ fn re_merging_the_same_package_replaces_the_vdb_entry_and_bumps_counter() {
 
 /// Reinstalling the same version removes the files the new image no longer
 /// has and keeps the ones it still has (Portage: `dblink.treewalk` takes
-/// the new package's ownership from its temporary `CONTENTS`, #354).
+/// the new package's ownership from its temporary `CONTENTS`).
 #[test]
 fn reinstalling_the_same_version_removes_files_the_new_image_dropped() {
     let tmp = tempdir();
@@ -369,7 +369,7 @@ fn reinstalling_the_same_version_removes_files_the_new_image_dropped() {
     assert!(!contents.contains("mergepkg-extra"));
 }
 
-/// Backlog #357 S3: `CONTENTS` paths with spaces are removed on
+/// `CONTENTS` paths with spaces are removed on
 /// unmerge (S1 shape) and on a same-version reinstall that drops one
 /// (S2 shape), while an unowned prefix decoy is kept in both.
 ///
@@ -1263,7 +1263,7 @@ fn real_unmerge_preserves_a_still_needed_shared_library() {
 /// `-preserve-libs` turns the unmerge side off: the same still-needed library is
 /// removed with the package and nothing is registered. Source-derived:
 /// `vartree.py:3667` (`_find_libs_to_preserve` returns early without
-/// `_preserve_libs`), `:2053` (set from `FEATURES`). Backlog #383.
+/// `_preserve_libs`), `:2053` (set from `FEATURES`).
 #[test]
 fn unmerge_without_preserve_libs_removes_a_still_needed_library() {
     let tmp = tempdir();

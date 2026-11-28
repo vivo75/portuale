@@ -96,7 +96,7 @@ fn p491_pass0_seed_files_the_installed_consumer_but_not_the_child() {
     // the built-parent probe covers the binary-parent shape), never a
     // merge-bound upgrade. Host Portage 3.0.83 prints a plain `U` for the
     // upgraded child in the simdutf/boost/virt/slotbind/casc shapes, with
-    // no rebuild of an installed-only parent (backlog #623).
+    // no rebuild of an installed-only parent.
     // Portage: depgraph.py, _slot_operator_update_backtrack (parent filed;
     // child filed only when installed).
     let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=", "1");

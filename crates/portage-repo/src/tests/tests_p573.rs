@@ -1,4 +1,4 @@
-//! #573: the skipped-update block names every installed consumer Portage lists,
+//! The skipped-update block names every installed consumer Portage lists,
 //! not just the first in-graph consumer that shares the withheld pin atom.
 //!
 //! Expected values come from host Portage 3.0.83 on the same scratch ROOT
@@ -10,7 +10,7 @@ use super::tests_consumer_pin_conflict::{hermetic_root, request_in};
 use super::*;
 
 /// The scratch ROOT of `LLM/evidence/2026-10-28-573/probe-p573.sh`: the shared
-/// fixture vdb plus the #573 recorded installed consumers (`extra`), built
+/// fixture vdb plus the recorded installed consumers (`extra`), built
 /// beside the shared tree so the fixture vdb itself stays untouched.
 fn p573_root(world: &[&str], extra: &[(&str, &str)]) -> TempDir {
     let base = hermetic_root(world);

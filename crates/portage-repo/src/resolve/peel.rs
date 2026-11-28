@@ -1,4 +1,4 @@
-//! Mask the other builds of a version that fail the same way (#805).
+//! Mask the other builds of a version that fail the same way.
 
 use crate::PretendOutcome;
 use crate::cached_binary_index;

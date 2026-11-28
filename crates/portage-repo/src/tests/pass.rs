@@ -1594,7 +1594,7 @@ fn prepare_queued_atom_counts_an_unparseable_atom_only_under_an_owner() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #615: `-uD[N] dev-libs/omasked` keeps the installed masked
+/// `-uD[N] dev-libs/omasked` keeps the installed masked
 /// alternative instead of aborting. `omaskedinstalled-1.0` is installed
 /// but masked in the tree (`profiles/package.mask`); the `||` picks it
 /// (`other_installed`, #22 slice 4). Under `--update`, Portage ignores
@@ -1648,7 +1648,7 @@ fn run_pass_update_deep_keeps_the_installed_masked_or_alternative() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #662: the kept installed `omaskedinstalled-1.0` lands in
+/// The kept installed `omaskedinstalled-1.0` lands in
 /// `GraphResult::installed_masked` (Portage's `_masked_installed`, printed
 /// as `!!! The following installed packages are masked:`). Expected value
 /// from Portage 3.0.83 via the fixture oracle

@@ -18,10 +18,10 @@
 //!   rejected as ambiguous, per PMS.
 //! - An `=` atom with a build-id matches only a binary instance carrying that
 //!   build-id (`match_from_list_with_build_id`); the plain-string path matches
-//!   none (#341 S9).
+//!   none.
 //! - Installed packages' vdb dep strings are parsed with the plain grammar:
 //!   Portage's C-scanner rejections of `::repo`/build-id atoms there are not
-//!   replicated (deliberate cut, #341 S10).
+//!   replicated (deliberate cut).
 
 use portage_versions::vercmp;
 use regex::Regex;

@@ -32,6 +32,9 @@ The backtracking loop: one pass per node, settle or feed back.
   aborts loudly. The Task-3 `std::mem::take(grown)` orphaning suspect was
   disproven by instrumentation (the masked child IS accepted and explored;
   its retry errors) -- the loss was purely the pin-less fallback assembly.
+- Backlog numbers removed from the comment (original text): Installed holders that can follow a withheld upgrade join it (#698): one more walk with them as roots, kept only when it withholds less.
+- Backlog numbers removed from the comment (original text): A holder is a root of the second walk only; name the upgrade it follows as its parent so the plan says why it is there (#713).
+- Backlog numbers removed from the comment (original text): #703: name the holders that cannot follow, unless the skipped-update block already names them.
 
 ## gate threading (#571)
 - The naked re-run's `ReverseDependencyConstraintsArgs` and the `BacktrackMissedUpdatesArgs` sites use the owning ctx's gate.

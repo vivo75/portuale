@@ -123,6 +123,7 @@ Binary-package building (`ebuild package`, `--buildpkg`, quickpkg). Context move
 - `build_env`: `--buildpkgonly` passes the full `phase_environ`-derived env plus the entry's own `USE` (#37 S2); standalone passes `&[]` (no graph, no resolved config -- `phase_env_vars`' curated base stands).
 - The per-entry multi-instance token comes from the `--buildpkgonly` per-entry fold when one matched, the run-wide value otherwise; standalone falls back to construction, preserving standalone behavior (Portage's `doebuild` package branch has no per-package `BUILD_ID` logic).
 - `skip_noop_src_phases` (#458): forwarded to `run_commands`; `true` on the scheduler-driven `--buildpkgonly` path (`run_buildpkgonly`, whose `EbuildBuild` goes through `EbuildExecuter`), `false` for direct `ebuild <file> package` (manual `doebuild()` mode). Portage: `_emerge/EbuildBuild.py`, `_emerge/EbuildExecuter.py`.
+- Backlog numbers removed from the comment (original text): Scheduler-driven `--buildpkgonly` skips the no-op source phases like a merge (backlog #458); a direct `ebuild <file> package` runs every phase like `doebuild()`.
 
 ## fn package_after_install
 - Backlog #147 S1 ruling (i): layout run-wide (Portage's once-bound bintree allocator), `BUILD_ID` export + index entry per-entry (Portage's `EbuildBinpkg.py:47-48`). Standalone callers pass `false`. Run-wide single + per-entry token writes no `BUILD_ID` anywhere, where Portage writes index `None` and vdb `-1` (S1 D1): a documented `str(None)`-wart divergence, not mirrored.
@@ -254,3 +255,12 @@ Binary-package building (`ebuild package`, `--buildpkg`, quickpkg). Context move
 
 ## tests: run_package_with_src_phase_skip_still_runs_a_defined_src_phase
 - Backlog #458 guard: the flag threads the same `can_skip_source_phases` gate, so `dev-libs/unsetcflagspkg` (defines `src_compile`) still runs the full chain -- `.compiled` exists.
+
+## (see source)
+- Backlog numbers removed from the comment (original text): Portage's scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes through `EbuildExecuter`, so it skips the no-op source phases like a merge; a direct `ebuild <file> package` is manual `doebuild()` mode and runs every phase (backlog #458). Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
+
+## fn run_package_with_src_phase_skip_runs_setup_then_install_only
+- Backlog numbers removed from the comment (original text): Backlog #458: the scheduler-driven `--buildpkgonly` path sets `skip_noop_src_phases`, so a sourceless ebuild (`DEFINED_PHASES` misses every skippable phase) runs `pkg_pretend`/`pkg_setup` then straight to `src_install` -- the same gate the merge path pins in #456. Skipped phases never spawn, so they leave no stamps; the packaging tail still runs. Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
+
+## fn run_package_with_src_phase_skip_still_runs_a_defined_src_phase
+- Backlog numbers removed from the comment (original text): Backlog #458 guard: the flag threads the same gate, so a package defining a skippable phase (`dev-libs/unsetcflagspkg` defines `src_compile`) still runs the full chain.

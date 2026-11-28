@@ -864,7 +864,7 @@ fn strongly_connected_components_groups_cycles_and_survives_long_chains() {
     assert_eq!(seen.len(), n);
 }
 
-/// #681: a kept package's `:0/8=` dependency keeps the installed `SLOT=0/8`
+/// A kept package's `:0/8=` dependency keeps the installed `SLOT=0/8`
 /// copy, and a kept package's `IDEPEND` keeps its target. Expected behaviour
 /// from the PMS (slot operators, EAPI 8 `IDEPEND`), not from Portage's output.
 #[test]

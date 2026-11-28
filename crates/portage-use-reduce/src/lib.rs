@@ -858,7 +858,8 @@ pub enum AltPreference {
     /// `cat/pkg` is not installed. Outranks `Installed`. Selectable.
     BestVisibleAvailable,
     /// Plan mode only: like `BestVisibleAvailable`, with every `cat/pkg`
-    /// installed or in the graph. The top rank. Selectable.
+    /// having some installed instance (or being in the graph). The top
+    /// rank. Selectable.
     BestVisibleInstalled,
 }
 

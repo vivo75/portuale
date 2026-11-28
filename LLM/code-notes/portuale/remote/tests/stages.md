@@ -48,3 +48,9 @@ Merge-driver and regen-stage behaviour tests.
 
 ## tests: old_hook_falls_back_to_legacy_plain_environment
 - Backlog #171, legacy fallback: a vdb entry written by an older `mrg`.
+
+## fn merge_driver_ownership_scan_keeps_spaces_in_foreign_paths
+- Backlog numbers removed from the comment (original text): A foreign package owning `/usr/share/a b.txt` does not own `/usr/share/a`: the ownership scan used to cut the CONTENTS path at the space, so shipping the unowned `usr/share/a` over an orphan file aborted as a collision (backlog #419; Portage's `_contents_re` keeps the whole path).
+
+## fn merge_driver_removes_an_old_file_with_a_space_in_its_path
+- Backlog numbers removed from the comment (original text): Replacing an old instance whose CONTENTS records a path with a space removes that file. The shell removal cut the path at the space (`set -- $line` takes `$2`, the ownership scan `awk '{print $2}'`), so the file survived every remote replace; the shipped Rust unmerge parses CONTENTS space-safely (backlog #382).

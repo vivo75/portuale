@@ -68,7 +68,7 @@ fn backslash_newline_in_quotes_is_removed_like_portage_getconfig() {
 }
 
 /// Unquoted `C=a\<newline>b`: the same capture, case C, reads `a b`; the
-/// token must not stop at the joined space (backlog #410).
+/// token must not stop at the joined space.
 #[test]
 fn backslash_newline_in_an_unquoted_word_reads_as_a_space() {
     let scalars = HashMap::new();
@@ -81,7 +81,7 @@ fn backslash_newline_in_an_unquoted_word_reads_as_a_space() {
     assert_eq!(value("C=a\\\nb\n"), "a b");
 }
 
-/// The owner's `llvm-lto` env file (#409): `package.env` values keep no
+/// The owner's `llvm-lto` env file: `package.env` values keep no
 /// stray `\` from a continued `RUSTFLAGS`.
 #[test]
 fn env_file_continuation_lines_expand_like_portage() {

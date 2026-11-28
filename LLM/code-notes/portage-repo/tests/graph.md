@@ -469,3 +469,15 @@ Graph-level resolution tests over the shared fixture tree.
 
 ## fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use (bug ref)
 - Portage `dbapi._iuse_implicit_built` is upstream bug #640318.
+
+## fn rebuild_if_deep_restart_rebuilds_a_reached_consumer
+- Backlog numbers removed from the comment (original text): Backlog #394: `-u --deep --rebuild-if-* dev-libs/r394top` reaches the installed `rebuildconsumer` (RDEPEND) whose buildtime `DEPEND` on the merging trigger is stale, so Portage restarts the walk with the consumer force-reinstalled (`_rebuild_config.trigger_rebuilds`, `depgraph.py:531-576`): `U rebuildtrigger-2.0 [1.0]` + `rR rebuildconsumer-1.0` + `N r394top-1` with one backtrack restart (oracle `LLM/evidence/2026-10-19-394/out/portage-a-unbuilt-deep.txt`).
+
+## fn complete_walk_reuses_a_locked_merge_instead_of_dropping_it
+- Backlog numbers removed from the comment (original text): Backlog #394 half (2): complete mode never wants an update (`want_update = !complete_mode` in `resolve/pretend.rs`), so a non-top-level merge would demote to kept on the phase-2 walk. Locked cps reuse their phase-1 graph node instead, the way Portage's `_complete_graph` keeps the graph pick (`_select_pkg_from_graph`, `depgraph.py:8661`) and never demotes a merge.
+
+## fn masked_dep_pubgrub_matches_default_abort
+- Backlog numbers removed from the comment (original text): S9 #364: `--solver=pubgrub` must abort exactly like the default solver when a dependency is masked-only (Portage's "All ebuilds that could satisfy … have been masked" block). Portage: depgraph.py, _show_unsatisfied_dep.
+
+## fn required_use_pubgrub_top_level_matches_default_refusal
+- Backlog numbers removed from the comment (original text): S9 #365: `--solver=pubgrub` must refuse exactly like the default solver when a selected ebuild violates REQUIRED_USE (Portage's post-selection check in `depgraph.py _add_pkg`).

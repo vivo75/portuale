@@ -627,7 +627,7 @@ fn seed_toolchain_asap_pins_the_provider_lookup() {
 
 #[test]
 fn add_usability_edges_waits_for_the_unsatisfied_runtime_closure_of_a_build_dep() {
-    // #680: 0 builds with 1 (BDEPEND). 1 needs 2 at run time and 2 needs 3,
+    // 0 builds with 1 (BDEPEND). 1 needs 2 at run time and 2 needs 3,
     // none installed; 1's need of 4 is met by an installed package.
     let build = DepPriority {
         buildtime: true,

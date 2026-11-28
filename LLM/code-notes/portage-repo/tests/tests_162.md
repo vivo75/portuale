@@ -199,3 +199,6 @@ Direct unit tests for the eight pure selection predicates (mutation cluster 2).
 
 ## fn repo_pkgs_162
 - Single scratch repo in the #161 `blocker_161` shape (name `testrepo`, priority 0, main) holding `(cp, version, slot, iuse)` ebuilds with `KEYWORDS="amd64"`.
+
+## fn gate_repo_683
+- Backlog numbers removed from the comment (original text): ---- `promote_tied_alternative`'s `want_update` gate (backlog #683). ----  Portage `dep_zapdeps` (dep_check.py:771-775) skips the installed-slots promotion when the staying choice wants an update (`_want_update_pkg`, depgraph.py:7332-7362). The legs below pin the gate: (a)/(c)/(e)/(f)/(g) go red with the guard reverted, (b)/(d) pin the kept behavior.

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn circular_node_text_matches_portage_package_str() {
-    // Backlog #206 S1: real `_emerge/Package.py::Package.__str__`
+    // Real `_emerge/Package.py::Package.__str__`
     // for a merge-bound ebuild — `(cpv:slot/sub::repo, ebuild
     // scheduled for merge)` — byte for byte, grounded on the live
     // n206 probe (`=dev-libs/cyc0b-1`, `dev-libs/hardcyclea`,

@@ -19,3 +19,6 @@ The installed-parent update probe (#491 pass-0 seed), hermetically.
   Charter property 1 (the final state holds with or without the
   reinstall; a resolver/fast difference is judged against the final
   state, never filed as a defect by itself).
+
+## fn p491_pass0_seed_files_the_installed_consumer_but_not_the_child
+- Backlog numbers removed from the comment (original text): The installed consumer joins the replace set; the keeper's built pin does not veto (it relaxes: the keeper "may need to be rebuilt"). The installed child is NOT filed: Portage's update backtrack files the child only when `dep.child` is the installed node itself (the complete-graph installed pull, e.g. mbabi's installed mbabilib-1.0; the built-parent probe covers the binary-parent shape), never a merge-bound upgrade. Host Portage 3.0.83 prints a plain `U` for the upgraded child in the simdutf/boost/virt/slotbind/casc shapes, with no rebuild of an installed-only parent (backlog #623). Portage: depgraph.py, _slot_operator_update_backtrack (parent filed; child filed only when installed).

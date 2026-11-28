@@ -1,4 +1,4 @@
-//! #380: the image scan for `\n`/`\r` in paths. Expected values are Portage
+//! The image scan for `\n`/`\r` in paths. Expected values are Portage
 //! 3.0.82.2's merge refusals, `LLM/evidence/2026-10-18-380/portage-*.txt`.
 
 use super::*;

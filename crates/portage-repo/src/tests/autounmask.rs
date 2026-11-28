@@ -175,7 +175,7 @@ fn autounmask_keep_masks_n_unmasks_a_package_mask() {
 
 #[test]
 fn autounmask_proposes_unmask_for_masked_dep() {
-    // Backlog #445: a package.mask'd *dependency* resolves once masks are
+    // A package.mask'd *dependency* resolves once masks are
     // accepted, with the `=<cpv>` change recorded. Expected value from
     // Portage 3.0.82.2 (host staged-fixture probe, `emerge --pretend
     // --autounmask dev-libs/maskneedpkg`): `=dev-libs/maskeddep-1.0`
@@ -890,7 +890,7 @@ fn non_use_changes_keep_no_trigger() {
     assert_eq!(mask.autounmask_mask_changes[0].trigger, None);
 }
 
-/// A flip-revealed `||` group defers to the drained graph (#398).
+/// A flip-revealed `||` group defers to the drained graph.
 ///
 /// `pg398-t` pulls `pg398-a` plainly, then `pg398-c`'s `pg398-a[flip]` flips
 /// the already-resolved slot on. The flip reveals
@@ -955,7 +955,7 @@ fn flip_revealed_disjunction_defers_to_the_drained_graph() {
 
 #[test]
 fn pg34_napp_pubgrub_records_the_use_change_gate() {
-    // S9 #363: `--solver=pubgrub` must record Portage's `package.use`
+    // S9 `--solver=pubgrub` must record Portage's `package.use`
     // change instead of silently applying it: `pg34-nlib` carries
     // default-off `f` while its parent needs `nlib[f]`, so the default
     // solver reports one USE change and stays `Complete` (the CLI fails
@@ -991,7 +991,7 @@ fn pg34_napp_pubgrub_records_the_use_change_gate() {
 
 #[test]
 fn aup0b_pubgrub_records_the_parent_flip_and_fails_like_the_default_solver() {
-    // #429(b): `aup0b` DEPENDs `aup0d[foo(-)?,bar(-)?]` and the child declares no
+    // (b): `aup0b` DEPENDs `aup0d[foo(-)?,bar(-)?]` and the child declares no
     // `foo`: only a flip of the parent's own `foo` helps. Portage records `-foo`
     // on the parent and fails (no merge rows); `--solver=pubgrub` used to accept
     // the plan with `foo` on. Expected values: the default solver's, which
@@ -1028,7 +1028,7 @@ fn aup0b_pubgrub_records_the_parent_flip_and_fails_like_the_default_solver() {
     assert!(child.parent_use_suggestion.is_some());
 }
 
-/// Backlog #663: an implicit-IUSE flag (`elibc_musl`, `USE_EXPAND_IMPLICIT`)
+/// An implicit-IUSE flag (`elibc_musl`, `USE_EXPAND_IMPLICIT`)
 /// is flippable by autounmask, like Portage's `Package._iuse.get_flag`
 /// (`_iuse_implicit_match`). Expected value from Portage 3.0.83 via the
 /// fixture oracle (`LLM/evidence/2026-11-06-663/`).
@@ -1043,7 +1043,7 @@ fn autounmask_use_suggests_an_implicit_iuse_flag() {
     assert_eq!(resolved.autounmask_use_changes[0].token, "elibc_musl");
 }
 
-/// Backlog #431 S2: the level list both the walk and the solver bridge retry over.
+/// The level list both the walk and the solver bridge retry over.
 #[test]
 fn autounmask_levels_order_license_keywords_masks_least_invasive_first() {
     use crate::autounmask_levels;

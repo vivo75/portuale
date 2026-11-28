@@ -1,4 +1,4 @@
-//! Order edges through installed packages (#798). Expected behaviour comes from
+//! Order edges through installed packages. Expected behaviour comes from
 //! the build-order property in `docs/charter.md` (a package must not be built
 //! against a library the same plan is about to replace); Portage's complete
 //! graph keeps installed packages' edges, which is where the idea comes from.

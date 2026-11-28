@@ -226,7 +226,7 @@ pub(crate) fn show_held_back_use(quiet: bool, debug: bool, result: &GraphResult,
     }
 }
 
-/// Updates left alone because installed packages cannot follow them (#703): the
+/// Updates left alone because installed packages cannot follow them: the
 /// holders with no visible version that accepts the new provider. A note; the
 /// exit code stays 0, and `--quiet` hides it like the USE note above.
 pub(crate) fn show_held_back_no_route(quiet: bool, debug: bool, result: &GraphResult, root: &Path) {

@@ -36,3 +36,6 @@ Depclean and prune selection tests: cleanlist, removal order, nodeps split.
 
 ## fn depclean_cycle_notice_names_the_pair_when_only_the_cycle_keeps_it (#508)
 - Portage 3.0.83-r1 `_calc_depclean`: A and B require each other, B is protected (not named), C is world. Oracle: `LLM/evidence/2026-10-23-508`.
+
+## fn depclean_cleanlist_keeps_sub_slot_dependencies_and_idepend_targets
+- Backlog numbers removed from the comment (original text): #681: a kept package's `:0/8=` dependency keeps the installed `SLOT=0/8` copy, and a kept package's `IDEPEND` keeps its target. Expected behaviour from the PMS (slot operators, EAPI 8 `IDEPEND`), not from Portage's output.

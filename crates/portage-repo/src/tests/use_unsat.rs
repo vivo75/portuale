@@ -105,7 +105,7 @@ fn use_unsat_candidates_count_conditional_flags_toward_missing_iuse() {
 
 #[test]
 fn a_masked_version_with_the_required_iuse_hands_the_miss_to_the_masked_block() {
-    // Backlog #611(a): visible `r594xdep-1` lacks `r594flag`, keyword-masked
+    // (a): visible `r594xdep-1` lacks `r594flag`, keyword-masked
     // `r594xdep-2` declares it. Portage 3.0.83 (`emerge -p dev-libs/r594xtop`,
     // `LLM/evidence/2026-11-06-sweep/611a/`) prints the all-masked block with
     // the `-2` row, not `Missing IUSE` (`masked_with_iuse`, D:6918-6929).
@@ -163,7 +163,7 @@ fn a_masked_version_with_the_required_iuse_hands_the_miss_to_the_masked_block() 
 
 #[test]
 fn show_masked_packages_prints_the_mask_file_comment_once_and_license_paths() {
-    // Backlog #611(c): Portage's `show_masked_packages` (depgraph.py
+    // (c): Portage's `show_masked_packages` (depgraph.py
     // D:12632-12690) prints, under a `package.mask` row, the masking file
     // and the comment above the entry (once per distinct comment), and a
     // line per missing license found under a repo's `licenses/`. Portage

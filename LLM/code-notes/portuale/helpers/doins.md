@@ -61,3 +61,6 @@ Native `doins.py`: installs files/dirs into the image with Portage's semantics.
 ## tests: symlink-failure line and end-to-end package test
 - A failing `os.symlink(linkto, dest)` prints both filenames. Portage, probed 2026-10-09 (`doins.py --recursive --preserve_symlinks --distdir=/x --helper doins --dest /proc/x src/p`, `src/p/abs-link -> /nonexistent/abs`): `os.makedirs` under `/proc` fails silently to the caller, then the last stderr line is `FileNotFoundError: [Errno 2] No such file or directory: b'/nonexistent/abs' -> b'/proc/x/p/abs-link'`, rc 1.
 - `dev-libs/packagepkg`'s `src_install` is `insinto` + `doins` (in-process, through the existing package test machinery). Re-run the in-process install in a child with no checkout and no Python, so the native `doins.py` is the only thing that can install the file (the `gpkg.rs` no-checkout shape).
+
+## (see source)
+- Backlog numbers removed from the comment (original text): The BSDs use `extattr_*`, which is not ported (backlog #665): no attributes are listed and reading or setting one reports ENOTSUP, the same answer a filesystem without xattr support gives.

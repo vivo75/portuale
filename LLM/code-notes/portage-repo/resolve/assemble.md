@@ -3,6 +3,7 @@ Assembling the final result.
 
 ## fn assemble_result::backtrack_restarts
 - Backlog #59 S2: the search's restart count (`passes - 1` inside `backtracking_resolve`'s loop).
+- Backlog numbers removed from the comment (original text): A slot-operator rebuild joins the walk as a parentless root, so no edge says why it is in the plan: name the provider whose new sub-slot caused it (#713).
 
 ## fn assemble_result abi-rebuild fallback
 - Portage depgraph's slot-operator auto-rebuild (backlog #24 S3): the consumers themselves are walked nodes now (seeded + flipped in `run_pass` from `params.slot_operator_replace_installed`). `collect_feedback` already ran the scan for every pass it decided.

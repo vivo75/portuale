@@ -183,7 +183,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     };
     // The info-dir check reads the command line's own `--quiet` only:
     // Portage's `adjust_config` for a resume never reaches the settings
-    // that check uses (oracle probe, #465).
+    // that check uses (oracle probe).
     let cmdline_quiet = quiet;
     let quiet = opts.quiet;
     let mut boot = crate::mtimedb::read_resume_bootstrap(root);
@@ -479,7 +479,7 @@ pub(crate) struct ResumePretendArgs<'a> {
     pub(crate) pretend: bool,
     pub(crate) quiet: bool,
     pub(crate) nodeps: bool,
-    /// `--debug`: the spinner's QUIET mode, so no resolution notice (backlog #614).
+    /// `--debug`: the spinner's QUIET mode, so no resolution notice.
     pub(crate) debug: bool,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) root: &'a Path,

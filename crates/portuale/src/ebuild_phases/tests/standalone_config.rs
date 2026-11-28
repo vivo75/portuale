@@ -422,7 +422,7 @@ fn required_use_message_matches_portage_validate_deps_text() {
     );
 }
 
-/// A hermetic standalone root for the #349 S4 config reads: one repo
+/// A hermetic standalone root for the config reads: one repo
 /// (`profiles/repo_name`), one flag-less package with an md5-cache
 /// entry, `make.profile` at the synthetic default, and a `make.conf`
 /// carrying `DISTDIR`/`PORTAGE_TMPDIR`/`FEATURES`. Expected values from

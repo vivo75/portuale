@@ -12,6 +12,7 @@ Database-backend equivalence coverage: binpkg/source merges, upgrades, crash rec
 
 ## fn entry_files
 - No moved context.
+- Backlog numbers removed from the comment (original text): Every file of a live entry with its permission bits and bytes; the volatile `#dir_mtime=` line of `metadata` is dropped (the same thing `verify` ignores: directory mtimes). The group/other write bits are masked: another test's in-process `brush` phase can flip the process umask (`022`/`002`) between the two runs being compared (#343).
 
 ## fn payload_tree
 - No moved context.
@@ -30,6 +31,7 @@ Database-backend equivalence coverage: binpkg/source merges, upgrades, crash rec
 
 ## fn binpkg_merge_matches_files
 - Covers design points (a) + (c): see the test bodies for the entry/payload/config-memory comparison and the `PORTAGE_UPDATE_ENV` rewrite observation.
+- Backlog numbers removed from the comment (original text): Bytes only: the payload modes follow the process umask, which another test's in-process `brush` phase can flip mid-run (#343).
 
 ## fn a_binpkg_merged_on_sqlite_matches_the_files_merge
 - No moved context.
@@ -58,6 +60,8 @@ Database-backend equivalence coverage: binpkg/source merges, upgrades, crash rec
 
 ## fn a_source_merge_on_sqlite_matches_the_files_merge
 - No moved context.
+- Backlog numbers removed from the comment (original text): Masked: the process umask can differ between the two runs (#343).
+- Backlog numbers removed from the comment (original text): Bytes only, as above: payload modes follow the process umask (#343).
 
 ## fn unmerge_standalone
 - No moved context.
@@ -85,6 +89,7 @@ Database-backend equivalence coverage: binpkg/source merges, upgrades, crash rec
 - Ignored, because run-dependent by nature (and `verify` compares them, so its reported differences are only checked to be among these, the modes only by the umask bits): all file mtimes and the entry directory mtime (each run builds and writes its files at another instant); the `#dir_mtime=` stamp line of `metadata` (derived from the entry directory mtime; its Valid/Stale/Absent state is compared); the mtime field of `obj` / `sym` lines of `CONTENTS` (the payload files' mtimes); the `BUILD_TIME` file and the `BUILD_TIME=` line of `metadata` (a source merge records the time of its build); the entry directory's mode, down to its umask bits (`files` records the merge's `mkdir` under the process umask, 0o755, or 0o775 under another umask; a sqlite merge stores the schema default 0o755; both are permission bits since #307); the group and other write bits of entry file modes (a file written under another umask: 0o664 vs 0o644); the modes of the payload tree (the same umask race, as `payload_bytes` notes). Nothing else is dropped: not `environment.bz2`, not `COUNTER`, not the rest of `metadata`.
 - The `/usr/lib64`-in-linker-path seed follows the S1.5 soname-bump test. The end-state sanity assert covers 1 + 2 + upgrade + soname bump - consumer - mergepkg.
 - Of a `verify` mode difference (`mode <a> != <b>` / `directory mode <a> != <b>`, octal, permission bits both since #307), only the umask bits may differ.
+- Backlog numbers removed from the comment (original text): `FEATURES`/`PORTAGE_CONFIGROOT`/`INSTALL_MASK` are process-global: the merges below record the merge-time `FEATURES` into the vdb `environment`, so no other test may mutate them mid-sequence. Shares the lock the mutating tests hold (`PLACED_CONFIG_ENV_LOCK`); immune to a poisoned mutex so one failed holder cannot cascade (#343).
 
 ## fn a_merge_upgrade_unmerge_sequence_is_equivalent_on_sqlite_and_files
 - No moved context.
@@ -114,3 +119,6 @@ Database-backend equivalence coverage: binpkg/source merges, upgrades, crash rec
 
 ## fn fixture_reverse_dependents_are_identical_on_every_backend
 - feat#157 S8.1: each database backend converted from the fixture root.
+
+## fn a_same_version_reinstall_removes_dropped_files_on_every_backend
+- Backlog numbers removed from the comment (original text): A same-version reinstall with a smaller image removes the dropped files on every backend: the replacing package's ownership comes from its pending entry, not from the live entry it replaces (#354).

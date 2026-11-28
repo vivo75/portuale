@@ -1,4 +1,4 @@
-//! #113: `shuffle_seed` reads `PORTUALE_SHUFFLE_DIRS` once and freezes it
+//! `shuffle_seed` reads `PORTUALE_SHUFFLE_DIRS` once and freezes it
 //! for the life of the process.
 //!
 //! This file is its own test binary, so it owns the variable from the

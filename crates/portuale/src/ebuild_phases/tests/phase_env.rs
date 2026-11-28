@@ -559,7 +559,7 @@ fn config_root_with_slash_matches_portage_locations_manager() {
 
 /// The phase env names the user's bashrc and hook directory under the
 /// config root, as `doebuild_environment` does (`doebuild.py:535-540`;
-/// observed values in `LLM/evidence/2026-10-18-372-s0/`). Backlog #372.
+/// observed values in `LLM/evidence/2026-10-18-372-s0/`).
 #[test]
 fn phase_env_names_the_user_bashrc_and_hook_dir_under_the_config_root() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");

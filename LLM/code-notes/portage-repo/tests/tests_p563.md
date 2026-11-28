@@ -16,3 +16,6 @@ The perl-5.44 stabilization shape (#563 heal) and the skip-block pin forms (#568
 
 ## fn skip_block_pins_skip_non_selected_or_branches
 - Hermetic oracle: `LLM/evidence/2026-10-26-568/NOTES.md`.
+
+## fn plain_pull_mirrors_the_scan_filing_into_the_replace_display_set
+- Backlog numbers removed from the comment (original text): Backlog #608 (`-pvD dev-libs/p569pull`, oracle `D-p569pull-portage.txt`): one backtrack, and the slot-operator replace set names both the installed consumer and the provider whose installed child's slot atom matches the upgrade row (`r U`, not plain `U`). The rebuild scan (`fold_rebuild_scan`) files the logic set while the conflict-ABI probe vetoes without `--update`, so the display mirror (`probe_replaced`) must track the scan's filing too. Portage: depgraph.py, _slot_operator_trigger_reinstalls / _gen_reinstall_sets (`__auto_slot_operator_replace_installed__`). `-D` matches the oracle invocation; without it the shallow walk costs an extra restart while the display set is the same.

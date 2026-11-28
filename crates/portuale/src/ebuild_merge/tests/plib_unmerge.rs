@@ -199,7 +199,7 @@ fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
 /// On a same-version reinstall the replaced and replacing cpvs are the same
 /// string, so the just-preserved feed is keyed by an excluded cpv: the
 /// exclusion must not drop it, or a registry-preserved lib whose only
-/// consumer is the just-preserved lib is wrongly judged unneeded (#355).
+/// consumer is the just-preserved lib is wrongly judged unneeded.
 /// Expected from Portage 3.0.82.2, S0 cell P1: `libt355base.so.1` kept.
 /// Portage: `LinkageMapELF.rebuild` (`LinkageMapELF.py:180`, `preserve_paths`
 /// unconditional, `exclude_pkgs` registry-only).

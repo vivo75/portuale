@@ -273,7 +273,7 @@ pub(crate) fn provide_aux_metadata(
 
 /// Whether the on-disk entry passes Portage's `validate_entry` for the
 /// `md5_database` (pairs) format, memoised per path. Validates the raw
-/// text, which is also what `read_md5_cache` returns verbatim (#391).
+/// text, which is also what `read_md5_cache` returns verbatim.
 ///
 /// `true` when the ebuild is missing (trust the entry) and when `pf` is
 /// not a `package-version` name at all.

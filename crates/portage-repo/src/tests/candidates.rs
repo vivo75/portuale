@@ -1,6 +1,6 @@
 use super::*;
 
-/// #127: the public splitter's advertised disambiguation, pinned
+/// The public splitter's advertised disambiguation, pinned
 /// for the first time -- a digit-led word belongs to the name
 /// (`foo-1bar-2.0` -> `foo-1bar`) and a `-r<digits>` word is not a
 /// version on its own (`foo-r1-2.0` must not mis-split as

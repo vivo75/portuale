@@ -1,4 +1,4 @@
-//! Ranking of settled passes for `PORTUALE_BACKTRACK_EXPLORE` (#804).
+//! Ranking of settled passes for `PORTUALE_BACKTRACK_EXPLORE`.
 
 use crate::resolve::backtracker::Backtracker;
 use crate::resolve::outcome::PretendOutcome;
@@ -25,7 +25,7 @@ struct Settled {
     at: Duration,
 }
 
-/// `PORTUALE_BACKTRACK_EXPLORE=<n>` (#804): measure what exploring up to `n`
+/// `PORTUALE_BACKTRACK_EXPLORE=<n>`: measure what exploring up to `n`
 /// settled passes would give, without changing the returned result. The
 /// first settle is kept and returned; the rest only feed the report.
 pub(crate) struct Explore {

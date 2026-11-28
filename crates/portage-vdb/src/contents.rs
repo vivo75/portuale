@@ -5,7 +5,7 @@
 //! `sym` cuts at the last ` -> ` before the trailing `mtime`, and
 //! `dir`/`dev`/`fif` take the rest of the line, so paths with spaces
 //! survive. A line that matches nothing is skipped. Every previous
-//! whitespace-`split` site mis-parsed those paths (see #357).
+//! whitespace-`split` site mis-parsed those paths.
 
 /// A parsed `CONTENTS` line, borrowing the line it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

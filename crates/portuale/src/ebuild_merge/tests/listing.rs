@@ -1,4 +1,4 @@
-//! The direct-path merge/unmerge listing (backlog #403): every marker
+//! The direct-path merge/unmerge listing: every marker
 //! Portage's `dblink` prints on the foreground path, pinned byte-for-byte
 //! against the S403 oracle (`LLM/evidence/2026-10-18-403/matrix.md`).
 //! Portage: lib/portage/dbapi/vartree.py.

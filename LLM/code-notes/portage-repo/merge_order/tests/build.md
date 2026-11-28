@@ -7,3 +7,6 @@
 ## fn nvc_entries_do_not_participate_in_minimize_elimination
 - Backlog #85 follow-up (`opartlya` disclosure order): a `NoVisibleCandidate` entry is never a selected package -- Portage's `_select_package` returns None for its atom, so it never enters `_minimize_children`'s elimination. Here the bare atom matches both the NVC entry and the installed 1.0; without the NVC exclusion the ascending-version elimination drops the NVC entry (its empty version sorts first) and the edge moves to the installed entry, flipping the merge order of the disclosure rows. With it, the pre-#85 ranking stands and the NVC entry keeps the edge.
 - NVC first, like the resolver records it. `resolved_dep_targets` is the tree view (`merge_bound_only`), which never edges to an installed node -- the test asserts on `build_digraph`, the scheduler view, where the edge lives.
+
+## fn add_usability_edges_waits_for_the_unsatisfied_runtime_closure_of_a_build_dep
+- Backlog numbers removed from the comment (original text): #680: 0 builds with 1 (BDEPEND). 1 needs 2 at run time and 2 needs 3, none installed; 1's need of 4 is met by an installed package.

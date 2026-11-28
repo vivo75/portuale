@@ -5,7 +5,7 @@ fn without_root_deps_a_bdepend_on_an_installed_only_package_is_kept() {
     // Without `--root-deps` a BDEPEND on an installed-only package is kept
     // from the installed db (Portage consults it for every dep kind of a
     // package being merged): `AlreadyInstalled`, not a miss. Oracle:
-    // Portage 3.0.82.2 S0 `s0-e-gbapp-pvuD` (#360 S4: `N gextra + N gbapp`
+    // Portage 3.0.82.2 S0 `s0-e-gbapp-pvuD` (`N gextra + N gbapp`
     // for a `BDEPEND` on installed-only `pg34-gone`).
     assert_eq!(
         graph_root_deps("dev-libs/rootdepspkg", None),
@@ -50,7 +50,7 @@ fn root_deps_feeds_running_root_satisfiability_into_disjunctive_branch_selection
     // the queued installed-only branch is kept from the installed db, like
     // any other installed-only dep (Portage `dep_zapdeps` all-installed
     // pick plus the vardb match; oracle for the keep: Portage 3.0.82.2 S0
-    // `s0-e-gbapp-pvuD`, #360 S4).
+    // `s0-e-gbapp-pvuD`).
     assert_eq!(
         graph_root_deps("dev-libs/rootdepsorpkg", None),
         vec![

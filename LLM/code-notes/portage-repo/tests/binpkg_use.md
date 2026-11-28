@@ -27,3 +27,6 @@
 - The old filtered set (R2's `forced_or_masked_flags`) lost the flag, so the presence difference rejected the binary.
 - Baked IUSE carries the dropped flag; the baked USE does not enable it (a masked flag cannot be baked enabled; the live probe's `orig_use` is `{"foo"}`).
 - Control (pre-D1 shape): without the profile masking the flag the presence difference does reject; the profile masking, not the filter, carries the keep.
+
+## fn binary_masked_report_lists_respect_use_mismatches_as_masked
+- Backlog numbers removed from the comment (original text): Backlog #402: under `--binpkg-respect-use`, a top-level atom whose only binaries are USE-mismatched reports Portage's masked block — one cpv-deduped `use flag configuration mismatch` row — not the plain `no binary packages` miss.  Portage 3.0.82.2, S0 cell `b03-use-bid2-respect` (rc 1, full argv `emerge -pv --package-moves=n --usepkgonly=y --binpkg-respect-use=y dev-libs/t341-dep`, re-run live on this host 2026-10-19): user `package.use` `=dev-libs/t341-dep-1-2 x`, build 1 baked `USE: x`, build 2 baked `USE:` empty — both builds mismatch, stderr `!!! All ebuilds that could satisfy "dev-libs/t341-dep" ...` + `- dev-libs/t341-dep-1::t341 (masked by: use flag configuration mismatch)`.

@@ -643,7 +643,7 @@ fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
 }
 
 /// Unpacking a foreign-owned tarball succeeds demoted: under
-/// `FEATURES="sandbox usersandbox userpriv network-sandbox"` (the #626
+/// `FEATURES="sandbox usersandbox userpriv network-sandbox"` (the
 /// host set) the `unpack` phase drops to the portage user, so `tar`
 /// extracting a tarball owned by uid/gid 1 does not hit the `Cannot
 /// change ownership ... Invalid argument` failure a root unpack in a

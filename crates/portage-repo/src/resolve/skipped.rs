@@ -50,7 +50,7 @@ pub struct HeldBackUse {
 
 /// An update left alone because installed packages cannot follow it: their
 /// recorded dependency pins the old version and no visible version of them
-/// accepts the new one (#703). A note, never a failure. Not [`HeldBackUse`]:
+/// accepts the new one. A note, never a failure. Not [`HeldBackUse`]:
 /// one group lists several holders and the closing sentence differs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldBackNoRoute {
@@ -78,8 +78,9 @@ pub struct StalePinRefusal {
     pub provider: String,
     /// The consumer has no ebuild in any repository, so it cannot be rebuilt.
     pub no_ebuild: bool,
-    /// The refusal is the consumer's own tree ebuild rejecting the provider
-    /// (#773), not its recorded dependency: the provider could stay where it is.
+    /// The refusal comes from the consumer's tree ebuild, and only then:
+    /// the recorded pin is checked first, so a recorded-pin refusal (or a
+    /// missing ebuild) is `false` even if the tree would refuse too.
     pub tree_pin: bool,
 }
 

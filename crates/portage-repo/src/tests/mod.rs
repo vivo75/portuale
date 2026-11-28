@@ -1177,7 +1177,7 @@ fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
 }
 
 /// Like `graph_result_real`, but resolved with the pubgrub engine: the S9
-/// (#363/#364/#365) parity probes assert these match the default solver's
+/// parity probes assert these match the default solver's
 /// abort outcome and notice vectors. Same request, only the resolver differs.
 fn graph_result_pubgrub(atom_str: &str) -> GraphResult {
     let root = fixtures_root();
@@ -3487,7 +3487,7 @@ mod tests_164 {
     }
 
     /// A set member is named by its set (`@name`), like Portage's `SetArg`
-    /// in `_get_dep_chain`; an atom outside the set map keeps its text (#345).
+    /// in `_get_dep_chain`; an atom outside the set map keeps its text.
     #[test]
     fn autounmask_dep_chain_names_the_set_argument() {
         let entries: Vec<GraphEntry> = Vec::new();

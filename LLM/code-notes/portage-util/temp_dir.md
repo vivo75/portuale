@@ -5,6 +5,7 @@ A scratch directory that removes itself, plus a process-level stale sweep.
 - Backlog #260. Every test scratch directory used to be `std::env::temp_dir().join(format!("{tag}-{pid}-{nanos}"))` with a trailing `remove_dir_all` at the end of the test -- skipped by a panic, by `panic = "abort"` (the release profile the verification pass runs under, skipping even a plain failed assert), and by a kill from outside. The result was ~85k top-level `/tmp` entries exhausting the tmpfs inodes.
 - Same division of labour `ebuild_phases.rs::bin_dir` and pmtest's `_reclaim_portuale_bin_overlays` already use for the `portuale-bin.*` overlay (backlog #88).
 - The prefix makes owned entries recognizable from the outside (`find /tmp -name 'portuale-td-*'` lists exactly ours).
+- Backlog numbers removed from the comment (original text): A scratch directory that removes itself, plus a process-level stale sweep: [`TempDir`] closes the unwind/success paths with `Drop`, and the *next* process reclaims what a dead one left behind (nothing can run on the way out of an abort/kill).  Naming: `$TMPDIR/portuale-td-{tag}-{seq}-{pid}-{nanos}`. The prefix is the sweep's match key; the pid/nanos tail tells a live run's directories from a dead one's, and `seq` (a per-process counter) keeps two threads that read the same clock tick apart (backlog #632).
 
 ## struct TempDir
 - Derefs to `Path`, so the existing `tmp.join(..)` / `&tmp` call shapes keep working unchanged.
@@ -32,3 +33,6 @@ A scratch directory that removes itself, plus a process-level stale sweep.
 
 ## tests: temp_dir_removes_itself_on_unwind
 - Backlog #260's actual failure mode; `catch_unwind` stands in for the panic.
+
+## fn concurrent_temp_dirs_never_share_a_path
+- Backlog numbers removed from the comment (original text): Backlog #632: two guards created in the same clock tick must never share a path (they used to, and one's `Drop` then deleted the other's scratch root mid-test).

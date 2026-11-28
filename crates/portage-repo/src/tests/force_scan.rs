@@ -727,7 +727,7 @@ fn replacement_accepts_follows_the_consumers_tree_atoms() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// #618: only the selected `||` arm binds the replacement. The consumer's
+/// Only the selected `||` arm binds the replacement. The consumer's
 /// live `|| ( =accprov-1.5 =accprov-2.0 )` must not accept the 2.0 candidate
 /// through the unselected `=accprov-2.0` arm: in-graph first, then installed
 /// (`dep_zapdeps`), so a merge-bound 1.5 selects `=accprov-1.5` even though

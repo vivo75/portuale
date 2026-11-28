@@ -9,7 +9,7 @@ pub struct EffectiveUseFlagsArgs<'a> {
     pub candidate_str: &'a str,
     /// The binary `BUILD_ID`, if the candidate is a binpkg instance: an
     /// `=`+build-id `package.use` line applies only to the equal build
-    /// (Portage `_pkg_str` comparison, dep:2994-3008, #346 S3). `None`
+    /// (Portage `_pkg_str` comparison, dep:2994-3008). `None`
     /// for ebuilds, which carry no build-id.
     pub build_id: Option<&'a str>,
     pub category: &'a str,
@@ -45,7 +45,7 @@ pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String
     // `category`/`package`/`iuse`/`keywords` all join the key even
     // though `candidate_str` usually implies them (`--dynamic-deps=n`
     // can pass vdb-built metadata for a tree cpv). `build_id` joins too:
-    // same-string binary instances differ only by build (#346 S3).
+    // same-string binary instances differ only by build.
     type EufCache = HashMap<(u64, Option<String>, String), Rc<HashSet<String>>>;
     thread_local! {
         static EUF_CACHE: RefCell<EufCache> = RefCell::new(HashMap::new());
@@ -285,7 +285,7 @@ pub(crate) fn effective_use_flags_uncached(
 /// for the `targets/*` child-unmask pattern).
 /// Portage: stack_lists(incremental=True) over getUseMask/getUseForce
 /// The candidate's binary build-id (if any) reaches the match, like
-/// every `_pkg_str` comparison in Portage (dep:2994-3008, #346 S3).
+/// every `_pkg_str` comparison in Portage (dep:2994-3008).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn specificity_ordered_flags(
     entries: &[(String, Vec<String>)],
@@ -342,7 +342,7 @@ pub(crate) fn resolved_use_mask_or_force(
     // Memoised per (which, stable, USE context, candidate); the levels
     // are fixed at config resolution, so the walk result is stable.
     // Thread-local, lock-free. Same-string binary instances differ only
-    // by build-id (#346 S3), so it joins the key.
+    // by build-id, so it joins the key.
     type RumfCache = HashMap<
         (
             MaskOrForce,

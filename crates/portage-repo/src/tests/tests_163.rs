@@ -3354,7 +3354,7 @@ fn assemble_result_change_gains_its_required_by_chain() {
 }
 
 /// `--usepkgonly` turns a plain miss into Portage's "binary packages"
-/// wording; without it the report keeps "ebuilds" (#353).
+/// wording; without it the report keeps "ebuilds".
 #[test]
 fn plain_miss_reports_read_binary_only_under_usepkgonly() {
     let dir = dir_163("plainmiss-binary");

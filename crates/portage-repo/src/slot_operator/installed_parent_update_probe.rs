@@ -198,7 +198,7 @@ pub(crate) fn installed_parent_update_probe(
                 // node itself (the complete-graph installed pull), never a
                 // merged upgrade -- `_iter_atoms_for_pkg` then finds no
                 // `__auto_slot_operator_replace_installed__` atom naming the
-                // upgrade, so no `r` prints (backlog #623: host-verified
+                // upgrade, so no `r` prints (host-verified
                 // `  U` for `simdutf-9.3.2`, `boost-1.53.0`,
                 // `libmysqlclient-21`, `slotbindtarget-2.0`,
                 // `casctarget-2.0`). A filed upgrade child would tag every

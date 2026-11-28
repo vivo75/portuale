@@ -2,7 +2,7 @@ use super::*;
 
 const RESET: &str = "\x1b[39;49;00m";
 
-/// Backlog #453 A: the resolver-built abort strings colourise Portage's
+/// A: the resolver-built abort strings colourise Portage's
 /// `_show_unsatisfied_dep` spans and nothing else (the resolver library
 /// itself stays ANSI-free). Oracle: Portage 3.0.82.2 pipe captures of
 /// `--pretend dev-libs/maskedpkg` / `dev-libs/missingdep`.

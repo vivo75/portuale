@@ -603,7 +603,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             match handle(rerun.map_err(crate::error::Error::from)) {
                 // The seeded walk is dropped when every update it withholds
                 // beyond the first walk's is held by an installed consumer's
-                // build-time dependency alone (#816): the first walk never
+                // build-time dependency alone: the first walk never
                 // meets such a pin, and a rebuild does not need it.
                 Ok(again) if withholds_only_for_build_time_pins(root, &result, &again) => result,
                 Ok(mut result) => {

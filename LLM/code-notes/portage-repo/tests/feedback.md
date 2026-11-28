@@ -28,9 +28,11 @@
 ## fn collect_feedback_keeps_an_enforced_pin_single
 - Backlog #161 S4: an enforced reverse pin is retained once. A reachable consumer's runtime pin on a version the tree still carries (`souprov-1.0` stays satisfying) is enforced (holdable), not dropped for the residual report. Append leg (fresh params) and dedup leg (pre-retained pin, latched constraint keeps the pass quiet) share the setup.
 - Backlog #209: the enforced-pin feedback travels as `RevDep` (same working copy as `Config`; the driver feeds it back in-pass under `--backtrack=0`).
+- Backlog numbers removed from the comment (original text): The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
 
 ## fn collect_feedback_collects_a_dropped_pin_once
 - Backlog #161 S4: a dropped reverse pin is collected once. The `pinner`/`souprov` shape with a hard upgrade requirement drops the pin for the residual report. Three legs isolate the three sites: the conflict-gated first scan (append; early return isolates it), its dedup (a lone want falls through to the mask trial), and the unconditional second scan (dedup after mask-trial fall-through, with the mask trial's entries pre-covered so the pass settles).
+- Backlog numbers removed from the comment (original text): The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
 
 ## fn stale_trigger_falls_back_to_the_first_requirer
 - Backlog #205 R4, stale-trigger leg: when the recorded trigger is no longer a requirer (masking retry, parent-flip rescue), the fill falls back to the legacy first-requirer start.
@@ -43,3 +45,12 @@
 
 ## fn keyword_change_on_an_argument_package_yields_only_the_argument_row
 - Backlog #248, expected value from Portage: keyword twin of the above (same fresh-host probe family as the contract pin: `emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg` prints only `# required by dev-libs/autounmaskkeywordpkg (argument)`).
+
+## fn missing_dep_trigger_masks_a_binary_parent_by_build
+- Backlog numbers removed from the comment (original text): #697: a merge-bound binary parent whose dependency cannot be met is masked as that build only. The plain `!=cat/pkg-ver` form is ignored by the binary pool and would hide the ebuild instead, so the binary came back every pass. Portage: depgraph.py `_add_dep` masks the binary package object.
+
+## fn slot_scoped_positive_constraint_spares_other_slots
+- Backlog numbers removed from the comment (original text): #685: a positive constraint that names a slot admits every candidate of the other slots, so a pin on slot 23 cannot empty a request for slot 22.
+
+## fn enforced_pin_is_filed_under_the_broken_slot
+- Backlog numbers removed from the comment (original text): #685: an enforced pin whose atom has no slot is filed under the one slot whose update it breaks; two broken slots leave it unscoped.

@@ -279,12 +279,12 @@ impl<'a> Memos<'a> {
             })
     }
 
-    /// How good one `||` branch is, in Portage's terms: a branch whose
-    /// packages are all installed beats one that is merely available, and
-    /// one with an atom no visible ebuild satisfies is never chosen. In plan
-    /// mode a branch every non-blocker atom of which the best visible
-    /// candidate of its slot matches outranks a merely installed one, so the
-    /// plan takes the arm that admits the newest version.
+    /// How good one `||` branch is: a branch whose packages each have an
+    /// installed instance (any version or slot, not the atom's own) beats
+    /// one that is merely available; one with an atom no visible ebuild
+    /// satisfies is never chosen. In plan mode a branch whose atoms the best
+    /// visible candidates match outranks a merely installed one. Used by the
+    /// planner and by `rebuild::reduced_recorded_atoms`.
     // Portage: dep_check.py, dep_zapdeps
     pub(crate) fn branch_preference(&self, branch: &[String], config: &Config) -> AltPreference {
         self.branch_preference
@@ -1827,7 +1827,7 @@ mod tests {
 
     /// Charter property 2 (PMS 8.1: a build tool must be usable): a direct runtime edge
     /// out of a package the plan builds with is a build-time need, so the cut spares it
-    /// (one level, #764).
+    /// (one level).
     #[test]
     fn a_build_tool_makes_its_runtime_closure_build_time() {
         let tree = fixture_copy();

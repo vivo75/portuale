@@ -52,7 +52,7 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     /// sourceless package (see [`can_skip_source_phases`]). The direct
     /// `ebuild` paths (and a direct `ebuild <file> package`) run every
     /// phase like `doebuild()`; the scheduler-driven `--buildpkgonly`
-    /// build goes through `EbuildExecuter` and skips (backlog #458).
+    /// build goes through `EbuildExecuter` and skips.
     pub(crate) skip_noop_src_phases: bool,
     /// The scheduler's up-front `pkg_pretend` pass already ran it: start
     /// the chain at `setup`, like `EbuildBuild` does after `_run_pkg_pretend`.
@@ -1209,7 +1209,7 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                 // With `pid` the grandchild above already mounted a fresh
                 // `/proc` over the new pid ns; without `pid` this path never
                 // remounts, so `/proc` keeps the host view. `lo` came up
-                // pre-fork via netlink (#636) when `iso.net`, so the pid-1
+                // pre-fork via netlink when `iso.net`, so the pid-1
                 // grandchild inherits it through the shared netns.
                 if libc::setgid(gid) != 0 {
                     return Err(std::io::Error::last_os_error());

@@ -92,7 +92,7 @@ pub(crate) fn run_pass(
     };
     // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
     // Stale pre-skip wants die here, so every `||` re-pops against the
-    // post-skip graph instead of vetoing the retry (backlog #652 leg A).
+    // post-skip graph instead of vetoing the retry.
     // Portage: depgraph.py, _backtrack_depgraph.
     let union_constraints =
         drop_stale_positives(bp.union_constraints(), ctx.gate(), ctx.root, config);

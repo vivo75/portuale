@@ -1,5 +1,5 @@
 //! Command-line atom validation: package arguments and the `--exclude`-style
-//! option families (plan #341 S7).
+//! option families.
 
 use crate::pretend::EmergeOpts;
 use crate::pretend::parser_error;

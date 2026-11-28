@@ -226,7 +226,7 @@ pub(crate) struct InstalledArgumentMatchArgs<'a> {
 
 /// Whether the installed `category/package-version` matches a top-level
 /// argument atom: Portage `_iter_atoms_for_pkg` minus the higher-slot guard
-/// (greedy-slot territory, owned by #359 S3) and the internal-set
+/// (greedy-slot territory, owned by S3) and the internal-set
 /// `reset_depth=False` cases (slot-operator seeds never sit in `arg_atoms`).
 /// A match resets the update depth to 0.
 pub(crate) fn installed_matches_argument(args: InstalledArgumentMatchArgs<'_>) -> bool {

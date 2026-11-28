@@ -159,7 +159,7 @@ fn report_option(token: &str) -> ExitCode {
 /// taken exactly as Portage passes it, trailing `\n` included, so
 /// `parser.error`-origin lines end in a blank line while argparse-native
 /// ones (`unrecognized arguments`, `invalid choice`) end in one `\n`.
-/// Plan #347 S8 (347-ERR); oracle `LLM/evidence/2026-10-15-346-s0/c/`.
+/// (347-ERR); oracle `LLM/evidence/2026-10-15-346-s0/c/`.
 // Portage: _emerge/main.py, parse_opts
 pub(crate) fn parser_error_text(message: &str) -> String {
     format!("emerge: error: {message}\n")
@@ -489,7 +489,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // ABI-rebuild edge, and only when the edge caused its rebuild (an
     // already-merging upgrade consumer is untagged unless the replace set
     // names it). The provider side is never tagged through this edge:
-    // Portage has no provider-side `force_reinstall` rule (backlog #623).
+    // Portage has no provider-side `force_reinstall` rule.
     // Portage: resolver/output.py, PkgAttrDisplay
     let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(AbiRebuildForceReinstallArgs {
         abi_rebuilds: &result.abi_rebuilds,
@@ -505,7 +505,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // The slot-operator replace set tags its members the same way, except
     // the packages that move to another version: `r` marks a reinstall, and
     // an upgrade is no reinstall whichever way the search reached it
-    // (backlog #819, #810: Portage prints `r  U` only when its backtrack
+    // (backlog, Portage prints `r U` only when its backtrack
     // filed the provider for a slot conflict).
     // Portage: depgraph.py, _iter_atoms_for_pkg (`__auto_slot_operator_replace_installed__`)
     force_reinstall_cps.extend(
@@ -909,7 +909,7 @@ pub(crate) struct AbiRebuildForceReinstallArgs<'a> {
 /// Which `(category, package)` an ABI-rebuild edge force-reinstalls for
 /// the red `r` column. Consumer side: a merge-bound consumer is tagged
 /// only when the edge caused its rebuild (an already-merging upgrade
-/// consumer is never tagged, #819). Provider side:
+/// consumer is never tagged). Provider side:
 /// a provider that reinstalls the *same* version (a slot/sub-slot move,
 /// e.g. libarchive 3.1.1 `0` -> `0/13` under `--changed-slot`) keeps its
 /// `r` -- Portage schedules that reinstall as a forced rebuild and tags
@@ -920,7 +920,7 @@ pub(crate) struct AbiRebuildForceReinstallArgs<'a> {
 /// `PkgAttrDisplay.force_reinstall`), and the only such args are the
 /// rebuild/reinstall/replace sets (`_gen_reinstall_sets`,
 /// `depgraph.py:5479-5480`) -- there is no provider-side ABI rule for
-/// upgrades (backlog #623: host Portage prints a plain `U` for upgraded
+/// upgrades (host Portage prints a plain `U` for upgraded
 /// providers like `boost-1.53.0`, `libmysqlclient-21`,
 /// `slotbindtarget-2.0` and `casctarget-2.0`, while a replace-set-filed
 /// provider like `mbabilib-2.0` keeps its `r` through the set).

@@ -70,3 +70,6 @@ Phase-command end-to-end tests. Context moved out of the code comments (#336 Pha
 
 ## fn install_qa_spawn_pops_ebuild_phase_so_use_test_does_not_die (#516)
 - The post-`install` QA spawn carries no `EBUILD_PHASE` (Portage's `MiscFunctionsProcess._spawn` pops it), so a repo-local check calling `use test` on an ebuild without that flag passes instead of dying.
+
+## fn skip_fires_for_sourceless_install_only_ebuild
+- Backlog numbers removed from the comment (original text): The merge-path no-op src-phase skip (backlog #456, `EbuildExecuter._can_skip_source_phases`): `dev-libs/schedleaf-a` ships no `SRC_URI` and defines only `src_install` (`DEFINED_PHASES=install` in its md5-cache entry), so a merge run must skip `unpack`/`prepare`/`configure`/`compile`/`test` outright.

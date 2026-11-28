@@ -34,12 +34,18 @@ Pure predicates for what a run shows: merge-list gating, the empty-plan arms, an
 ## fn resolution_notice_shown
 - Backlog #185 fix round 1: ports the spinner gating (`_emerge/depgraph.py:12129-12132` + `stdout_spinner.py:117-139`): `--quiet` or `--nodeps` forces `spinner.mode = QUIET`, so `begin_notice("Calculating dependencies")` queues nothing, `end_notice()` reports nothing to complete (no `... done!` line), and `backtrack_depgraph`'s `finally:` prints no timing report.
 - Backlog #614: `--debug` is the third QUIET trigger (`_emerge/actions.py:4220-4221` after `PORTAGE_DEBUG=1` at `main.py:1267-1269`). Callers pass `quiet || debug` as the first argument, so a `--debug` run prints the banner but neither the notice nor the report; the gate's own signature stays `(quiet, nodeps)`.
+- Backlog numbers removed from the comment (original text): Whether the `Calculating dependencies` notice prints: neither `--quiet` nor `--nodeps` given (either forces the spinner into QUIET mode, which also suppresses the `... done!` completion and the timing report). `--debug` is the third QUIET trigger; callers pass `quiet || debug` as the first argument (backlog #614).
 
 ## fn top_level_abort_notice_shown
 - Backlog #351 S7: the top-level all-masked abort prints the resolution notice on its way out only for a non-`--pretend` run (`!pretend && is_all_masked_abort_report(msg)`); the `--pretend` arm stays silent per the plan's Q6 ruling, and every other resolve error shape (plain miss, USE miss, REQUIRED_USE) keeps today's silence as out of scope. The resulting incoherence is Portage-faithful on each arm taken alone: Portage prints the preamble on `--pretend` aborts too (S0 a02/a03), while portuale's `--pretend` success path never prints it (pinned convention) — unifying the two is a decision of its own (plan Q6 default: leave it).
+- Backlog numbers removed from the comment (original text): Whether a resolve-phase error prints the resolution notice on its way out: the top-level all-masked abort does, `--pretend` or not (backlog #406, owner 2026-10-19: Portage prints it in both). Every other error shape stays silent (out of scope).
 
 ## fn pretend_changes_show_header
 - Backlog #462: a `--pretend` run whose resolve completed with autounmask changes prints the resolution header before the rows (Portage's `_display_autounmask` runs `_show_merge_list` per change, `depgraph.py:10726` etc.). `--json` keeps stdout machine-readable (Portage has no `--json` pretend path; portuale's JSON early-returns before any display); an aborted resolve keeps its own preamble arms; the non-pretend path goes through the existing `!pretend` arm.
+- Backlog numbers removed from the comment (original text): Whether a `--pretend` run whose resolve completed prints the resolution header before the rows: Portage's `display()` (header + rows) runs for every completed `--pretend` resolve, with or without autounmask changes (backlog #462, #466). `--json` keeps stdout machine-readable (no header); an aborted resolve keeps its own preamble arms (backlog #406, the abort-preamble shape).
 
 ## fn is_required_use_report (#519)
 - Like every other `--pretend` run that reaches resolution, Portage prints the preamble first (`_emerge/depgraph.py`, `_start_resolution_display`).
+
+## fn is_plain_miss_report
+- Backlog numbers removed from the comment (original text): A resolve error whose first line is Portage's `there are no ebuilds (or binary packages) to satisfy "<atom>"`: it prints the resolution notice first too, and a blank line ahead of the `emerge:` line (backlog #470).

@@ -255,7 +255,7 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
     // A built `:S/SS=` atom opposing a choice is healed by rebuilding its consumer,
     // not by keeping the old version, so it weighs half a plain atom. Portage
     // counts every atom alike; the half weight only breaks the ties that sent
-    // the walk into a long cascade (#799) and leaves a clear majority alone.
+    // the walk into a long cascade and leaves a clear majority alone.
     choices.sort_by_key(|c| conflict_rank(&c.parents));
     choices
 }
@@ -281,7 +281,7 @@ mod rank_tests {
         (("a".into(), "b".into(), "1".into()), atom.into())
     }
 
-    /// #799: three installed consumers' built atoms weigh less than two plain
+    /// Three installed consumers' built atoms weigh less than two plain
     /// atoms, so the version the plan's own packages want is not masked first.
     #[test]
     fn built_slot_operator_atoms_weigh_half() {
@@ -475,7 +475,7 @@ pub(crate) struct BacktrackParams {
     /// add. Latched like the pin sets, so the search terminates. Included in
     /// `params_equal`.
     pub(crate) virtual_expansion_seeds: BTreeSet<ExpansionSeed>,
-    /// Parent-posture holds recorded by the seed feed (backlog #656 leg (b)):
+    /// Parent-posture holds recorded by the seed feed (leg (b)):
     /// one entry per held `(owner, atom)`. Re-checkable search state, not a
     /// log line -- every pass re-derives the verdict and the feed logs the
     /// re-fire, so a stale hold cannot outlive the posture that filed it.

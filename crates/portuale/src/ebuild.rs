@@ -419,7 +419,7 @@ pub(crate) fn run_real_commands(
                 build_env: &[],
                 use_flags: "",
                 // Manual mode runs every phase like `doebuild()`; the
-                // skip is scheduler-path only (backlog #458).
+                // skip is scheduler-path only.
                 skip_noop_src_phases: false,
                 skip_pretend: false,
             })
@@ -449,7 +449,7 @@ pub(crate) fn run_real_commands(
                 build_env: &direct_build_env,
                 // A direct `ebuild` run executes every phase like
                 // `doebuild()`; the no-op src-phase skip is merge-path
-                // only (backlog #456).
+                // only.
                 skip_noop_src_phases: false,
                 skip_pretend: false,
             })

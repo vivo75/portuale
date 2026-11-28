@@ -836,7 +836,7 @@ pub(crate) struct KeywordsAcceptedArgs<'a> {
 /// mask reason, never the raw metadata.
 /// Portage: KeywordsManager.getKeywords (stack_lists, incremental). The
 /// match carries no build-id: Portage builds a build-less `_pkg_str`
-/// there, so an `=`+build-id line matches nothing (the #341 S2 rule).
+/// there, so an `=`+build-id line matches nothing (the rule).
 pub(crate) fn effective_keywords(
     config: &portage_profile::Config,
     candidate_str: &str,

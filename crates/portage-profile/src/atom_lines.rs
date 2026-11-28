@@ -410,8 +410,8 @@ pub(crate) fn filter_atom_lines(
 
 /// [`filter_atom_lines`] keeping each kept line's source file: the
 /// `package.mask` fold needs the origin fragment to answer Portage's
-/// `getmaskingreason` (`# <file>:` + comment lines in the unmask block,
-/// backlog #462). Same validation, warnings and order; only the shape differs.
+/// `getmaskingreason` (`# <file>:` + comment lines in the unmask block).
+/// Same validation, warnings and order; only the shape differs.
 // Portage: util/__init__.py:481-607
 pub(crate) fn filter_atom_lines_with_sources(
     sources: &[(PathBuf, String)],

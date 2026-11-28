@@ -128,3 +128,6 @@ Selecting one atom's candidate (`resolve_pretend`).
 
 ## fn collect_binary_candidates user-patches retain (bug #917047)
 - `--binpkg-respect-user-patches` (default on, also with `--usepkgonly`): rejects a binary whose recorded `USER_PATCHES` differs from the local patch-set digest, so a stale build is rebuilt from source. `=n` skips the comparison outright. Portage: `depgraph.py`, the `binpkg_respect_user_patches` gate.
+
+## fn installed_matches_argument
+- Backlog numbers removed from the comment (original text): Whether the installed `category/package-version` matches a top-level argument atom: Portage `_iter_atoms_for_pkg` minus the higher-slot guard (greedy-slot territory, owned by #359 S3) and the internal-set `reset_depth=False` cases (slot-operator seeds never sit in `arg_atoms`). A match resets the update depth to 0.

@@ -12,3 +12,6 @@ Single-phase and clean-phase end-to-end tests. Context moved out of the code com
 
 ## fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm
 - End-to-end proof that standalone `prerm`/`postrm` actually run the `pkg_prerm`/`pkg_postrm` phase functions -- same shape as the config/info test above, but for the two standalone commands that also have a separate internal use (`ebuild_unmerge::run_unmerge`, see `is_standalone_phase_command` for why that internal use and this standalone path are simply two independent ways to reach the same phase function). No `unmerge`/vdb step involved here, matching Portage's standalone usage.
+
+## fn run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst
+- Backlog numbers removed from the comment (original text): Standalone `preinst`/`postinst` actually run the `pkg_preinst`/ `pkg_postinst` phase functions with no dep chain, like Portage's direct `_spawn_phase` for them (plan #348 S3 P2).

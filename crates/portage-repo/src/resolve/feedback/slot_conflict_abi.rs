@@ -78,7 +78,7 @@ pub(crate) fn step_slot_conflict_abi(
             // grows with the whole filing -- including a subsumed child, whose
             // upgrade row still needs the tag. The seed set takes parents and
             // kept children only: a subsumed child would ghost a reinstall
-            // node beside its upgrade (backlog #642).
+            // node beside its upgrade.
             let filed: BTreeSet<(String, String)> =
                 fresh.parents.union(&fresh.children).cloned().collect();
             grown

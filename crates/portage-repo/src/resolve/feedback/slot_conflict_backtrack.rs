@@ -126,7 +126,7 @@ pub(crate) fn fold_rebuild_scan(
     // child's slot atom matches the upgrade row) must tag like a probe-filed
     // one. Without this the logic set has the cp while `probe_replaced` (and
     // hence `GraphResult::slot_operator_replaced`) does not, and the upgrade
-    // prints a plain `U` (backlog #608).
+    // prints a plain `U`.
     grown
         .probe_replaced
         .extend(grown.slot_operator_replace_installed.iter().cloned());

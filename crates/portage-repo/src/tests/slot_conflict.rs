@@ -353,7 +353,7 @@ fn build_residual_dedups_identical_pins() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Backlog #607: a pin stripped from a built `:S/SS=` atom renders only the
+/// A pin stripped from a built `:S/SS=` atom renders only the
 /// built atom; a plain pin keeps its own text beside its built siblings.
 /// Expected from Portage 3.0.83 on the r25 shape (`=r25lib-2.0` over
 /// `r25consumer`'s `<dev-libs/r25lib-2.0:0/1=`): the parent is the built
@@ -481,7 +481,7 @@ fn parent_source_for_reads_the_settled_entry() {
     assert_eq!(kind("", "", ""), CandidateSource::Ebuild);
 }
 
-/// #601: the slot-conflict ABI step must file **both** sides Portage's
+/// The slot-conflict ABI step must file **both** sides Portage's
 /// `_slot_operator_update_backtrack` files for a built `:=` conflict: the
 /// installed parent (`dep.parent.installed`) and the installed child
 /// (`child.installed`, `depgraph.py:2434-2460`). Portuale's
@@ -637,7 +637,7 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
     );
     // The display mirror carries both sides: it becomes the `r` tag
     // (`__auto_slot_operator_replace_installed__`), so a child-only filing
-    // would leave the provider untagged (#601). Portage files both into its
+    // would leave the provider untagged. Portage files both into its
     // one set (the two `backtracking due to missed slot abi update` blocks in
     // the -D oracle debug); portuale splits application but not tagging.
     assert_eq!(

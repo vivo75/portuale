@@ -1,10 +1,10 @@
-//! #651: a seed committed BEFORE the slot conflict opens must not survive it.
+//! A seed committed BEFORE the slot conflict opens must not survive it.
 //!
-//! S0 #649 (`LLM/evidence/2026-11-03-649/REPORT.md`) locks the cause and #650
-//! proved the open-conflict half hermetically (the withhold gate declines a
+//! S0 (`LLM/evidence/2026-11-03-649/REPORT.md`) locks the cause and the
+//! earlier slice proved the open-conflict half hermetically (the withhold gate declines a
 //! seed whose demoter sits in the committing pass's open slot conflict).
-//! #651's residue is the commit-before-conflict ordering the bed re-grade
-//! proved (`LLM/backlog-tasks.md` #651): on the `dev-lang_perl` cell both
+//! The residue is the commit-before-conflict ordering the bed re-grade
+//! proved (`LLM/backlog-tasks.md`): on the `dev-lang_perl` cell both
 //! seeds `commit` in the first pass with demoter `perl-5.44.0` and zero
 //! `decline` lines — the committing pass has no open conflict yet, the
 //! transient's conflict surfacing only as try-2 `SlotConflict` feedback with
@@ -67,7 +67,7 @@ fn resolve_bare_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// P2 (`probe656_oracle.py`: `SUCCESS True`,
 /// `MERGELIST ['dev-lang/perl-5.42.2']`, no skip) and H0 (same with
 /// tree-present holders: tree-presence is invisible to Portage).
-/// The #656 leg-(a) gate files the kept virtuals' `||` arms on the holder
+/// The leg-(a) gate files the kept virtuals' `||` arms on the holder
 /// shape, the mask lands 5.44, the seeds void, and the provider reinstalls
 /// with neither fall-through merged -- the R posture the old U pin
 /// predates. Re-pinned 2026-11-05 (was: transient-U + both fall-throughs,
@@ -203,7 +203,7 @@ fn chained_holder_skips_the_transient_and_holds_the_installed_binding() {
 /// of the fixtures) masks `p651prov-5.44.0`, then `p651th-3.520.0` (its
 /// `=p651prov-5.44*` arm is left unsatisfiable), and reinstalls
 /// `p651th-3.500.0-r1`, with or without `--complete-graph`. The slot conflict
-/// met while backtracking turns complete mode on (#602), and Portage runs
+/// met while backtracking turns complete mode on, and Portage runs
 /// `_complete_graph` in the same depgraph, under that `runtime_pkg_mask`
 /// (`depgraph.py` `_resolve_conflicts`). A complete walk without the masks
 /// re-picks `p651th-3.520.0` as an upgrade: the bed's

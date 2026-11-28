@@ -316,7 +316,7 @@ fn collect_feedback_inner(
             grown.merge_parents.push(row.clone());
         }
     }
-    // Leg (a) of backlog #656: the holder-open subset applies before the
+    // Leg (a) of the holder-open subset applies before the
     // seed feed. The feed's early return discards a pass's enforced pins
     // whenever seeds fire, and the latched seeds re-select the `||` on the
     // next pass, so a scan-only filing never bites. Forced and plain pins
@@ -348,7 +348,7 @@ fn collect_feedback_inner(
         }
     }
 
-    // New-style virtual fall-through arms (backlog #572): hand non-installed
+    // New-style virtual fall-through arms: hand non-installed
     // chosen arms to the next walk as queue items owned by the virtual, while
     // installed-satisfied arms stay pins. Filed before the probe and conflict
     // steps so a conflicted pass cannot preempt the expansion (a conflict's

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn parse_binrepos_reads_getbinpkg_exclude_and_include_keys() {
-    // Backlog #347 S9: the per-binrepo `getbinpkg-exclude/include` keys
+    // The per-binrepo `getbinpkg-exclude/include` keys
     // (Portage `binrepo/config.py:42-75`, Q7 default yes). Grounded in S0
     // cell `g04-repokey` (a `getbinpkg-exclude = app-misc/s346-gbin-a`
     // key filters the remote index like the CLI flag).
@@ -30,7 +30,7 @@ getbinpkg-include = app-misc/s346-gbin-c
 
 #[test]
 fn parse_binrepos_drops_bad_getbinpkg_atoms_with_portages_warning() {
-    // Backlog #347 S9: only package names and slot atoms are allowed
+    // Only package names and slot atoms are allowed
     // (Portage `repository/config.py:91` `_find_bad_atoms`). Grounded in
     // S0 cell `g05-repobadatom` (`=bad/atom-1` warns and is dropped).
     let conf = "\
@@ -54,7 +54,7 @@ getbinpkg-exclude = =bad/atom-1 app-misc/s346-gbin-a
 
 #[test]
 fn parse_binrepos_conflicting_repo_keys_warn_and_cancel() {
-    // Backlog #347 S9: atoms in both of one binrepo's own lists warn and
+    // Atoms in both of one binrepo's own lists warn and
     // are dropped from both (Portage `binrepo/config.py:60-75`). The text
     // is Portage's own, byte for byte (note the missing "and").
     let conf = "\
@@ -108,7 +108,7 @@ sync-uri = file:///srv/pkgs
 #[test]
 fn parse_binrepos_reads_frozen_defaulting_to_false() {
     // Real `binrepo/config.py` `_bool_opts` (`"frozen": "false"`
-    // default, backlog #192).
+    // default).
     let conf = "\
 [frozenrepo]
 sync-uri = https://frozen.example.org/amd64/

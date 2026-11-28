@@ -98,7 +98,7 @@ pub(crate) struct RevDepPin {
     pub(crate) consumer: (String, String, String),
     /// Filed through the leg-(a) holder-open branch (bare demoter +
     /// installed, tree-present requirers carry the pin): applies before the
-    /// seed feed, which would otherwise discard it (backlog #656).
+    /// seed feed, which would otherwise discard it.
     pub(crate) holder_open: bool,
 }
 
@@ -295,7 +295,7 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
     pub(crate) ignore_built_slot_operator_deps: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) world_reachable: &'a HashSet<(String, String)>,
-    /// The required sets' installed closure for the report-only parent rows (#573);
+    /// The required sets' installed closure for the report-only parent rows;
     /// empty when the run has no seeds at all (unit tests, no CLI world).
     pub(crate) report_reachable: &'a HashSet<(String, String)>,
     pub(crate) config: &'a portage_profile::Config,
@@ -361,7 +361,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
 
 /// [`reverse_dependency_constraints_reported`] plus the `||` arms in-scope installed
 /// consumers select that the merge satisfies: parent atoms of the merge-bound
-/// instance (backlog #606).
+/// instance.
 // Portage: depgraph.py, _add_parent_atom (via _add_dep)
 pub(crate) fn reverse_dependency_scan(
     args: ReverseDependencyConstraintsArgs<'_>,
@@ -588,8 +588,8 @@ pub(crate) fn reverse_dependency_scan(
     };
     // The `||`-selected arms (never plain atoms) of every in-scope kept
     // virtual: the seed feed owns virtual fall-throughs, so a selected arm
-    // constrains the merge only when the version it contradicts is forced
-    // (backlog #652 leg B). Covers a sibling's Q19 leak too (the leaked arm
+    // constrains the merge only when the version it contradicts is forced.
+    // Covers a sibling's Q19 leak too (the leaked arm
     // was selected by some in-scope kept virtual).
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
     let mut virt_selected: HashSet<String> = HashSet::new();
@@ -772,7 +772,7 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
     /// The `||`-selected arms (never plain atoms) of every in-scope kept
     /// virtual this pass: the seed feed owns them, so they constrain the
-    /// merge only when the contradicted version is forced (backlog #652
+    /// merge only when the contradicted version is forced (
     /// leg B).
     pub(crate) virt_selected: &'a HashSet<String>,
     pub(crate) or_memo: &'a mut OrSelectedMemo,
@@ -822,7 +822,7 @@ pub(crate) fn consumer_in_scope(scope: &ConsumerScope<'_>, consumer: &InstalledP
 /// instance alongside the upgrade (the keep-both outcome), so a built pin
 /// the upgrade breaks is a real conflict, not a report-only row.
 /// Without such an arm the merge supersedes the instance and the atom stays
-/// report-only. Host-verified both ways (backlog #641): p569virt's
+/// report-only. Host-verified both ways: p569virt's
 /// `=5.42*` menu arm keeps installed 5.42 while 5.44 merges (Portage
 /// rebuilds both with `r`), while a plain built pin with no keeping menu
 /// (slotbind's `:2/2=`, the kept-instance unit twin) merges with a plain
@@ -978,7 +978,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         // or not: a walked consumer's built `:S/SS=` atom can still be
         // unsatisfiable post-merge when the walk bound a newer sub-slot
         // while an installed instance the atom pins stays behind (backlog
-        // #641: `-uD dev-libs/p569pull` merges `p569prov-5.44` while
+        // `-uD dev-libs/p569pull` merges `p569prov-5.44` while
         // installed `p569virt-1`'s baked `p569prov:0/5.42=` still pins
         // installed 5.42 -- Portage reports the slot conflict and rebuilds
         // both with `r`). Unwalked consumers keep the complete-graph view;
@@ -987,7 +987,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         let post_merge = (or_scan.portage_complete && !report_only).then_some(or_scan);
         // A report-only consumer was never walked, and Portage keeps the arm its
         // installed record selects (`dep_zapdeps`'s installed preference here, not
-        // the post-merge view the walk uses): the same demotion `#569` applies.
+        // the post-merge view the walk uses): the same demotion applies.
         let demoted = if report_only {
             let mut demoted = or_branch_vdb_deselected_set(root, depstr, use_flags);
             if let Some(leaked) = leaked_here {
@@ -1012,7 +1012,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         // or a sibling's, via the Q19 leak); the per-atom gate decides
         // whether they constrain (forced merge) or are tolerated
         // (walk-selected merge). Plain atoms beside a group keep the old
-        // path (the #572 mixed shape).
+        // path (the mixed shape).
         let or_selected: HashSet<String> =
             if report_only || consumer.category != "virtual" || !depstr.contains("||") {
                 HashSet::new()
@@ -1048,7 +1048,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 demoted: &demoted,
                 // A kept virtual's non-plain `||`-group arm selected by some
                 // in-scope kept virtual (own or leaked): skip only when the
-                // contradicted merge is walk-selected (backlog #652 leg B).
+                // contradicted merge is walk-selected.
                 or_selected: or_selected.contains(&atom_str),
                 post_merge,
                 config,
@@ -1156,7 +1156,7 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     /// arm selected by some in-scope kept virtual this pass (own selection
     /// or a sibling's Q19 leak): the per-atom gate decides whether it
     /// constrains (forced contradicted merge) or is tolerated
-    /// (walk-selected merge) (backlog #652 leg B).
+    /// (walk-selected merge).
     pub(crate) or_selected: bool,
     /// The post-merge set when the consumer is a complete-graph one (not walked, no
     /// `--update`): a built slot-operator atom it cannot satisfy conflicts.
@@ -1251,7 +1251,7 @@ fn breaking_candidate_slots(
 }
 
 /// Whether an installed, tree-present, non-virtual requirer carries the
-/// contradicted pin: leg (a) of backlog #656 files the kept virtual's `||`
+/// contradicted pin: leg (a) of files the kept virtual's `||`
 /// conflict on this shape instead of tolerating it (the unconditional-open
 /// half; the tree-presence bound is the N2 carve-in).
 // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
@@ -1561,9 +1561,9 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     // matching only that version (Q19: xpull-2's `=5.44*` forces the
     // transient the virtuals' arms block, so the skip stands). Otherwise
     // the seed feed owns the fall-through and the arm is tolerated instead
-    // of masking the merge (backlog #652 leg B: TH's perl arm under the
+    // of masking the merge (leg B: TH's perl arm under the
     // walk-selected transient; Portage keeps TH and merges perl), unless
-    // installed, tree-present requirers carry the pin (backlog #656 leg
+    // installed, tree-present requirers carry the pin (leg
     // (a): the bed cell's 48 holders; the treeless N2 pin stays tolerated).
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
     // Whether this atom files through the holder-open branch (leg (a)):

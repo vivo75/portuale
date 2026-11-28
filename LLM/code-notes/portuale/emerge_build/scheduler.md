@@ -11,6 +11,7 @@ The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized
 - The binpkg `USE` field is Portage's `Package.use.enabled` as `_pkgindex_entry` writes it: not the ebuild's default, but the `use_flags_display`-derived `USE` env var `entry_build_env` already resolved for the phase, reused verbatim rather than re-derived.
 - Per-package `FEATURES` (backlog #130): the shared run-wide `PackageOptions` does not see the entry's `package.env` `FEATURES` fold, so clone it and re-derive the binpkg-affecting tokens (`binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing`) from the same per-entry folded list `entry_resolved_features` computes for the phase env.
 - `BUILD_ID` gate ports Portage's `EbuildBinpkg._start` (backlog #147 S1 ruling (i)): the binpkg layout is run-wide-only (Portage's bintree binds its allocator once), while the `BUILD_ID` export follows the entry's own token (Portage `EbuildBinpkg.py:47-48`).
+- Backlog numbers removed from the comment (original text): Same merge-path `EbuildExecuter` skip as the serial merge above (backlog #456); the background capture only decides where the phases that do run are logged. Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
 
 ## fn merge_one_built_entry
 - Ports Portage's `_emerge/EbuildMerge` (always serialized; only the build runs in parallel). Checks the same `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind; same-slot replace via `merge_after_install`.
@@ -42,6 +43,7 @@ The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized
 ## fn worker_panic_message (#376)
 - The scheduler keeps its own `tx` clone alive for the whole loop, so `rx.recv()` never reports a closed channel. A worker thread that panicked therefore sent nothing and the run waited forever (seen 2026-10-17: five scheduler tests parked in `recv` with no worker thread alive, at 0 CPU; the panic text was hidden by the test harness's output capture). The worker closure now runs under `catch_unwind` and sends `Err("<cat>/<pkg>: build thread panicked: <payload>")`.
 - Known trigger: the stale-binary guard in `self_exe.rs` panics inside a worker when `target/release/portuale` is older than the sources. A `/tmp` at 98% inode use (leaked `portuale-gpkg-build*` and `portuale-vdbview*` directories) is the other likely trigger: `tempdir` creation panics.
+- Backlog numbers removed from the comment (original text): The failure a worker thread that panicked reports in place of its result. Without it the scheduler would wait forever on a result nobody sends (its own `tx` clone keeps the channel open), so a panic became a silent hang (backlog #376).
 
 ## fn land_built_entry, fn note_landed (#512)
 

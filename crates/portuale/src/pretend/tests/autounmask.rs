@@ -1,12 +1,12 @@
 use super::*;
 
-/// Backlog #445: `--pretend --autounmask dev-libs/maskneedpkg` proposes the
+/// `--pretend --autounmask dev-libs/maskneedpkg` proposes the
 /// unmask for the package.mask'd dependency instead of the plain masked
 /// block. Expected value from Portage 3.0.82.2 (host staged-fixture probe,
 /// `PORTAGE_CONFIGROOT`/`ROOT` at the staged fixtures,
 /// `PYTHONHASHSEED=0`): rc 1, one `[ebuild N #]` row per package, the
 /// `package.unmask` changes block with the `# required by` chain, and the
-/// `--autounmask-keep-masks` NOTE. Backlog #462: the header
+/// `--autounmask-keep-masks` NOTE. the header
 /// (`These are the packages…` / `Calculating…` / `Dependency resolution
 /// took…`, wall-clock seconds cut per the determinism convention) prints
 /// before the rows, and the unmask block carries Portage's
@@ -87,7 +87,7 @@ fn autounmask_proposes_unmask_for_masked_dep() {
     );
 }
 
-/// Review focus for #445: `--autounmask=n` and `--autounmask-keep-masks=y`
+/// Review focus for `--autounmask=n` and `--autounmask-keep-masks=y`
 /// on a masked-only dep keep the plain masked block (no rows, no unmask
 /// proposal). Same Portage 3.0.82.2 probe grounding as above.
 #[test]

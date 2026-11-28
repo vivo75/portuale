@@ -230,8 +230,7 @@ fn merge_driver_aborts_on_unowned_collision() {
 
 /// A foreign package owning `/usr/share/a b.txt` does not own `/usr/share/a`:
 /// the ownership scan used to cut the CONTENTS path at the space, so shipping
-/// the unowned `usr/share/a` over an orphan file aborted as a collision
-/// (backlog #419; Portage's `_contents_re` keeps the whole path).
+/// the unowned `usr/share/a` over an orphan file aborted as a collision.
 #[test]
 fn merge_driver_ownership_scan_keeps_spaces_in_foreign_paths() {
     let tmp = TempDir::new("portuale-remote-space-collide");
@@ -898,7 +897,7 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
 /// removes that file. The shell removal cut the path at the space (`set --
 /// $line` takes `$2`, the ownership scan `awk '{print $2}'`), so the file
 /// survived every remote replace; the shipped Rust unmerge parses CONTENTS
-/// space-safely (backlog #382).
+/// space-safely.
 #[test]
 fn merge_driver_removes_an_old_file_with_a_space_in_its_path() {
     use std::os::unix::fs::MetadataExt as _;

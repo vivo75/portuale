@@ -748,7 +748,7 @@ fn installed_reachability_follows_build_deps_only_with_bdeps() {
 
 /// The stale-pin arm's refusal reaches the caller: the plan moves the provider past the
 /// consumer's recorded `=` pin, nothing is scheduled, and the refusal comes back with the
-/// entries instead of being dropped (backlog #765; the `--solver=pubgrub` bridge reports it).
+/// entries instead of being dropped.
 #[test]
 fn slot_operator_rebuild_entries_reports_the_refused_stale_pin() {
     let (base, repos) = stale_pin_base(

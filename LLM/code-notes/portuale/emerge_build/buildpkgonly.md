@@ -16,6 +16,7 @@
 - Failures are collected and returned together at the end as a single combined error listing every one. The gate `pretend.rs` already checks before calling this at all is `GraphResult::buildpkgonly_deps_unsatisfied`.
 - The progress map is Portage's `Scheduler._pkg_count` for this run (backlog #177).
 - No-op source-phase skip (backlog #458): the `run_package` call passes `skip_noop_src_phases: true` -- Portage's `EbuildBuild._fetch_exit` builds through `EbuildExecuter`, so the `_can_skip_source_phases` gate fires here exactly like on a merge. Direct `ebuild <file> package` stays `false` (manual `doebuild()` mode).
+- Backlog numbers removed from the comment (original text): Scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes through `EbuildExecuter`, so the no-op source-phase skip fires exactly like on the merge path (backlog #458). Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
 
 ## fn env_d_reloaded
 - Ports Portage's `Scheduler._allocate_config` (`Scheduler.py:1899-1913`), which calls `config.reload()` for every package task, and `reload()` re-reads `env.d` (`config.py:2691-2699`), so a package built after a merge that installed an `/etc/env.d/*` file (and ran `env-update`) sees the new variables (backlog #332). Returns the reloaded config when `<eroot>/etc/profile.env` changed since `config` was resolved (or last reloaded), `None` otherwise. A config without a recorded `eroot` never reloads; otherwise the caller keeps its old code path byte for byte.

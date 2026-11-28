@@ -237,3 +237,6 @@ The resolved configuration (`Config`): every USE layer, visibility list, and fin
 
 ## field package_keywords_profile (#346 S2)
 - (atom-or-wildcard, keyword tokens) from profile-node `package.keywords` (chain order, then the user node). Folded incrementally onto each candidate's own KEYWORDS by `portage-repo::effective_keywords`, never into the accept dict. Hashed into both config fingerprints (visibility and USE-context: `is_stable` reads it through effective USE).
+
+## (see source)
+- Backlog numbers removed from the comment (original text): The stacked `package.mask` entry paired with the fragment file that contributed it, same order and length as [`Config::package_mask`]: answers Portage's `getmaskingreason` (`# <file>:` + comment lines in the unmask block, backlog #462) without re-reading the fold.

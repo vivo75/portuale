@@ -1,4 +1,4 @@
-//! #359 S3: the default solver's `_greedy_slots` expansion.
+//! The default solver's `_greedy_slots` expansion.
 //!
 //! The fixture tree lives in the sibling pmtest checkout (`fixtures/` is a
 //! symlink); oracles are Portage 3.0.82.2 captures, never portuale's output.

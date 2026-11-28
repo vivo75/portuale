@@ -1,4 +1,4 @@
-//! #369 S5: the deferred `||` stack (`_dep_disjunctive_stack`).
+//! The deferred `||` stack (`_dep_disjunctive_stack`).
 //!
 //! Splitter unit tests pin the expansion-time contract; the walk tests pin
 //! Portage 3.0.82.2's rows from the container captures (never portuale's

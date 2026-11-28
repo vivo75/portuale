@@ -244,7 +244,7 @@ pub(crate) struct ResolveCtx<'a> {
     /// computed on every pass, read by blocker classification.
     pub(crate) blocker_retry_closure: HashSet<(String, String)>,
     /// The required sets' installed closure for the complete-graph missed-update
-    /// parents (#573): the complete pass uses `complete_seed_atoms`, a plain pass
+    /// parents: the complete pass uses `complete_seed_atoms`, a plain pass
     /// only has the blocker seeds (the CLI fills those on every phase). Read by
     /// nothing but the report-only parent scan, so it cannot move a merge.
     pub(crate) report_reachable: HashSet<(String, String)>,

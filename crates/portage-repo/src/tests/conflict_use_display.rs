@@ -325,7 +325,7 @@ fn abk0_versions(result: &GraphResult) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// #613: with `--autounmask-backtrack` off the first pass's `x` change stops
+/// With `--autounmask-backtrack` off the first pass's `x` change stops
 /// the search, and the `A-3` / installed `A-1` slot conflict is reported
 /// (Portage 3.0.83: `0/20`, `LLM/evidence/2026-11-07-613/def.portage.txt`).
 #[test]
@@ -353,7 +353,7 @@ fn world_bound_stops_on_the_use_change_with_the_slot_conflict() {
     assert!(result.skipped_updates.is_empty());
 }
 
-/// #613: without a search the installed `A-1`, which misses `abk0d`'s
+/// Without a search the installed `A-1`, which misses `abk0d`'s
 /// `>=A-2`, is not enforced in-pass: the conflict is reported (Portage
 /// 3.0.83 `--backtrack=0`: `0/0`, `bt0.portage.txt`).
 #[test]
