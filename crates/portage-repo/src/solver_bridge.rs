@@ -5747,6 +5747,9 @@ fn resolve_pubgrub_at(
         keys: dep_keys(req),
     };
     tree_refusal_fix(&plan, asked, &result.stale_pin_refusals, &mut fix);
+    if matches!(req.deep, Deep::Bounded(_)) {
+        solve_scanned_rebuilds(&result.entries, &result.abi_rebuilds, &mut fix);
+    }
     Ok((result, stale, fix))
 }
 
@@ -5925,6 +5928,31 @@ fn holder_fix(
         }
     }
     fix
+}
+
+/// A rebuild the slot-operator scan added after the solve has no dependencies in the
+/// plan: past a `--deep=N` bound its package was a kept leaf, so what the rebuilt
+/// package needs (a `||` arm that only the new provider selects) was never solved.
+/// Ask for it as a rebuild member, so the next round expands its dependencies (#811),
+/// and carry its `(provider, consumer)` display pair, which only the scan files.
+fn solve_scanned_rebuilds(
+    entries: &[GraphEntry],
+    abi_rebuilds: &[(String, String)],
+    fix: &mut HolderFix,
+) {
+    for e in entries {
+        if let PretendOutcome::Reinstall {
+            version,
+            slot_operator_rebuild: true,
+            ..
+        } = &e.outcome
+        {
+            let cpv = format!("{}/{}-{version}", e.category, e.package);
+            fix.rebuilt
+                .extend(abi_rebuilds.iter().filter(|(_, c)| *c == cpv).cloned());
+            fix.rebuild.push(cpv);
+        }
+    }
 }
 
 /// The dependency-string indexes the holder pass reads: build-time ones only with `--with-bdeps`.
@@ -10659,6 +10687,38 @@ mod tests {
             "{:?}",
             result.abi_rebuilds
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Charter property 1 (a rebuilt package's dependencies hold): under
+    /// `--deep=1` the installed `p569virt-1` is a kept leaf, so only the scan
+    /// finds its rebuild. Its tree `||` leaves `~p569core-1.0` once `p569prov`
+    /// is 5.44, so the plan must merge `p569core` and keep the display pair (#811).
+    #[test]
+    fn pg811_bridge_solves_the_dependencies_of_a_scanned_rebuild() {
+        // The vdb carries the tree's own text, as the fixture root's installed copy does.
+        let root = pg770_root(
+            "portage-bridge-pg811-a",
+            "|| ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* \
+             ~dev-libs/p569core-1.0 ) dev-libs/p569prov:0/5.42=\n",
+        );
+        let mut req = fixture_request(&["dev-libs/p569pull"]);
+        req.root = root.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.update = true;
+        req.deep = super::super::Deep::Bounded(1);
+        req.config.complete_seed_atoms = vec!["dev-libs/p569pull".to_string()];
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("resolves");
+        let plan = pg34_plan(&result);
+        assert!(pg770_reinstalls(&result, "p569virt"), "{plan:?}");
+        assert!(
+            result.entries.iter().any(|e| e.package == "p569core"),
+            "{plan:?}"
+        );
+        assert_eq!(result.abi_rebuilds.len(), 1, "{:?}", result.abi_rebuilds);
         let _ = std::fs::remove_dir_all(&root);
     }
 
