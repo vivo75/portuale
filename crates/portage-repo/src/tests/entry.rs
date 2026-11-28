@@ -261,3 +261,49 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
         (false, false),
     );
 }
+
+/// A running-root `BDEPEND` edge to an already-visited package is cut only
+/// when that package already leads back to the entry, i.e. when the edge would
+/// close a cycle (`mopodman`: `momd2man` needs `mogo` and `mounzip`, both
+/// visited first through `mopodman`, and none of them depends on `momd2man`).
+#[test]
+fn running_root_reach_cuts_only_edges_that_close_a_cycle() {
+    use crate::resolve::running_root_reaches;
+    let edge = |child: &str| DepEdge {
+        atom: format!("dev-libs/{child}"),
+        evaluated: format!("dev-libs/{child}"),
+        category: "dev-libs".to_string(),
+        package: child.to_string(),
+        priority: DepPriority::default(),
+        disjunctive: false,
+        alt: None,
+        key: 4,
+        walk_chosen: false,
+    };
+    let running = |package: &str, deps: Vec<DepEdge>| {
+        let mut e = graph_entry("dev-libs", package, "1");
+        e.targets_running_root = true;
+        e.deps = deps;
+        e
+    };
+    let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+    // 0: top (the entry being rebuilt), 1: mogo -> boot, 2: boot, 3: unzip.
+    let entries = vec![
+        running("top", Vec::new()),
+        running("mogo", vec![edge("boot")]),
+        running("boot", Vec::new()),
+        running("unzip", Vec::new()),
+    ];
+    // top -> mogo and top -> unzip lead nowhere back to top: the edges stay.
+    assert!(!running_root_reaches(&entries, 0, &cp("mogo"), &cp("top")));
+    assert!(!running_root_reaches(&entries, 0, &cp("unzip"), &cp("top")));
+    // Once boot depends on top, top -> mogo would close mogo -> boot -> top.
+    let mut closing = entries.clone();
+    closing[2].deps = vec![edge("top")];
+    assert!(running_root_reaches(&closing, 0, &cp("mogo"), &cp("top")));
+    // A target-root twin of the same package is not part of the running graph.
+    let mut twin = entries;
+    twin[2].targets_running_root = false;
+    twin[2].deps = vec![edge("top")];
+    assert!(!running_root_reaches(&twin, 0, &cp("mogo"), &cp("top")));
+}

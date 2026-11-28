@@ -160,9 +160,10 @@ pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
         candidate_source == CandidateSource::Binary,
     );
     // The running-root subgraph's own cycle scope, for the merge-order digraph
-    // too: a running `BDEPEND` edge back into a visited package is dropped,
-    // like the old sidecar `seen` guard. Running `DEPEND` edges back are kept
-    // so the cross-root cycle still reports, as is every first-visit edge.
+    // too: a running `BDEPEND` edge into a visited package that already leads
+    // back here is dropped, like the old sidecar `seen` guard. Running `DEPEND`
+    // edges back are kept so the cross-root cycle still reports, as is every
+    // edge that closes no cycle.
     // Key 4 is `BDEPEND`; visited compares by `cat/pkg`, like `required_by_map`.
     if state.entries[entry_idx].targets_running_root {
         let mut visited_cps: HashSet<(String, String)> = HashSet::new();
@@ -175,14 +176,56 @@ pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
         // dependency; without the exemption the cut deletes the true self-loop
         // with the bootstrap-ring closers. Satisfied self-edges still drop
         // downstream. Portage: depgraph.py, _add_pkg; _serialize_tasks
-        let own_category = state.entries[entry_idx].category.clone();
-        let own_package = state.entries[entry_idx].package.clone();
-        state.entries[entry_idx].deps.retain(|d| {
-            !(d.key == 4
-                && !(d.category == own_category && d.package == own_package)
-                && visited_cps.contains(&(d.category.clone(), d.package.clone())))
-        });
+        let own = (
+            state.entries[entry_idx].category.clone(),
+            state.entries[entry_idx].package.clone(),
+        );
+        let drop: Vec<bool> = state.entries[entry_idx]
+            .deps
+            .iter()
+            .map(|d| {
+                let child = (d.category.clone(), d.package.clone());
+                d.key == 4
+                    && child != own
+                    && visited_cps.contains(&child)
+                    && running_root_reaches(&state.entries, entry_idx, &child, &own)
+            })
+            .collect();
+        let mut drop = drop.into_iter();
+        state.entries[entry_idx]
+            .deps
+            .retain(|_| !drop.next().unwrap_or(false));
     }
+}
+
+/// True when `from` already reaches `target` through the recorded edges of
+/// running-root entries, so an edge from `target` to `from` would close a
+/// cycle. `skip` is the entry whose own edges are being rebuilt.
+pub(crate) fn running_root_reaches(
+    entries: &[GraphEntry],
+    skip: usize,
+    from: &(String, String),
+    target: &(String, String),
+) -> bool {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut stack = vec![from.clone()];
+    while let Some(cp) = stack.pop() {
+        if &cp == target {
+            return true;
+        }
+        if !seen.insert(cp.clone()) {
+            continue;
+        }
+        for (i, e) in entries.iter().enumerate() {
+            if i == skip || !e.targets_running_root || (&e.category, &e.package) != (&cp.0, &cp.1) {
+                continue;
+            }
+            for d in &e.deps {
+                stack.push((d.category.clone(), d.package.clone()));
+            }
+        }
+    }
+    false
 }
 
 /// What [`classify_dep_atoms`] hands back to its caller.
